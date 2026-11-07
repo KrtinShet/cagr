@@ -1,0 +1,304 @@
+{
+	"$schema": "http://json-schema.org/draft-07/schema#",
+	"title": "guardwright.toml",
+	"type": "object",
+	"additionalProperties": false,
+	"properties": {
+		"$schema": {
+			"type": "string",
+			"description": "Path or URL of this JSON schema, for editors."
+		},
+		"extends": {
+			"type": "array",
+			"items": {
+				"type": "string"
+			},
+			"description": "Presets this config builds on. v0.1 has \"recommended\". Lists of tables add to the preset's; other values replace them."
+		},
+		"agents": {
+			"type": "object",
+			"additionalProperties": false,
+			"properties": {
+				"enabled": {
+					"type": "array",
+					"items": {
+						"type": "string",
+						"enum": [
+							"claude",
+							"codex"
+						]
+					},
+					"description": "Agents whose hook files `guardwright sync` writes."
+				},
+				"command": {
+					"type": "string",
+					"description": "How the generated hook files call guardwright. \"{root}\" becomes the repo root for each agent."
+				}
+			},
+			"description": "Agent adapters."
+		},
+		"git": {
+			"type": "object",
+			"additionalProperties": false,
+			"properties": {
+				"protected_branch": {
+					"type": "string",
+					"description": "Branch agents may not push to. Empty string turns the check off."
+				},
+				"branch_name": {
+					"anyOf": [
+						{
+							"type": "string",
+							"enum": [
+								"type/name",
+								"off"
+							]
+						},
+						{
+							"type": "object",
+							"additionalProperties": false,
+							"properties": {
+								"pattern": {
+									"type": "string",
+									"description": "A regular expression the value must match."
+								},
+								"example": {
+									"type": "string",
+									"description": "A valid value, shown in the block message."
+								}
+							},
+							"required": [
+								"pattern",
+								"example"
+							]
+						}
+					],
+					"description": "Branch name rule, checked on push."
+				},
+				"commit_message": {
+					"anyOf": [
+						{
+							"type": "string",
+							"enum": [
+								"conventional",
+								"off"
+							]
+						},
+						{
+							"type": "object",
+							"additionalProperties": false,
+							"properties": {
+								"pattern": {
+									"type": "string",
+									"description": "A regular expression the value must match."
+								},
+								"example": {
+									"type": "string",
+									"description": "A valid value, shown in the block message."
+								}
+							},
+							"required": [
+								"pattern",
+								"example"
+							]
+						}
+					],
+					"description": "Commit subject rule, checked by the commit-msg hook."
+				},
+				"commit_types": {
+					"type": "array",
+					"items": {
+						"type": "string"
+					},
+					"description": "Types allowed in branch names and commit subjects."
+				},
+				"pre_push": {
+					"anyOf": [
+						{
+							"type": "string"
+						},
+						{
+							"type": "array",
+							"items": {
+								"type": "string"
+							}
+						}
+					],
+					"description": "Commands the pre-push hook runs. A failure stops the push."
+				},
+				"block_force_push": {
+					"type": "boolean",
+					"description": "Block force pushes."
+				},
+				"block_hook_skips": {
+					"type": "boolean",
+					"description": "Block --no-verify, changing core.hooksPath, and setting the skip variable."
+				},
+				"skip_env": {
+					"type": "string",
+					"description": "Environment variable a human sets to skip the git hooks. Agents may not set it."
+				},
+				"hooks_path": {
+					"type": "string",
+					"description": "Folder for the git hooks, set as core.hooksPath."
+				},
+				"worktree_only": {
+					"type": "boolean",
+					"description": "Keep the main checkout clean: agents edit and commit only in worktrees."
+				},
+				"worktree_dir": {
+					"type": "string",
+					"description": "Folder inside the main checkout where worktrees live."
+				}
+			},
+			"description": "Git rules."
+		},
+		"stack": {
+			"type": "array",
+			"items": {
+				"type": "object",
+				"additionalProperties": false,
+				"properties": {
+					"language": {
+						"type": "string",
+						"minLength": 1,
+						"description": "typescript, javascript, python, go, rust, or any name."
+					},
+					"package_manager": {
+						"type": "string",
+						"enum": [
+							"bun",
+							"npm",
+							"pnpm",
+							"yarn",
+							"uv",
+							"pip",
+							"poetry",
+							"pipenv"
+						],
+						"description": "The only package manager agents may use for this ecosystem."
+					},
+					"paths": {
+						"type": "array",
+						"items": {
+							"type": "string"
+						},
+						"description": "Globs, relative to the repo root, this stack covers."
+					},
+					"extensions": {
+						"type": "array",
+						"items": {
+							"type": "string"
+						},
+						"description": "File extensions this stack checks. Defaults depend on the language."
+					},
+					"on_edit": {
+						"type": "array",
+						"items": {
+							"type": "string"
+						},
+						"description": "Commands run after each edit, on changed files only. {files} becomes their paths."
+					},
+					"on_turn_end": {
+						"type": "array",
+						"items": {
+							"type": "string"
+						},
+						"description": "Commands run before the agent may end a turn that changed files here."
+					}
+				},
+				"required": [
+					"language"
+				]
+			},
+			"description": "One entry per language area of the repo."
+		},
+		"files": {
+			"type": "object",
+			"additionalProperties": false,
+			"properties": {
+				"protected": {
+					"type": "array",
+					"items": {
+						"type": "object",
+						"additionalProperties": false,
+						"properties": {
+							"glob": {
+								"type": "string",
+								"description": "A glob. Without a slash it matches the file name anywhere."
+							},
+							"except": {
+								"type": "array",
+								"items": {
+									"type": "string"
+								},
+								"description": "Globs that stay editable."
+							},
+							"reason": {
+								"type": "string",
+								"minLength": 1,
+								"description": "What to do instead. Shown to the agent."
+							}
+						},
+						"required": [
+							"glob",
+							"reason"
+						]
+					}
+				}
+			},
+			"description": "Files agents may not edit."
+		},
+		"commands": {
+			"type": "object",
+			"additionalProperties": false,
+			"properties": {
+				"blocked": {
+					"type": "array",
+					"items": {
+						"type": "object",
+						"additionalProperties": false,
+						"properties": {
+							"match": {
+								"type": "string",
+								"minLength": 1,
+								"description": "Words that, in order, inside one command, block it. Quotes and heredoc bodies are text, not commands."
+							},
+							"reason": {
+								"type": "string",
+								"minLength": 1,
+								"description": "What to run instead. Shown to the agent."
+							}
+						},
+						"required": [
+							"match",
+							"reason"
+						]
+					}
+				}
+			},
+			"description": "Commands agents may not run."
+		},
+		"rules": {
+			"type": "object",
+			"additionalProperties": false,
+			"properties": {
+				"dirs": {
+					"type": "array",
+					"items": {
+						"type": "string"
+					},
+					"description": "Folders holding ast-grep rule files (*.yml)."
+				}
+			},
+			"description": "Custom code rules."
+		},
+		"brief": {
+			"type": "array",
+			"items": {
+				"type": "string"
+			},
+			"description": "Extra lines for the session start brief."
+		}
+	}
+}
