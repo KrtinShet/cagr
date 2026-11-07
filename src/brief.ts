@@ -1,0 +1,82 @@
+import type { Config } from "./config/schema";
+import { ecosystemOf } from "./guards/package-manager";
+import { loadRules, type Rule, RuleError } from "./rules/rules";
+
+/** A short brief for the agent at session start, built from the config. */
+export function brief(
+	config: Config,
+	rules: Rule[] = safeRules(config),
+): string {
+	const lines = [
+		"guardwright checks this repo. When it blocks something, its message says what to do instead.",
+	];
+	const managers = new Map<string, string[]>();
+	for (const stack of config.stack) {
+		if (!stack.package_manager) continue;
+		const ecosystem =
+			ecosystemOf(stack.package_manager)?.name ?? stack.language;
+		const list = managers.get(ecosystem) ?? [];
+		if (!list.includes(stack.package_manager)) list.push(stack.package_manager);
+		managers.set(ecosystem, list);
+	}
+	if (managers.size > 0)
+		lines.push(
+			`- Package managers: ${[...managers].map(([ecosystem, list]) => `${list.join(" or ")} for ${ecosystem}`).join(", ")}.`,
+		);
+	const git: string[] = [];
+	if (config.git.protected_branch)
+		git.push(
+			`never push to ${config.git.protected_branch}, push a branch and open a pull request`,
+		);
+	if (config.git.branch_name)
+		git.push(`branches look like ${config.git.branch_name.example}`);
+	if (config.git.commit_message)
+		git.push(
+			`commit subjects look like "${config.git.commit_message.example}"`,
+		);
+	if (config.git.block_force_push) git.push("no force pushes");
+	if (config.git.block_hook_skips) git.push("no --no-verify");
+	if (config.git.worktree_only)
+		git.push(
+			`work in a worktree under ${config.git.worktree_dir}/, not in the main checkout`,
+		);
+	if (git.length > 0) lines.push(`- Git: ${git.join("; ")}.`);
+	if (config.files.protected.length > 0)
+		lines.push(
+			`- Do not edit: ${config.files.protected.map((entry) => entry.glob).join(", ")}.`,
+		);
+	if (config.commands.blocked.length > 0)
+		lines.push(
+			`- Do not run: ${config.commands.blocked.map((entry) => `\`${entry.match}\``).join(", ")}.`,
+		);
+	for (const stack of config.stack) {
+		const parts: string[] = [];
+		if (stack.on_edit.length > 0)
+			parts.push(
+				`after each edit \`${stack.on_edit.join("`, `")}\` run on the changed files`,
+			);
+		if (stack.on_turn_end.length > 0)
+			parts.push(
+				`before you finish \`${stack.on_turn_end.join("`, `")}\` must pass`,
+			);
+		if (parts.length > 0)
+			lines.push(
+				`- ${stack.language} (${stack.paths.join(", ")}): ${parts.join("; ")}.`,
+			);
+	}
+	if (rules.length > 0)
+		lines.push(
+			`- ${rules.length} code rule${rules.length === 1 ? "" : "s"} (${rules.map((rule) => rule.id).join(", ")}). \`guardwright explain <id>\` shows one.`,
+		);
+	lines.push(...config.brief.map((line) => `- ${line}`));
+	return lines.join("\n");
+}
+
+function safeRules(config: Config) {
+	try {
+		return loadRules(config);
+	} catch (error) {
+		if (error instanceof RuleError) return [];
+		throw error;
+	}
+}
