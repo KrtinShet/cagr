@@ -7,7 +7,7 @@ import {
 	rmSync,
 	writeFileSync,
 } from "node:fs";
-import { dirname, join, relative } from "node:path";
+import { basename, dirname, join, relative } from "node:path";
 import type { AgentName, Config } from "./config/schema";
 import { type GitHookName, gitHookNames } from "./git-hooks";
 import { codeowners, pullRequestTemplate, workflowYaml } from "./github-files";
@@ -206,6 +206,15 @@ function otherTemplate(root: string): string | null {
 	return null;
 }
 
+/** Whether the file exists under this exact name. On a case-insensitive disk, existsSync also matches the user's PULL_REQUEST_TEMPLATE.md. */
+function hasExactName(path: string) {
+	try {
+		return readdirSync(dirname(path)).includes(basename(path));
+	} catch {
+		return false;
+	}
+}
+
 /** The indent a JSON file already uses, so a rewrite does not fight the repo's formatter. */
 export function indentOf(text: string | null): string | number {
 	const indent = text?.match(/^[{[][^\n]*\n([ \t]+)\S/)?.[1];
@@ -244,7 +253,7 @@ export function sync(
 		if (shadow) {
 			result.kept.push(shadow);
 			// GitHub reads the .github copy first, so a generated one left behind would hide the user's.
-			if (current?.includes(generatedMark)) {
+			if (current?.includes(generatedMark) && hasExactName(target.path)) {
 				if (options.check) result.drifted.push(rel);
 				else {
 					rmSync(target.path);

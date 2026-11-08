@@ -193,3 +193,22 @@ test("sync deletes its own .github copy once the user keeps theirs elsewhere, an
 	);
 	expect(sync(on, { check: true }).drifted).toEqual([]);
 });
+
+test("sync keeps a .github/PULL_REQUEST_TEMPLATE.md that differs from its own name only in case", () => {
+	const root = mkdtempSync(join(tmpdir(), "gw-ghfiles-"));
+	const on = resolveConfig(
+		{ extends: ["recommended"], ci: { github: true } },
+		root,
+		join(root, "g.toml"),
+	);
+	mkdirSync(join(root, ".github"));
+	const mine = `${pullRequestTemplate(on)}\n## Mine\n`;
+	writeFileSync(join(root, ".github/PULL_REQUEST_TEMPLATE.md"), mine);
+	expect(sync(on, { check: true }).drifted).not.toContain(
+		".github/pull_request_template.md",
+	);
+	expect(sync(on).removed).toEqual([]);
+	expect(
+		readFileSync(join(root, ".github/PULL_REQUEST_TEMPLATE.md"), "utf8"),
+	).toBe(mine);
+});
