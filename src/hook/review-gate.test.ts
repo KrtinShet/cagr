@@ -74,3 +74,52 @@ test("with review off, gh pr create is not gated", async () => {
 		kind: "allow",
 	});
 });
+
+test("on a detached HEAD the gate denies and says how to name the branch", async () => {
+	const { repo, head, config, file, create } = await setup();
+	writeRecord(file, record([round({ head })], [], "feat/x"));
+	await repo.git("checkout", "-q", "--detach");
+	const decision = await handle(create(), config);
+	expect(decision.kind === "deny" && decision.reason).toContain(
+		"HEAD is detached",
+	);
+	expect(
+		await handle(create(`gh pr create --head feat/x -t x ${body}`), config),
+	).toEqual({ kind: "allow" });
+});
+
+test("--head checks that branch's review, not the one checked out", async () => {
+	const { repo, head, config, file, create } = await setup();
+	writeRecord(file, record([round({ head })], [], "feat/x"));
+	await repo.git("checkout", "-q", "-b", "feat/b");
+	await repo.commit("feat: b", { "src/b.ts": "1\n" });
+	await repo.git("checkout", "-q", "feat/x");
+	const other = await handle(
+		create(`gh pr create --head feat/b -t x ${body}`),
+		config,
+	);
+	expect(other.kind === "deny" && other.reason).toContain(
+		"has not been reviewed",
+	);
+	const missing = await handle(
+		create(`gh pr create --head nope -t x ${body}`),
+		config,
+	);
+	expect(missing.kind === "deny" && missing.reason).toContain(
+		"There is no local branch nope",
+	);
+	expect(await handle(create(), config)).toEqual({ kind: "allow" });
+});
+
+test("gh pr new and flags before the subcommand are gated too", async () => {
+	const { config, create } = await setup();
+	for (const command of [
+		`gh pr new -t x ${body}`,
+		`gh -R o/r pr create -t x ${body}`,
+	]) {
+		const decision = await handle(create(command), config);
+		expect(decision.kind === "deny" && decision.reason).toContain(
+			"has not been reviewed",
+		);
+	}
+});

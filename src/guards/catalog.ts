@@ -84,7 +84,7 @@ export const guards: GuardInfo[] = [
 		id: "review-gate",
 		event: "command.before",
 		catches:
-			"A [review] gate command (by default `gh pr create` and `gh pr ready`) when the current commit has no review, or the review left an Important finding open. A review that could not run lets the command through and tells the human.",
+			"A [review] gate command (by default `gh pr create` and `gh pr ready`, also spelled `gh pr new`, with flags before the subcommand, or through `gh api`) when the branch's commit has no review, or the review left an Important finding open. With --head it checks that branch. A review that could not run lets the command through and tells the human, unless earlier findings are still open.",
 		fix: 'Run `guardwright review`, then fix each finding or answer it with `guardwright review answer <id> --wrong|--intentional|--minor "<why>"`.',
 		config: "[review] enabled, gate, max_rounds",
 	},
@@ -100,9 +100,9 @@ export const guards: GuardInfo[] = [
 		id: "agent-approval",
 		event: "command.before",
 		catches:
-			"`gh pr merge`, `gh pr review --approve`, and the merge, auto-merge and approve calls through `gh api`.",
-		fix: "Say the pull request is ready and let a person approve and merge it.",
-		config: "[review] agents_may_merge",
+			"`gh pr merge`, `gh pr review --approve`, and the merge, auto-merge and approve calls through `gh api`. With review on, resolving a review thread through `gh api`. A `gh alias set` that names any of these or a gate command, and `gh alias import`.",
+		fix: "Say the pull request is ready and let a person approve and merge it. Reply on a review thread instead of resolving it.",
+		config: "[review] agents_may_merge, enabled",
 	},
 ];
 

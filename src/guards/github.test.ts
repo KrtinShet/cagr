@@ -2,9 +2,11 @@ import { expect, test } from "bun:test";
 import { config } from "../test/config";
 import {
 	agentApprovalFinding,
+	ghWords,
 	isGateCommand,
 	missingSections,
 	prBodyFinding,
+	prHeadBranch,
 } from "./github";
 
 const recommended = config({ extends: ["recommended"] });
@@ -94,4 +96,72 @@ test("missingSections matches headings, not words in the text", () => {
 	expect(
 		missingSections("We did no testing.\n## Risk\n", ["Testing", "Risk"]),
 	).toEqual(["Testing"]);
+});
+
+test("ghWords drops flags before the subcommand and expands gh's own aliases", () => {
+	expect(ghWords(["gh", "-R", "o/r", "pr", "merge", "1"])).toEqual([
+		"gh",
+		"pr",
+		"merge",
+		"1",
+	]);
+	expect(ghWords(["gh", "--repo=o/r", "pr", "new", "--fill"])).toEqual([
+		"gh",
+		"pr",
+		"create",
+		"--fill",
+	]);
+	expect(ghWords(["git", "status"])).toBeNull();
+});
+
+test("other spellings of merge, approve and resolve are denied too", () => {
+	for (const line of [
+		"gh -R o/r pr merge 1",
+		"gh --repo o/r pr merge 1",
+		"gh pr review 12 --approve=true",
+		"gh alias set m 'pr merge'",
+		"gh alias set c 'pr create'",
+		"gh alias set n 'pr new --fill'",
+		"gh alias set --shell r 'gh pr review --approve $1'",
+		"gh alias import aliases.yml",
+		`gh api graphql -f query='mutation { resolveReviewThread(input:{threadId:"x"}) { thread { id } } }'`,
+	])
+		expect(agentApprovalFinding(line, recommended)?.id).toBe("agent-approval");
+	expect(
+		agentApprovalFinding("gh alias set v 'pr view'", recommended),
+	).toBeNull();
+	expect(agentApprovalFinding("gh alias list", recommended)).toBeNull();
+});
+
+test("the gate catches gh pr new, flags before the subcommand, and the API", () => {
+	for (const line of [
+		"gh pr new -t x --fill",
+		"gh -R o/r pr create -t x",
+		"gh pr -R o/r ready 3",
+		"gh api repos/o/r/pulls -f head=feat/x -f base=main -f title=x",
+		"gh api -X POST repos/{owner}/{repo}/pulls --input body.json",
+		`gh api graphql -f query='mutation { createPullRequest(input: {}) { pullRequest { id } } }'`,
+		`gh api graphql -f query='mutation { markPullRequestReadyForReview(input: {}) { clientMutationId } }'`,
+	])
+		expect(isGateCommand(line, recommended)).toBe(true);
+	for (const line of [
+		"gh api repos/o/r/pulls",
+		"gh api repos/o/r/pulls/3/comments -f body=x",
+		"gh pr view 3",
+	])
+		expect(isGateCommand(line, recommended)).toBe(false);
+});
+
+test("gh pr new needs a body like gh pr create", () => {
+	expect(
+		prBodyFinding("gh pr new -t x --fill", recommended, none)?.reason,
+	).toContain("--fill writes the body from commits");
+});
+
+test("prHeadBranch reads --head, -H and --head=, without the owner", () => {
+	expect(prHeadBranch("gh pr create --head feat/b -t x")).toBe("feat/b");
+	expect(prHeadBranch("gh pr create -H me:feat/c")).toBe("feat/c");
+	expect(prHeadBranch("gh pr new --head=feat/d")).toBe("feat/d");
+	expect(prHeadBranch("gh pr create -t x")).toBeNull();
+	expect(prHeadBranch("gh pr ready 3")).toBeNull();
 });

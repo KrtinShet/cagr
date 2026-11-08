@@ -10,6 +10,7 @@ import {
 	agentApprovalFinding,
 	isGateCommand,
 	prBodyFinding,
+	prHeadBranch,
 } from "../guards/github";
 import { insideRoot } from "../paths";
 import { gateResult } from "../review/gate";
@@ -20,7 +21,7 @@ import {
 	loadRules,
 	RuleError,
 } from "../rules/rules";
-import { runShell } from "../run";
+import { run, runShell } from "../run";
 import { type CheckResult, needsCheck, stopDecision } from "../stop-decision";
 import {
 	clearTurnState,
@@ -79,7 +80,7 @@ async function commandBefore(
 			: null);
 	if (finding) return { kind: "deny", reason: render(finding) };
 	if (!isGateCommand(input.command, config)) return { kind: "allow" };
-	return reviewGate(input.cwd, config);
+	return reviewGate(input.command, input.cwd, config);
 }
 
 function readText(path: string) {
@@ -90,12 +91,43 @@ function readText(path: string) {
 	}
 }
 
-/** Reads the branch's review record: one git call and one file, to stay inside the command budget. */
-async function reviewGate(cwd: string, config: Config): Promise<Decision> {
+/** Reads the branch's review record: two quick git calls (three with --head) and one file, to stay inside the command budget. */
+async function reviewGate(
+	command: string,
+	cwd: string,
+	config: Config,
+): Promise<Decision> {
 	const git = await gitContext(cwd);
-	if (!git.commonDir || !git.branch) return { kind: "allow" };
-	const record = readRecord(recordPath(git.commonDir, git.branch));
-	const result = gateResult(record, git.head, config);
+	if (!git.commonDir) return { kind: "allow" };
+	const named = prHeadBranch(command);
+	const branch = named ?? git.branch;
+	if (!branch)
+		return {
+			kind: "deny",
+			reason: render({
+				id: "review-gate",
+				reason:
+					"HEAD is detached, so guardwright cannot tell which branch this pull request is for. Check out the branch (`git switch <branch>`), or name it with --head <branch>.",
+			}),
+		};
+	let head = git.head;
+	if (named && named !== git.branch) {
+		const result = await run(
+			["git", "rev-parse", "--verify", "-q", `refs/heads/${named}^{commit}`],
+			cwd,
+		);
+		head = result.ok ? result.stdout.trim() : null;
+		if (!head)
+			return {
+				kind: "deny",
+				reason: render({
+					id: "review-gate",
+					reason: `There is no local branch ${named}, so guardwright cannot check its review. Check it out, run \`guardwright review\` there, and open the pull request from it.`,
+				}),
+			};
+	}
+	const record = readRecord(recordPath(git.commonDir, branch));
+	const result = gateResult(record, head, config);
 	if (result.kind === "deny")
 		return {
 			kind: "deny",
