@@ -3,6 +3,8 @@ import { basename } from "node:path";
 const separators = new Set([";", "&", "|", "\n", "(", ")", "`"]);
 const wrappers = new Set(["sudo", "env", "command", "exec", "time", "nohup"]);
 const assignment = /^[A-Za-z_][A-Za-z0-9_]*=/;
+// `>out`, `2>>log`, `2>&1`, `<&3`, `&>file`, `<in`: the operator, then the target if it is joined on.
+const redirection = /^(?:\d*(?:>&|<&|>>?|<)|&>>?)(.*)$/;
 
 /**
  * Splits a shell command line into simple commands, each a list of words with
@@ -39,12 +41,15 @@ class Splitter {
 	private inWord = false;
 	private depth = 0;
 	private inBacktick = false;
+	private quoted = false;
+	private dropNext = false;
 
 	read(line: string, index: number): number {
 		const char = line[index] as string;
 		if (char === "'" || char === '"') {
 			const quoted = readQuoted(line, index);
 			this.add(quoted.text);
+			this.quoted = true;
 			return quoted.end;
 		}
 		if (char === "\\" && index + 1 < line.length) {
@@ -79,12 +84,20 @@ class Splitter {
 			this.nested.push(this.depth > 0 || this.inBacktick);
 		}
 		this.words = [];
+		this.dropNext = false;
 	}
 
+	// Redirections are dropped: they are not arguments, so `gh pr ready 2>&1` names no branch.
 	private endWord() {
-		if (this.inWord) this.words.push(this.word);
+		if (this.inWord) {
+			const operator = this.quoted ? null : redirection.exec(this.word);
+			if (this.dropNext) this.dropNext = false;
+			else if (operator) this.dropNext = operator[1] === "";
+			else this.words.push(this.word);
+		}
 		this.word = "";
 		this.inWord = false;
+		this.quoted = false;
 	}
 
 	private add(text: string) {

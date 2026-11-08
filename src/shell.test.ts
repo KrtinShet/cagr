@@ -11,15 +11,15 @@ describe("simpleCommands", () => {
 		]);
 	});
 
-	test("reads >&, <& and &> as redirections, not a background &", () => {
+	test("drops redirections and their targets, and reads >& as one, not a background &", () => {
 		expect(
-			simpleCommands("git push 2>&1 | tail -2 && cat <&3 &>log; bun x & ls"),
-		).toEqual([
-			["git", "push", "2>&1"],
-			["tail", "-2"],
-			["cat", "<&3", "&>log"],
-			["bun", "x"],
-			["ls"],
+			simpleCommands(
+				"git push 2>&1 | tail -2 && cat <&3 &>log; bun x & ls > out 2>> err",
+			),
+		).toEqual([["git", "push"], ["tail", "-2"], ["cat"], ["bun", "x"], ["ls"]]);
+		expect(simpleCommands(">out echo hi >& log")).toEqual([["echo", "hi"]]);
+		expect(simpleCommands(`echo ">x" '2>&1'`)).toEqual([
+			["echo", ">x", "2>&1"],
 		]);
 	});
 

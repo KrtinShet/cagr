@@ -239,6 +239,12 @@ test("gateTarget reads the branch or pull request a gate command names", () => {
 	expect(target("gh pr create -t x")).toEqual({ branch: null });
 	expect(target("gh pr create -Hme:feat/b")).toEqual({ branch: "feat/b" });
 	expect(target("gh pr ready")).toEqual({ branch: null });
+	for (const line of [
+		"gh pr ready 2>&1",
+		"gh pr ready &>/dev/null",
+		"gh pr ready > out.txt",
+	])
+		expect(target(line)).toEqual({ branch: null });
 	expect(target("gh pr ready -R o/r feat/b")).toEqual({ branch: "feat/b" });
 	for (const line of [
 		"gh pr ready 42",
