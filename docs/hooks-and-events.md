@@ -1,3 +1,8 @@
+---
+title: Hooks and events
+nav_order: 5
+---
+
 # Hooks and events
 
 cagr hooks into each agent through the agent's own hook system, and into git through `commit-msg` and `pre-push` hooks. Every agent's events map onto five cagr events, so one config covers them all.

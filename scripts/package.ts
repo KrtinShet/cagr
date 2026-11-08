@@ -22,7 +22,7 @@ const description =
 const license = "MIT";
 const licenseFile = join(root, "LICENSE");
 const meta = {
-	homepage: "https://github.com/krtinshet/cagr#readme",
+	homepage: "https://krtinshet.github.io/cagr/",
 	repository: { type: "git", url: "git+https://github.com/krtinshet/cagr.git" },
 	bugs: { url: "https://github.com/krtinshet/cagr/issues" },
 	author: "Krtin Shet",

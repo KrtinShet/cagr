@@ -17,7 +17,7 @@ It works with Claude Code and Codex today, and through the git hooks with every 
 
 ## Docs
 
-The full docs are in [docs/](docs/README.md):
+The full docs are at [krtinshet.github.io/cagr](https://krtinshet.github.io/cagr/), and in [docs/](docs/README.md):
 
 - [Getting started](docs/getting-started.md): install, `cagr init`, `cagr doctor`.
 - [Configuration](docs/configuration.md): every key in `cagr.toml`.

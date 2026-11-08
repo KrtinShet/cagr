@@ -1,3 +1,8 @@
+---
+title: Review
+nav_order: 7
+---
+
 # Review
 
 `cagr review` reviews the branch against its base with a reviewer agent: Claude Code or Codex, started read-only in a fresh context, with its own hooks turned off. It reads `REVIEW.md` (what matters in this repo), the diff, the commit messages and the risk tier, and it can read any other file in the repo that it needs.

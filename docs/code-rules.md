@@ -1,3 +1,8 @@
+---
+title: Code rules
+nav_order: 6
+---
+
 # Code rules
 
 Code rules catch patterns in your code that a linter does not know about, like a `console.log` in app code or a raw SQL call outside the data layer. They are [ast-grep](https://ast-grep.github.io/) rules, so they match the syntax tree, not text. cagr runs them after each edit and at the end of each turn, on the changed files only, and again in CI.

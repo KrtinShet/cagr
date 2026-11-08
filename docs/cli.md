@@ -1,3 +1,8 @@
+---
+title: CLI reference
+nav_order: 9
+---
+
 # CLI reference
 
 ```

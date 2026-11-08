@@ -1,0 +1,22 @@
+title: cagr
+description: One config for every coding agent's guardrails.
+remote_theme: just-the-docs/just-the-docs@v0.10.1
+plugins:
+  - jekyll-remote-theme
+  - jekyll-relative-links
+  - jekyll-readme-index
+relative_links:
+  enabled: true
+  collections: false
+search_enabled: true
+color_scheme: light
+aux_links:
+  GitHub: https://github.com/krtinshet/cagr
+  npm: https://www.npmjs.com/package/cagr
+aux_links_new_tab: true
+gh_edit_link: true
+gh_edit_repository: https://github.com/krtinshet/cagr
+gh_edit_branch: main
+gh_edit_source: docs
+gh_edit_view_mode: tree
+footer_content: "MIT license. Copyright 2026 Krtin Shet."

@@ -1,3 +1,8 @@
+---
+title: Configuration
+nav_order: 3
+---
+
 # Configuration
 
 cagr reads its config from `cagr.toml`, or from a `[tool.cagr]` table in `pyproject.toml`. It looks in the current folder, then in each parent folder, and uses the first one it finds. In each folder, `cagr.toml` wins over `pyproject.toml`. The folder that holds the config is the repo root for cagr: globs and `{files}` paths are relative to it.

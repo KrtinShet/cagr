@@ -1,3 +1,8 @@
+---
+title: Guards
+nav_order: 4
+---
+
 # Guards
 
 A guard is a built-in check on a command, a file path, a branch or a commit subject. When a guard blocks something, the agent sees the reason followed by the guard's id, like this:

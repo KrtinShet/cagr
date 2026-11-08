@@ -1,3 +1,8 @@
+---
+title: CI
+nav_order: 8
+---
+
 # CI
 
 The agent hooks only see agents that run them. CI closes the gap: it runs the same checks on every pull request, so a change made without the hooks (by a person, by another agent, or with the hooks off) cannot merge. cagr writes the GitHub Actions workflow for you.

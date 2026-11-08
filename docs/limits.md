@@ -1,3 +1,8 @@
+---
+title: Limits and troubleshooting
+nav_order: 10
+---
+
 # Limits and troubleshooting
 
 ## What cagr is not
