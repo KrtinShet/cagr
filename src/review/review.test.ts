@@ -273,6 +273,38 @@ describe("findings", () => {
 		).toHaveLength(1);
 	});
 
+	test("findings with no line are kept apart unless their titles agree", () => {
+		const general = (title: string, file = "") =>
+			candidate({ file, line: 0, title });
+		expect(
+			mergeCandidates(
+				[
+					general("Secrets logged on startup"),
+					general("Retry loop never ends"),
+				],
+				[],
+			),
+		).toHaveLength(2);
+		expect(
+			mergeCandidates(
+				[general("Retry loop never ends", "src/a.ts")],
+				[
+					finding({
+						line: 0,
+						title: "Docs are out of date",
+						status: "answered",
+					}),
+				],
+			),
+		).toHaveLength(1);
+		expect(
+			mergeCandidates(
+				[general("Retry loop never ends"), general("Retry loop never stops")],
+				[],
+			),
+		).toHaveLength(1);
+	});
+
 	test("the vote keeps a candidate only with a majority and takes the common severity", () => {
 		const keyed = [{ ...candidate(), key: "C1" }];
 		const vote = (real: boolean, severity: "important" | "nit") => ({

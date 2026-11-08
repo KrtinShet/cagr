@@ -47,6 +47,30 @@ function takeFlag(args: string[], name: string) {
 	return true;
 }
 
+/** The options of a plain `guardwright review`. Throws on anything else. */
+export function parseReviewArgs(args: string[]) {
+	const rest = [...args];
+	const issue = takeFlag(rest, "--issue");
+	const base = take(rest, "--base");
+	const effort = takeEffort(rest);
+	const full = takeFlag(rest, "--full");
+	let scan: string[] | undefined;
+	const scanIndex = rest.indexOf("--scan");
+	if (scanIndex !== -1) {
+		// The globs run up to the next option, so options may come before or after them.
+		let end = scanIndex + 1;
+		while (end < rest.length && !rest[end]?.startsWith("-")) end++;
+		scan = rest.splice(scanIndex, end - scanIndex).slice(1);
+		if (scan.length === 0)
+			throw new ReviewInputError(
+				"Name the globs to scan: guardwright review --scan 'src/**'",
+			);
+	}
+	if (rest.length > 0)
+		throw new ReviewInputError(`Unknown option ${rest[0]}.\n\n${reviewHelp}`);
+	return { scan, issue, base, effort, full };
+}
+
 function takeEffort(args: string[]): Effort | undefined {
 	const value = take(args, "--effort");
 	if (value !== undefined && !efforts.includes(value as Effort))
@@ -122,24 +146,7 @@ export async function reviewCommand(
 		console.log(result.report);
 		return result.ok ? 0 : 1;
 	}
-	const scanIndex = rest.indexOf("--scan");
-	let scan: string[] | undefined;
-	const issue = takeFlag(rest, "--issue");
-	if (scanIndex !== -1) {
-		scan = rest
-			.splice(scanIndex)
-			.slice(1)
-			.filter((word) => !word.startsWith("--"));
-		if (scan.length === 0)
-			throw new ReviewInputError(
-				"Name the globs to scan: guardwright review --scan 'src/**'",
-			);
-	}
-	const base = take(rest, "--base");
-	const effort = takeEffort(rest);
-	const full = takeFlag(rest, "--full");
-	if (rest.length > 0)
-		throw new ReviewInputError(`Unknown option ${rest[0]}.\n\n${reviewHelp}`);
+	const { scan, issue, base, effort, full } = parseReviewArgs(rest);
 	const outcome = await review(config, {
 		cwd,
 		base,

@@ -70,7 +70,7 @@ async function gitOut(args: string[], cwd: string) {
 		throw new ReviewInputError(
 			`git ${args.join(" ")} failed: ${result.output.trim()}`,
 		);
-	return result.output.trimEnd();
+	return result.stdout.trimEnd();
 }
 
 export async function resolveBase(name: string, cwd: string) {
@@ -421,9 +421,9 @@ function similar(
 	const left = words(a.title);
 	const right = words(b.title);
 	const shared = [...left].filter((word) => right.has(word)).length;
-	return (
-		a.line === b.line || shared >= 2 || Math.min(left.size, right.size) === 0
-	);
+	// Line 0 means "no line", so two findings there are the same only when their titles agree.
+	const sameLine = a.line > 0 && a.line === b.line;
+	return sameLine || shared >= 2;
 }
 
 const severityRank: Record<Severity, number> = {
