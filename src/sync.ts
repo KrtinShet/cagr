@@ -4,6 +4,7 @@ import {
 	mkdirSync,
 	readdirSync,
 	readFileSync,
+	rmSync,
 	writeFileSync,
 } from "node:fs";
 import { dirname, join, relative } from "node:path";
@@ -218,6 +219,8 @@ export type SyncResult = {
 	drifted: string[];
 	/** Hand-written files sync would have replaced, left as they are. */
 	kept: string[];
+	/** Generated files deleted because the user keeps their own elsewhere. */
+	removed: { file: string; shadow: string }[];
 };
 
 /** Writes the adapter files, or with `check` only reports which would change. */
@@ -230,17 +233,26 @@ export function sync(
 		unchanged: [],
 		drifted: [],
 		kept: [],
+		removed: [],
 	};
 	for (const target of targets(config, options.only)) {
 		const rel = toPosix(relative(config.root, target.path));
-		const shadow = target.shadowedBy?.();
-		if (shadow) {
-			result.kept.push(shadow);
-			continue;
-		}
 		const current = existsSync(target.path)
 			? readFileSync(target.path, "utf8")
 			: null;
+		const shadow = target.shadowedBy?.();
+		if (shadow) {
+			result.kept.push(shadow);
+			// GitHub reads the .github copy first, so a generated one left behind would hide the user's.
+			if (current?.includes(generatedMark)) {
+				if (options.check) result.drifted.push(rel);
+				else {
+					rmSync(target.path);
+					result.removed.push({ file: rel, shadow });
+				}
+			}
+			continue;
+		}
 		if (
 			target.userOwned &&
 			current !== null &&
@@ -278,11 +290,17 @@ function same(current: string | null, desired: string, json: boolean) {
 }
 
 /** What to tell a person about each hand-written file sync left alone. */
-export function keptNotes(kept: string[]) {
-	return kept.map(
-		(file) =>
-			`Left ${file} as it is: cagr did not write it. ${file.endsWith("CODEOWNERS") ? "Move its owners into [[risk.paths]] owners and delete it" : "Add the [review] pr_sections headings to it yourself, or delete it"} to let \`cagr sync\` manage it.`,
-	);
+export function keptNotes(kept: string[], removed: SyncResult["removed"] = []) {
+	return [
+		...kept.map(
+			(file) =>
+				`Left ${file} as it is: cagr did not write it. ${file.endsWith("CODEOWNERS") ? "Move its owners into [[risk.paths]] owners and delete it" : "Add the [review] pr_sections headings to it yourself, or delete it"} to let \`cagr sync\` manage it.`,
+		),
+		...removed.map(
+			({ file, shadow }) =>
+				`Deleted ${file}, which \`cagr sync\` wrote: GitHub reads it before ${shadow}, so yours would not apply. Commit the deletion.`,
+		),
+	];
 }
 
 export class GitSetupError extends Error {}

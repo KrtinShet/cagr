@@ -26,7 +26,7 @@ Then run `cagr sync` and commit what it writes:
 
 While a file still has the mark, `cagr sync` rewrites it. Once you take the mark out, sync leaves the file alone and prints a note.
 
-Sync also leaves these out when you keep your own copy somewhere else GitHub reads it, so it never shadows yours. For CODEOWNERS that is `CODEOWNERS` at the root or `docs/CODEOWNERS`. For the PR template it is a `pull_request_template.md` at the root, in `docs/` or in `.github/` in any case (such as `PULL_REQUEST_TEMPLATE.md`), or a `PULL_REQUEST_TEMPLATE/` folder in any of those. Sync prints a note naming your file.
+Sync also leaves these out when you keep your own copy somewhere else GitHub reads it, so it never shadows yours. For CODEOWNERS that is `CODEOWNERS` at the root or `docs/CODEOWNERS`. For the PR template it is a `pull_request_template.md` at the root, in `docs/` or in `.github/` in any case (such as `PULL_REQUEST_TEMPLATE.md`), or a `PULL_REQUEST_TEMPLATE/` folder in any of those. Sync prints a note naming your file. If sync had already written its own `.github/` copy and it still has the mark, sync deletes it, because GitHub reads `.github/` first and would ignore yours. The note names the deleted file, and `cagr sync --check` reports it as out of date until you run `cagr sync`.
 
 ## The workflow
 

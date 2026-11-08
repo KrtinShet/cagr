@@ -186,7 +186,8 @@ async function main(argv: string[]): Promise<number> {
 		case "sync": {
 			const check = args.includes("--check");
 			const result = sync(requireConfig(), { check });
-			for (const note of keptNotes(result.kept)) console.log(note);
+			for (const note of keptNotes(result.kept, result.removed))
+				console.log(note);
 			if (check) {
 				if (result.drifted.length === 0) {
 					console.log("Generated files are up to date.");

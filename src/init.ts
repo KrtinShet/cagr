@@ -446,7 +446,7 @@ export async function init(
 	if (!config) throw new Error(`Could not read back ${file}.`);
 	const synced = sync(config);
 	const written = [configFileName, ...synced.written];
-	notes.push(...keptNotes(synced.kept));
+	notes.push(...keptNotes(synced.kept, synced.removed));
 	const guide = join(root, config.review.guide);
 	if (config.review.enabled && !existsSync(guide)) {
 		writeFileSync(guide, starterReviewGuide);

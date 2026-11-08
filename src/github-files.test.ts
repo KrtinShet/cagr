@@ -157,3 +157,39 @@ test("sync writes no CODEOWNERS or PR template when GitHub would read the user's
 		expect(sync(on, { check: true }).drifted).toEqual([]);
 	}
 });
+
+test("sync deletes its own .github copy once the user keeps theirs elsewhere, and --check reports it", () => {
+	const root = mkdtempSync(join(tmpdir(), "gw-ghfiles-"));
+	const on = resolveConfig(
+		{
+			extends: ["recommended"],
+			ci: { github: true },
+			risk: { paths: [{ glob: "src/**", tier: "high", owners: ["@sec"] }] },
+		},
+		root,
+		join(root, "g.toml"),
+	);
+	sync(on);
+	expect(existsSync(join(root, ".github/CODEOWNERS"))).toBe(true);
+	expect(existsSync(join(root, ".github/pull_request_template.md"))).toBe(true);
+	writeFileSync(join(root, "CODEOWNERS"), "* @a\n");
+	mkdirSync(join(root, "docs"));
+	writeFileSync(join(root, "docs/PULL_REQUEST_TEMPLATE.md"), "## What\n");
+	expect(sync(on, { check: true }).drifted.sort()).toEqual([
+		".github/CODEOWNERS",
+		".github/pull_request_template.md",
+	]);
+	const result = sync(on);
+	expect(result.removed.map((entry) => entry.file).sort()).toEqual([
+		".github/CODEOWNERS",
+		".github/pull_request_template.md",
+	]);
+	expect(existsSync(join(root, ".github/CODEOWNERS"))).toBe(false);
+	expect(existsSync(join(root, ".github/pull_request_template.md"))).toBe(
+		false,
+	);
+	expect(keptNotes(result.kept, result.removed).join("\n")).toContain(
+		"Deleted .github/CODEOWNERS, which `cagr sync` wrote: GitHub reads it before CODEOWNERS",
+	);
+	expect(sync(on, { check: true }).drifted).toEqual([]);
+});
