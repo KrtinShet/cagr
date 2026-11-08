@@ -31,20 +31,27 @@ export function gateResult(
 			kind: "deny",
 			reason: `You committed after the last review (${last.head.slice(0, 7)}). ${runReview} It reviews only the new commits.`,
 		};
-	if (last.error)
-		return {
-			kind: "allow",
-			notice: `guardwright: the review of ${last.head.slice(0, 7)} could not run (${last.error}), so this pull request goes out unreviewed. Review it yourself before you approve it.`,
-		};
 	const open = blocking(record);
+	const list = open.map((finding) => `- ${findingLine(finding)}`).join("\n");
+	if (last.error)
+		// Fail open only on what the failed round would have checked: findings already known still hold.
+		return open.length === 0
+			? {
+					kind: "allow",
+					notice: `guardwright: the review of ${last.head.slice(0, 7)} could not run (${last.error}), so ${record.rounds.some((round) => !round.error) ? "its newest commits go" : "this pull request goes"} out unreviewed. Review it yourself before you approve it.`,
+				}
+			: {
+					kind: "deny",
+					reason: `The last review could not run (${last.error}), and earlier rounds left ${open.length} important problem${open.length === 1 ? "" : "s"} open:\n${list}\n\nFix each one, commit, and run \`guardwright review\` again. ${answerHint(open[0]?.id ?? "f1")}`,
+				};
 	if (open.length === 0) return { kind: "allow" };
+	const rounds = record.rounds.filter((round) => !round.error).length;
 	const capped =
-		record.rounds.filter((round) => !round.error).length >=
-		config.review.max_rounds
-			? `\n\nThis branch has had ${record.rounds.length} review rounds. Step back: if findings keep coming, the approach may be wrong. Rethink it, or answer the findings and let a person decide.`
+		rounds >= config.review.max_rounds
+			? `\n\nThis branch has had ${rounds} review rounds. Step back: if findings keep coming, the approach may be wrong. Rethink it, or answer the findings and let a person decide.`
 			: "";
 	return {
 		kind: "deny",
-		reason: `The review found ${open.length} important problem${open.length === 1 ? "" : "s"} still open:\n${open.map((finding) => `- ${findingLine(finding)}`).join("\n")}\n\nFix each one, commit, and run \`guardwright review\` again. ${answerHint(open[0]?.id ?? "f1")}${capped}`,
+		reason: `The review found ${open.length} important problem${open.length === 1 ? "" : "s"} still open:\n${list}\n\nFix each one, commit, and run \`guardwright review\` again. ${answerHint(open[0]?.id ?? "f1")}${capped}`,
 	};
 }

@@ -57,3 +57,40 @@ test("a review that could not run lets the PR through and tells the human", () =
 		"goes out unreviewed",
 	);
 });
+
+test("a review that could not run does not open the gate on findings still open", () => {
+	const rounds = [
+		round({ n: 1, head: "c".repeat(40) }),
+		round({ n: 2, error: "claude timed out" }),
+	];
+	const result = gateResult(record(rounds, [finding()]), head, settings);
+	expect(result.kind).toBe("deny");
+	const reason = result.kind === "deny" ? result.reason : "";
+	expect(reason).toContain("could not run (claude timed out)");
+	expect(reason).toContain("f1 src/a.ts:4");
+	expect(reason).toContain("guardwright review answer f1");
+});
+
+test("after an earlier good round, a failed one says the newest commits go out unreviewed", () => {
+	const rounds = [
+		round({ n: 1, head: "c".repeat(40) }),
+		round({ n: 2, error: "x" }),
+	];
+	const result = gateResult(record(rounds), head, settings);
+	expect(result.kind === "allow" && result.notice).toContain(
+		"its newest commits go out unreviewed",
+	);
+});
+
+test("the step-back message counts only rounds that ran", () => {
+	const rounds = [
+		round({ n: 1 }),
+		round({ n: 2, error: "x" }),
+		round({ n: 3 }),
+		round({ n: 4 }),
+	];
+	const result = gateResult(record(rounds, [finding()]), head, settings);
+	expect(result.kind === "deny" && result.reason).toContain(
+		"has had 3 review rounds",
+	);
+});
