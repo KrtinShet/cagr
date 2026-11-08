@@ -6,14 +6,14 @@ Do not build these into v0.1. Each one needs its own design first.
 
 - **Ratchets and baselines**: letting existing findings stay while blocking new ones.
 - **Git-URL presets** (`extends = ["github:org/preset@v1"]`): planned for v0.2, see below.
-- **CI annotations**: findings as GitHub or GitLab annotations.
+- **GitLab**: `guardwright ci` writes GitHub annotations only, and `review --ci` posts to GitHub only.
 - **`guardwright map`**: a generated map of the repo for agents.
 - **`guardwright audit`**: a report of which guards fire, how often, and for whom.
 - **Miss log**: recording slips the guards did not catch, to find new rules.
 - **MCP server**: exposing the checks as tools the agent calls.
 - **More agents**: Cursor, Gemini CLI, OpenCode, Aider and others. Until then, the git hooks cover them.
 
-From gerb-crm, these were left out: the guard that stops an agent from merging pull requests (`mergesPullRequest`), and `stack clean` (removing finished worktrees). Both are tied to that repo's workflow.
+From gerb-crm, `stack clean` (removing finished worktrees) was left out: it is tied to that repo's workflow. Blocking agent merges is now built in, as part of the review pipeline in [NORTHSTAR.md](NORTHSTAR.md).
 
 ## v0.2: presets from git URLs
 

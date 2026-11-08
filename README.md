@@ -8,6 +8,7 @@ Coding agents slip. They run `npm install` in a bun repo, push to `main`, edit `
 - **Files**: it denies edits to protected files such as `.env*` and lockfiles, before the edit happens.
 - **Edits**: after each edit it runs your formatters and linters (Biome, ESLint, Ruff) and your own ast-grep code rules, on the changed files only.
 - **End of turn**: the agent may not finish while your checks (tsc, mypy, pytest, `bun run lint`) fail. After 3 blocked stops it lets the agent go and tells the human, so it never traps the agent in a loop.
+- **Pull requests**: `gh pr create` is denied until a reviewer agent in a fresh context has reviewed the current commit and every Important finding is fixed or answered. Agents may not merge or approve. See [Review](#review).
 - **Git**: the commit-msg and pre-push hooks check commit subjects, branch names and pushes to `main`. They cover any agent, and any human, even without agent hooks.
 
 guardwright does not replace your tools. It runs them at the right moment and shows the agent only what matters: findings in the files it changed, deduped and cut short.
@@ -80,19 +81,54 @@ examples:
 
 `guardwright rules test` fails when an invalid example does not fire or a valid one does. Languages: TypeScript, TSX, JavaScript, Python, Go, Rust, HTML, CSS. Biome `.grit` rules stay in Biome.
 
+## Review
+
+`guardwright review` reviews the branch against its base with a reviewer agent: Claude Code or Codex, whichever you run, started read-only in a fresh context. It reads `REVIEW.md` (what matters in this repo), the diff, the commit messages and the risk tier, and reads any other file it needs.
+
+- **Effort** sets the agents. `quick`: one bug finder. `standard`: a bug finder and a security finder, then a verifier that drops what it cannot confirm. `deep`: three finders and three verifiers, keeping a finding when two agree. A high-risk change always gets `deep`.
+- **Findings** are Important, Nit or Pre-existing. Style findings are dropped. Only Important ones hold the gate.
+- **Rounds**: after round 1 the reviewer sees only the new commits and the open findings, marks what was fixed, and does not repeat itself. After `max_rounds` (3) it tells the author to step back.
+- **Answers**: a finding that is wrong or intentional gets an answer instead of a fix: `guardwright review answer f2 --wrong "the list is never empty here"`. A person reads every answer. `review stats` shows rounds to pass and how often findings were answered as wrong, which is the reviewer's noise.
+- **Evals**: put past bugs in `.guardwright/review-evals/*.toml` (a commit range and where the bug was, or `clean = true`). `review eval` scores the reviewer and compares with the last run, so a change to `REVIEW.md` or the model can be measured.
+- **Fails open**: when the reviewer cannot run, the round is recorded as an error, and the gate lets the PR through and tells the human it went out unreviewed.
+
+```toml
+[review]
+effort = "standard"
+skip = ["**/*.snap"]
+pr_sections = ["Testing", "Risk", "How to revert"]   # gh pr create needs these headings
+# reviewer = "auto"       # or "claude", "codex", or a command that prints the findings as JSON
+
+[[risk.paths]]
+glob = "src/auth/**"
+tier = "high"             # low: no approval, medium: one, high: two
+owners = ["@org/security"]
+reason = "Sign-in and sessions."
+
+[ci]
+github = true             # sync writes the workflow, the PR template and CODEOWNERS
+review = true             # the workflow reviews each PR; needs the ANTHROPIC_API_KEY secret
+nightly = ["src/**"]      # reviews old code every night and opens an issue
+```
+
+In CI, `guardwright ci` runs the checks the agent ran (edit checks, turn-end checks, code rules, commit and branch names, generated files, the PR body) on the branch's changed files, so a change made without the hooks cannot merge. `guardwright review --ci` posts the review as inline PR comments; resolving a thread counts as an answer. `guardwright doctor --github` checks the branch protection that only GitHub can enforce: approvals, stale approval dismissal, thread resolution, code owners, required checks. [NORTHSTAR.md](NORTHSTAR.md) maps each part to the pipeline it comes from.
+
 ## Commands
 
-| Command                       | What it does                                                                           |
-| ----------------------------- | -------------------------------------------------------------------------------------- |
-| `init [--dry-run] [--force]`  | Detect the repo, write the config, the agent hooks and the git hooks.                  |
-| `sync [--check]`              | Rewrite the generated files, or fail when they drift.                                  |
-| `install-git-hooks`           | Write the git hooks and set `core.hooksPath`.                                          |
-| `doctor`                      | Check the config, the wiring, the tools on PATH, and hook timings against the budgets. |
-| `check <files...>`            | Run the edit checks and code rules on files, outside an agent.                         |
-| `explain <id>`                | Explain a built-in guard or a code rule.                                               |
-| `rules test`                  | Test every rule's examples.                                                            |
-| `hook <event> --agent <name>` | Called by the agent hooks.                                                             |
-| `git <hook>`                  | Called by the git hooks.                                                               |
+| Command                       | What it does                                                                                                        |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `init [--dry-run] [--force]`  | Detect the repo, write the config, the agent hooks and the git hooks.                                               |
+| `sync [--check]`              | Rewrite the generated files, or fail when they drift.                                                               |
+| `install-git-hooks`           | Write the git hooks and set `core.hooksPath`.                                                                       |
+| `doctor [--github]`           | Check the config, the wiring, the tools on PATH, and hook timings against the budgets.                              |
+| `review [...]`                | Review the branch with a reviewer agent. `review help` lists `answer`, `status`, `stats`, `eval`, `--scan`, `--ci`. |
+| `risk [--base <b>]`           | The change's risk tier, the approvals it needs, and the owners.                                                     |
+| `ci [--base <b>]`             | In CI: the checks the hooks ran, on the branch's changed files.                                                     |
+| `check <files...>`            | Run the edit checks and code rules on files, outside an agent.                                                      |
+| `explain <id>`                | Explain a built-in guard or a code rule.                                                                            |
+| `rules test`                  | Test every rule's examples.                                                                                         |
+| `hook <event> --agent <name>` | Called by the agent hooks.                                                                                          |
+| `git <hook>`                  | Called by the git hooks.                                                                                            |
 
 ## Time budgets
 
@@ -100,7 +136,7 @@ A guard that slows the agent down gets turned off, so guardwright keeps to budge
 
 ## What it is not
 
-guardwright is a guard against slips, not a security boundary. An agent that wants to get around it can: `sh -c "..."`, `eval`, a script file, or a variable can hide a command; edits made through the shell (`sed -i`, `cat >`) are not seen as edits; a human can skip the git hooks once with `GUARDWRIGHT_SKIP=1`. If guardwright itself fails, it lets the call through and says why, so a bug in guardwright never stops your agent.
+guardwright is a guard against slips, not a security boundary. An agent that wants to get around it can: `sh -c "..."`, `eval`, a script file, or a variable can hide a command; edits made through the shell (`sed -i`, `cat >`) are not seen as edits; a human can skip the git hooks once with `GUARDWRIGHT_SKIP=1`. The review gate sees `gh` commands only, not a pull request opened through the web or another client; branch protection and the CI review job close that gap. If guardwright itself fails, it lets the call through and says why, so a bug in guardwright never stops your agent.
 
 Do not use it to hold back an agent you do not trust. Use a sandbox for that.
 
