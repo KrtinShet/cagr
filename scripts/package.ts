@@ -20,6 +20,7 @@ const dist = join(root, "dist");
 const description =
 	"One config for every coding agent's guardrails: commands, files, git, and code rules.";
 const license = "MIT";
+const licenseFile = join(root, "LICENSE");
 
 const npmOs = (target: Target) =>
 	target.platform === "win32" ? "windows" : target.platform;
@@ -52,6 +53,7 @@ copyFileSync(
 	join(root, "packaging/npm/guardwright.js"),
 	join(wrapper, "bin/guardwright.js"),
 );
+copyFileSync(licenseFile, join(wrapper, "LICENSE"));
 writeFileSync(
 	join(wrapper, "package.json"),
 	json({
@@ -72,6 +74,7 @@ for (const target of built) {
 	mkdirSync(dir, { recursive: true });
 	copyFileSync(join(dist, binaryName(target)), join(dir, exe));
 	chmodSync(join(dir, exe), 0o755);
+	copyFileSync(licenseFile, join(dir, "LICENSE"));
 	writeFileSync(
 		join(dir, "package.json"),
 		json({
@@ -112,6 +115,7 @@ for (const target of built) {
 			),
 			0o644,
 		],
+		[`${info}/LICENSE`, new Uint8Array(readFileSync(licenseFile)), 0o644],
 		[
 			`${info}/WHEEL`,
 			text(

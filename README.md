@@ -144,3 +144,7 @@ Do not use it to hold back an agent you do not trust. Use a sandbox for that.
 
 - On Alpine and other musl systems, install `libstdc++` and `libgcc` first (`apk add libstdc++ libgcc`).
 - When the `guardwright` binary is not installed, the git hooks print a warning and let the commit or push through, so a teammate without it is not stuck.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
