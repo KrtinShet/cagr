@@ -93,9 +93,11 @@ export const githubReasons = {
 	unknownHead: () =>
 		"cagr cannot tell which branch this `gh api` call opens a pull request from, so it cannot check the review. Check out the branch and open the pull request with `gh pr create`.",
 	order: (before: string, gate: string) =>
-		`This line runs ${before} before \`${gate}\`. cagr checks the review before the line runs, so before a gate command it allows only \`git add\`, \`git push\`, \`git status\`, \`git fetch\`, \`git diff\`, \`git log\`, and one \`cd <path> &&\` at the start. Run that first, then run \`${gate}\` as a command of its own.`,
+		`This line runs ${before} before \`${gate}\`. cagr checks the review before the line runs, so before a gate command it allows only \`git add\`, \`git push\`, \`git status\`, \`git diff\`, \`git log\`, and one \`cd <path> &&\` at the start. Run that first, then run \`${gate}\` as a command of its own.`,
 	cd: () =>
 		"This line starts with a `cd` or `pushd` that cagr cannot follow: it has `$`, a backtick, a glob, `-` or `~user`, or is not followed by `&&`. Start the line with `cd <literal path> &&`, or run the gate command from that folder on its own.",
+	cdOutsideRepo: () =>
+		"This line cds to a folder that is not a git repo before the gate command, so cagr cannot check the review of the branch it opens. Run the gate command from the repo and branch it is for.",
 	manyBranches: () =>
 		"This line opens or readies pull requests for more than one branch, and cagr checks one branch's review at a time. Run each gate command on its own, from its branch.",
 };
@@ -277,14 +279,10 @@ function apiHead(
 }
 
 // What may run before a gate command on the same line: none of these moves HEAD or the folder.
-const allowedBeforeGate = new Set([
-	"add",
-	"push",
-	"status",
-	"fetch",
-	"diff",
-	"log",
-]);
+// fetch is left out: a `src:dst` refspec moves a local branch.
+const allowedBeforeGate = new Set(["add", "push", "status", "diff", "log"]);
+// git options that can make git run another command, such as -c core.fsmonitor=<cmd>.
+const gitRunsOptions = new Set(["-c", "--config-env", "--exec-path"]);
 // One literal `cd <path> &&` at the very start. `;` or `||` would run the gate command even when the cd fails.
 const leadingCd =
 	/^\s*(?:cd|pushd)\s+(?:'([^']*)'|"([^"$`\\]*)"|([^\s;&|()<>`$'"\\*?[\]{}]+))\s*&&/;
@@ -313,9 +311,24 @@ function commandName(words: string[], nested: boolean) {
 	return `\`${name}\``;
 }
 
-const isAllowedBeforeGate = (words: string[]) =>
-	programName(words) === "git" &&
-	allowedBeforeGate.has(gitSubcommand(words) ?? "");
+/** True when an allowed git command is plain enough that it cannot run another command or move a ref. */
+function isAllowedBeforeGate(raw: string[], words: string[]) {
+	// An env prefix (GIT_EXTERNAL_DIFF, GIT_SSH_COMMAND) or a wrapper can run any command.
+	if (raw.length !== words.length || programName(words) !== "git") return false;
+	if (words.some((word) => word.includes("$(") || word.includes("`")))
+		return false;
+	const subcommand = gitSubcommand(words);
+	if (!subcommand || !allowedBeforeGate.has(subcommand)) return false;
+	const at = words.indexOf(subcommand);
+	if (
+		words
+			.slice(1, at)
+			.some((word) => gitRunsOptions.has(word.split("=")[0] as string))
+	)
+		return false;
+	// `git push . a:b` pushes into this repo and moves a local branch.
+	return !(subcommand === "push" && words.slice(at + 1).includes("."));
+}
 
 /** Where a literal `cd` target goes, or null for `-` and `~user`. */
 function cdTarget(target: string, cwd: string) {
@@ -364,7 +377,7 @@ export function gatePlan(line: string, config: Config, cwd: string): GatePlan {
 				);
 			continue;
 		}
-		if (!blocker && (nested || !isAllowedBeforeGate(words)))
+		if (!blocker && (nested || !isAllowedBeforeGate(raw, words)))
 			blocker = commandName(words, nested);
 	}
 	return { dir };

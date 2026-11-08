@@ -220,4 +220,9 @@ test("a line that starts with a literal cd runs the gate in that folder", async 
 		config,
 	);
 	expect(cd.kind === "deny" && cd.reason).toContain("cd <literal path>");
+	const away = await handle(
+		create(`cd ${outside} && gh pr create -R o/r --head feat/y -t x ${body}`),
+		config,
+	);
+	expect(away.kind === "deny" && away.reason).toContain("not a git repo");
 });

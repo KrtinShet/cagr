@@ -330,12 +330,11 @@ const blocked = (line: string) => {
 	return "finding" in result ? result.finding.reason : null;
 };
 
-test("before a gate command only git add, push, status, fetch, diff and log may run", () => {
+test("before a gate command only git add, push, status, diff and log may run", () => {
 	for (const line of [
 		"gh pr create",
 		"git add -A && git push -u origin HEAD && gh pr create",
 		"git status && git -C . diff && git log -1 && gh pr ready",
-		"git fetch origin && gh pr create",
 		"gh pr create && git commit -am x && gh pr view",
 		"git commit -am x",
 	])
@@ -344,6 +343,11 @@ test("before a gate command only git add, push, status, fetch, diff and log may 
 		["git commit -am x && git push && gh pr create", "git commit"],
 		["git -C . merge main; gh pr ready", "git merge"],
 		["git switch feat/b && gh pr create", "git switch"],
+		["git fetch origin main:feat/x && gh pr create", "git fetch"],
+		["git push . HEAD~1:feat/x && gh pr create", "git push"],
+		["GIT_EXTERNAL_DIFF=./x git diff && gh pr create", "git diff"],
+		["git -c core.pager=./x log && gh pr create", "git log"],
+		['git log "$(git commit -am x)" && gh pr create', "git log"],
 		["git checkout -- src/a.ts && gh pr create", "git checkout"],
 		["git checkout feat/b -- && gh pr create", "git checkout"],
 		["git reset && gh pr create", "git reset"],

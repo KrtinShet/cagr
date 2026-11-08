@@ -10,6 +10,7 @@ import {
 	agentApprovalFinding,
 	gatePlan,
 	gateTarget,
+	githubReasons,
 	isGateCommand,
 	prBodyFinding,
 } from "../guards/github";
@@ -82,7 +83,7 @@ async function commandBefore(
 		readText(resolve(plan.dir, path)),
 	);
 	if (body) return { kind: "deny", reason: render(body) };
-	return reviewGate(input.command, plan.dir, config);
+	return reviewGate(input.command, plan.dir, config, input.cwd);
 }
 
 function readText(path: string) {
@@ -98,9 +99,21 @@ async function reviewGate(
 	command: string,
 	cwd: string,
 	config: Config,
+	hookCwd: string,
 ): Promise<Decision> {
 	const git = await gitContext(cwd);
-	if (!git.commonDir) return { kind: "allow" };
+	if (!git.commonDir) {
+		// A cd out of a repo must not turn the gate off: `cd /tmp && gh pr create -R o/r --head b`.
+		if (cwd === hookCwd || !(await gitContext(hookCwd)).commonDir)
+			return { kind: "allow" };
+		return {
+			kind: "deny",
+			reason: render({
+				id: "review-gate",
+				reason: githubReasons.cdOutsideRepo(),
+			}),
+		};
+	}
 	const target = gateTarget(command, config, git.branch, (path) =>
 		readText(resolve(cwd, path)),
 	);
