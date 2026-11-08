@@ -8,7 +8,7 @@ import { editFinding } from "../guards/edit";
 import { render } from "../guards/finding";
 import {
 	agentApprovalFinding,
-	gateOrderFinding,
+	gatePlan,
 	gateTarget,
 	isGateCommand,
 	prBodyFinding,
@@ -71,17 +71,18 @@ async function commandBefore(
 				git.toplevel === git.mainCheckout,
 		};
 	}
-	const finding =
+	const early =
 		commandFinding(input.command, config, context) ??
-		agentApprovalFinding(input.command, config) ??
-		(isGateCommand(input.command, config)
-			? prBodyFinding(input.command, config, (path) =>
-					readText(resolve(input.cwd, path)),
-				)
-			: null);
-	if (finding) return { kind: "deny", reason: render(finding) };
+		agentApprovalFinding(input.command, config);
+	if (early) return { kind: "deny", reason: render(early) };
 	if (!isGateCommand(input.command, config)) return { kind: "allow" };
-	return reviewGate(input.command, input.cwd, config);
+	const plan = gatePlan(input.command, config, input.cwd);
+	if ("finding" in plan) return { kind: "deny", reason: render(plan.finding) };
+	const body = prBodyFinding(input.command, config, (path) =>
+		readText(resolve(plan.dir, path)),
+	);
+	if (body) return { kind: "deny", reason: render(body) };
+	return reviewGate(input.command, plan.dir, config);
 }
 
 function readText(path: string) {
@@ -100,8 +101,6 @@ async function reviewGate(
 ): Promise<Decision> {
 	const git = await gitContext(cwd);
 	if (!git.commonDir) return { kind: "allow" };
-	const order = gateOrderFinding(command, config, cwd);
-	if (order) return { kind: "deny", reason: render(order) };
 	const target = gateTarget(command, config, git.branch, (path) =>
 		readText(resolve(cwd, path)),
 	);

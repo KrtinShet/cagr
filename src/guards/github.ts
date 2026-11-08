@@ -1,8 +1,8 @@
-import { realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import type { Config } from "../config/schema";
 import {
+	commandsWithNesting,
 	programName,
 	programWords,
 	simpleCommands,
@@ -92,8 +92,10 @@ export const githubReasons = {
 		`This \`gh api\` call opens a pull request from ${head}, not from the checked-out branch${current ? ` ${current}` : ""}, so cagr cannot check its review. Check out ${head}, run \`cagr review\` there, and open the pull request with \`gh pr create\` with no --head.`,
 	unknownHead: () =>
 		"cagr cannot tell which branch this `gh api` call opens a pull request from, so it cannot check the review. Check out the branch and open the pull request with `gh pr create`.",
-	order: (moved: string, gate: string) =>
-		`This line runs \`${moved}\` before \`${gate}\`. cagr checks the review before the line runs, against the commit and folder it starts in, so it would check the wrong commit. Run \`${moved}\` first, then run \`${gate}\` as a command of its own. A \`git push\` before it is fine.`,
+	order: (before: string, gate: string) =>
+		`This line runs ${before} before \`${gate}\`. cagr checks the review before the line runs, so before a gate command it allows only \`git add\`, \`git push\`, \`git status\`, \`git fetch\`, \`git diff\`, \`git log\`, and one \`cd <path> &&\` at the start. Run that first, then run \`${gate}\` as a command of its own.`,
+	cd: () =>
+		"This line starts with a `cd` or `pushd` that cagr cannot follow: it has `$`, a backtick, a glob, `-` or `~user`, or is not followed by `&&`. Start the line with `cd <literal path> &&`, or run the gate command from that folder on its own.",
 	manyBranches: () =>
 		"This line opens or readies pull requests for more than one branch, and cagr checks one branch's review at a time. Run each gate command on its own, from its branch.",
 };
@@ -274,103 +276,98 @@ function apiHead(
 	return variable ? fields.get(variable) : undefined;
 }
 
-const movesHead = new Set([
-	"commit",
-	"merge",
-	"rebase",
-	"reset",
-	"switch",
-	"checkout",
-	"am",
-	"cherry-pick",
-	"pull",
-	"revert",
-	"update-ref",
+// What may run before a gate command on the same line: none of these moves HEAD or the folder.
+const allowedBeforeGate = new Set([
+	"add",
+	"push",
+	"status",
+	"fetch",
+	"diff",
+	"log",
 ]);
-const movesCwd = new Set(["cd", "pushd", "popd"]);
+// One literal `cd <path> &&` at the very start. `;` or `||` would run the gate command even when the cd fails.
+const leadingCd =
+	/^\s*(?:cd|pushd)\s+(?:'([^']*)'|"([^"$`\\]*)"|([^\s;&|()<>`$'"\\*?[\]{}]+))\s*&&/;
 
-/** The command, as a message names it, when it can move HEAD or the folder. */
-function mover(words: string[]) {
-	const program = programName(words);
-	if (movesCwd.has(program)) return program;
-	const gh = ghWords(words);
-	if (gh?.[1] === "pr" && gh[2] === "checkout") return "gh pr checkout";
-	if (program !== "git") return null;
+/** The git subcommand, after git's own options. */
+function gitSubcommand(words: string[]) {
 	let index = 1;
 	while ((words[index] ?? "").startsWith("-"))
 		index += gitOptionsWithValue.has(words[index] as string) ? 2 : 1;
-	const subcommand = words[index];
-	const args = words.slice(index + 1);
-	// `git checkout [<tree-ish>] -- <path>` restores files and leaves HEAD alone.
-	if (subcommand === "checkout" && args.includes("--")) return null;
-	if (subcommand === "reset") {
-		const end = args.indexOf("--");
-		const commit = (end === -1 ? args : args.slice(0, end)).find(
-			(word) => !word.startsWith("-"),
-		);
-		return commit === undefined || commit === "HEAD" || commit === "@"
-			? null
-			: "git reset";
-	}
-	if (subcommand === "branch")
-		return words
-			.slice(index + 1)
-			.some((word) => word === "--force" || /^-[a-zA-Z]*f/.test(word))
-			? "git branch -f"
-			: null;
-	return subcommand && movesHead.has(subcommand) ? `git ${subcommand}` : null;
+	return words[index];
 }
 
-/** The folder a `cd` or `pushd` goes to, or null when cagr cannot tell. */
-function cdTarget(words: string[], dir: string | null) {
-	if (programName(words) === "popd" || dir === null) return null;
-	const args = words.slice(1).filter((word) => !/^-[LPe@]+$/.test(word));
-	const target = args[0] === "--" ? args[1] : args[0];
-	if (target === undefined || target === "~") return homedir();
-	if (target === "-" || /[$`*?]/.test(target)) return null;
+/** How a message names a command that may not run before a gate command. */
+function commandName(words: string[], nested: boolean) {
+	if (nested) return "a subshell";
+	const program = programName(words);
+	const gh = ghWords(words);
+	const name =
+		program === "git"
+			? `git ${gitSubcommand(words) ?? ""}`.trim()
+			: gh
+				? gh.slice(0, 3).join(" ")
+				: words[1]?.startsWith("-")
+					? `${program} ${words[1]}`
+					: program;
+	return `\`${name}\``;
+}
+
+const isAllowedBeforeGate = (words: string[]) =>
+	programName(words) === "git" &&
+	allowedBeforeGate.has(gitSubcommand(words) ?? "");
+
+/** Where a literal `cd` target goes, or null for `-` and `~user`. */
+function cdTarget(target: string, cwd: string) {
+	if (target === "~") return homedir();
 	if (target.startsWith("~/")) return join(homedir(), target.slice(2));
-	return resolve(dir, target);
+	if (target === "-" || target.startsWith("~")) return null;
+	return resolve(cwd, target);
 }
 
-const realpath = (path: string) => {
-	try {
-		return realpathSync(path);
-	} catch {
-		return resolve(path);
-	}
-};
+export type GatePlan = { dir: string } | { finding: Finding };
 
 /**
- * A gate command after a command on the same line that moves HEAD or the
- * folder. The gate reads HEAD before the line runs, so it would check the
- * wrong commit. A `cd` to the folder the line starts in is fine.
+ * The folder to run the review gate in for a line with a gate command, or a
+ * finding when something before the gate command could move HEAD or the
+ * folder. The gate reads HEAD before the line runs, so only commands that
+ * leave both alone may come first.
  */
-export function gateOrderFinding(
-	line: string,
-	config: Config,
-	cwd: string,
-): Finding | null {
-	if (!config.review.enabled || config.review.gate.length === 0) return null;
-	const start = realpath(cwd);
-	let moved: string | null = null;
-	let cd: string | null = null;
-	let dir: string | null = cwd;
-	for (const raw of commandsOf(line)) {
-		const words = gateWords(raw, line, config);
-		const away = cd !== null && (dir === null || realpath(dir) !== start);
-		const before = moved ?? (away ? cd : null);
-		if (words && before) {
-			const gate =
-				config.review.gate.find((match) => containsWords(words, match)) ??
-				"gh api";
-			return { id: "review-gate", reason: githubReasons.order(before, gate) };
-		}
-		if (movesCwd.has(programName(raw))) {
-			cd = programName(raw);
-			dir = cdTarget(raw, dir);
-		} else moved ??= mover(raw);
+export function gatePlan(line: string, config: Config, cwd: string): GatePlan {
+	const text = withoutHeredocBodies(line);
+	const deny = (reason: string): GatePlan => ({
+		finding: { id: "review-gate", reason },
+	});
+	let dir = cwd;
+	let rest = text;
+	const first = commandsOf(text)[0];
+	if (first && ["cd", "pushd", "popd"].includes(programName(first))) {
+		const match = text.match(leadingCd);
+		const target = match && (match[1] ?? match[2] ?? match[3] ?? "");
+		const resolved = target ? cdTarget(target, cwd) : null;
+		if (!match || !resolved) return deny(githubReasons.cd());
+		dir = resolved;
+		rest = text.slice(match[0].length);
 	}
-	return null;
+	let blocker: string | null = null;
+	for (const { words: raw, nested } of commandsWithNesting(rest)) {
+		const words = programWords(raw);
+		const gate = gateWords(words, line, config);
+		if (gate) {
+			if (blocker)
+				return deny(
+					githubReasons.order(
+						blocker,
+						config.review.gate.find((match) => containsWords(gate, match)) ??
+							"gh api",
+					),
+				);
+			continue;
+		}
+		if (!blocker && (nested || !isAllowedBeforeGate(words)))
+			blocker = commandName(words, nested);
+	}
+	return { dir };
 }
 
 export type GateTarget = { branch: string | null } | { reason: string };

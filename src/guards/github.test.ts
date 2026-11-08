@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { config } from "../test/config";
 import {
 	agentApprovalFinding,
-	gateOrderFinding,
+	gatePlan,
 	gateTarget,
 	ghWords,
 	isGateCommand,
@@ -291,42 +291,6 @@ test("gateTarget reads the branch or pull request a gate command names", () => {
 	});
 });
 
-test("a gate command after a command that moves HEAD or the folder is denied", () => {
-	const moves: [string, string][] = [
-		[
-			"git commit -am x && git push -u origin HEAD && gh pr create",
-			"git commit",
-		],
-		["git -C . merge main; gh pr ready", "git merge"],
-		["git switch feat/b && gh pr create", "git switch"],
-		["git checkout feat/b && gh pr ready", "git checkout"],
-		["git rebase main && gh pr create", "git rebase"],
-		["git reset --hard HEAD~1 && gh pr create", "git reset"],
-		["git am p.patch && gh pr create", "git am"],
-		["git cherry-pick abc && gh pr create", "git cherry-pick"],
-		["git pull && gh pr create", "git pull"],
-		["cd ../other && gh pr create", "cd"],
-		["pushd ../other && gh pr create", "pushd"],
-		["(cd ../other && /usr/bin/gh pr create)", "cd"],
-		["git commit -m x && gh api repos/o/r/pulls -f head=feat/x", "git commit"],
-	];
-	for (const [line, moved] of moves)
-		expect(gateOrderFinding(line, recommended, "/repo")?.reason).toContain(
-			`runs \`${moved}\` before`,
-		);
-	for (const line of [
-		"git push -u origin HEAD && gh pr create",
-		"gh pr create && git commit -am x",
-		"git status && gh pr ready",
-		"git commit -am x",
-		"echo 'git commit && gh pr create'",
-	])
-		expect(gateOrderFinding(line, recommended, "/repo")).toBeNull();
-	expect(
-		gateOrderFinding("git commit && gh pr create", config(), "/repo"),
-	).toBeNull();
-});
-
 test("REST pull request creation by full URL, on github.com or GHES, is gated", () => {
 	for (const line of [
 		"gh api https://api.github.com/repos/o/r/pulls -f head=feat/b -f base=main",
@@ -359,52 +323,83 @@ test("with --input the head comes only from the input file", () => {
 	).toEqual({ reason: expect.stringContaining("cannot tell which branch") });
 });
 
-test("gh pr checkout, git branch -f and git update-ref count as moving HEAD", () => {
-	const moves: [string, string][] = [
-		["gh pr checkout 42 && gh pr ready", "gh pr checkout"],
-		[
-			"/usr/bin/gh -R o/r pr checkout 42 && gh pr create --fill",
-			"gh pr checkout",
-		],
-		["git branch -f feat/x feat/other && gh pr create", "git branch -f"],
-		["git branch --force feat/x main && gh pr ready", "git branch -f"],
+const plan = (line: string, cfg = recommended) =>
+	gatePlan(line, cfg, "/work/repo");
+const blocked = (line: string) => {
+	const result = plan(line);
+	return "finding" in result ? result.finding.reason : null;
+};
+
+test("before a gate command only git add, push, status, fetch, diff and log may run", () => {
+	for (const line of [
+		"gh pr create",
+		"git add -A && git push -u origin HEAD && gh pr create",
+		"git status && git -C . diff && git log -1 && gh pr ready",
+		"git fetch origin && gh pr create",
+		"gh pr create && git commit -am x && gh pr view",
+		"git commit -am x",
+	])
+		expect(plan(line)).toEqual({ dir: "/work/repo" });
+	const before: [string, string][] = [
+		["git commit -am x && git push && gh pr create", "git commit"],
+		["git -C . merge main; gh pr ready", "git merge"],
+		["git switch feat/b && gh pr create", "git switch"],
+		["git checkout -- src/a.ts && gh pr create", "git checkout"],
+		["git checkout feat/b -- && gh pr create", "git checkout"],
+		["git reset && gh pr create", "git reset"],
+		["git branch -v && gh pr create", "git branch"],
 		["git update-ref refs/heads/feat/x abc && gh pr create", "git update-ref"],
+		["gh pr checkout 42 && gh pr ready", "gh pr checkout"],
+		["gh co 42 && gh pr ready", "gh co 42"],
+		["/usr/bin/gh -R o/r pr view && gh pr create", "gh pr view"],
+		["bash -c 'git switch b' && gh pr create", "bash -c"],
+		["echo hi && gh pr create", "echo"],
+		["(git switch b) && gh pr create", "a subshell"],
+		["git status $(git switch b) && gh pr create", "a subshell"],
+		["git push && `git switch b` && gh pr create", "a subshell"],
+		["git commit -m x && gh api repos/o/r/pulls -f head=feat/x", "git commit"],
 	];
-	for (const [line, moved] of moves)
-		expect(gateOrderFinding(line, recommended, "/repo")?.reason).toContain(
-			`runs \`${moved}\` before`,
+	for (const [line, name] of before) {
+		const reason = blocked(line);
+		expect(reason).toContain(
+			`runs ${name === "a subshell" ? name : `\`${name}\``} before`,
 		);
-	expect(
-		gateOrderFinding("git branch -v && gh pr create", recommended, "/repo"),
-	).toBeNull();
+		expect(reason).toContain("as a command of its own");
+	}
 });
 
-test("a cd to the same folder, or a git command that leaves HEAD alone, does not deny", () => {
-	const order = (line: string) =>
-		gateOrderFinding(line, recommended, "/work/repo");
+test("one literal cd or pushd may start the line, and the gate runs there", () => {
+	const dirs: [string, string][] = [
+		["cd /work/other && gh pr create", "/work/other"],
+		["cd src && gh pr create", "/work/repo/src"],
+		["pushd ../b && git push && gh pr ready", "/work/b"],
+		["cd 'my dir' && gh pr create", "/work/repo/my dir"],
+		['cd "/a b" && gh pr create', "/a b"],
+		["cd ~/repo && gh pr create", `${process.env.HOME}/repo`],
+	];
+	for (const [line, dir] of dirs) expect(plan(line)).toEqual({ dir });
 	for (const line of [
-		"cd /work/repo && gh pr create",
-		"cd . && gh pr create",
-		"cd ../repo && gh pr ready",
 		"cd /tmp && cd /work/repo && gh pr create",
-		"git checkout -- src/a.ts && gh pr create",
-		"git checkout main -- src/a.ts && gh pr create",
-		"git reset && gh pr create",
-		"git reset -- src/a.ts && gh pr create",
-		"git reset -q HEAD && gh pr create",
+		"cd /x && (cd /work/repo) && gh pr create",
+		"cd /x && (cd /work/repo && gh pr create)",
 	])
-		expect(order(line)).toBeNull();
+		expect(blocked(line)).toContain("as a command of its own");
 	for (const line of [
-		"cd /work/other && gh pr create",
 		"cd && gh pr create",
 		"cd - && gh pr create",
 		'cd "$DIR" && gh pr create',
+		"cd $DIR && gh pr create",
+		"cd `pwd` && gh pr create",
+		"cd src* && gh pr create",
+		"cd ~bob && gh pr create",
+		"cd /x; gh pr create",
+		"cd /x || gh pr create",
 		"popd && gh pr create",
-		"git checkout feat/b && gh pr create",
-		"git reset --hard HEAD~1 && gh pr create",
-		"git reset main -- src/a.ts && gh pr create",
+		"(cd /work/other && gh pr create)",
 	])
-		expect(order(line)?.id).toBe("review-gate");
+		expect(blocked(line)).toContain(
+			"Start the line with `cd <literal path> &&`",
+		);
 });
 
 test("with --input or --head given twice, the last one wins, as in gh", () => {

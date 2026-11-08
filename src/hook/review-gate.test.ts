@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtempSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { resolveConfig } from "../config/load";
@@ -159,44 +159,65 @@ test("gh pr ready checks the branch it names, and denies a number or another hea
 	).toEqual({ kind: "allow" });
 });
 
-test("a line that commits, switches or moves before the gate command is denied", async () => {
+test("a line that runs anything but git add, push, status, fetch, diff or log before the gate command is denied", async () => {
 	const { head, config, file, create } = await setup();
 	writeRecord(file, record([round({ head })], [], "feat/x"));
 	for (const command of [
 		`git commit -am fix && git push -u origin HEAD && gh pr create -t x ${body}`,
 		"git switch feat/b && gh pr ready",
-		`cd ../other && gh pr create -t x ${body}`,
+		`git checkout feat/b -- && gh pr create -t x ${body}`,
+		"gh co 42 && gh pr ready",
+		`git push && (cd /tmp) && gh pr create -t x ${body}`,
 	]) {
 		const decision = await handle(create(command), config);
 		expect(decision.kind === "deny" && decision.reason).toContain(
 			"as a command of its own",
 		);
 	}
-	expect(
-		await handle(
-			create(`git push -u origin HEAD && gh pr create -t x ${body}`),
-			config,
-		),
-	).toEqual({ kind: "allow" });
+	for (const command of [
+		`git add -A && git push -u origin HEAD && gh pr create -t x ${body}`,
+		`gh pr create -t x ${body} && git commit -am x`,
+	])
+		expect(await handle(create(command), config)).toEqual({ kind: "allow" });
 });
 
-test("a cd to the repo the hook runs in is allowed, and outside a git repo the order check does not deny", async () => {
+test("a line that starts with a literal cd runs the gate in that folder", async () => {
 	const { repo, head, config, file, create } = await setup();
-	writeRecord(file, record([round({ head })], [], "feat/x"));
-	expect(
-		await handle(
-			create(`cd ${repo.root} && gh pr create -t x ${body}`),
-			config,
-		),
-	).toEqual({ kind: "allow" });
+	mkdirSync(join(repo.root, "src"), { recursive: true });
+	writeFileSync(
+		join(repo.root, "body.md"),
+		"## Testing\nbun test\n## Risk\nlow\n## How to revert\ngit revert\n",
+	);
 	const outside = mkdtempSync(join(tmpdir(), "cagr-nogit-"));
+	const from = (cwd: string, command: string) => ({ ...create(command), cwd });
+	const unreviewed = await handle(
+		from(outside, `cd ${repo.root} && gh pr create -t x ${body}`),
+		config,
+	);
+	expect(unreviewed.kind === "deny" && unreviewed.reason).toContain(
+		"has not been reviewed",
+	);
+	writeRecord(file, record([round({ head })], [], "feat/x"));
+	for (const command of [
+		`cd ${repo.root} && gh pr create -t x ${body}`,
+		`cd ${repo.root} && gh pr create -t x -F body.md`,
+	])
+		expect(await handle(from(outside, command), config)).toEqual({
+			kind: "allow",
+		});
 	expect(
-		await handle(
-			{
-				...create(`git commit -am x && gh pr create -t x ${body}`),
-				cwd: outside,
-			},
-			config,
-		),
+		await handle(create(`cd src && gh pr create -t x ${body}`), config),
 	).toEqual({ kind: "allow" });
+	const order = await handle(
+		from(outside, `git commit -am x && gh pr create -t x ${body}`),
+		config,
+	);
+	expect(order.kind === "deny" && order.reason).toContain(
+		"as a command of its own",
+	);
+	const cd = await handle(
+		create(`cd "$DIR" && gh pr create -t x ${body}`),
+		config,
+	);
+	expect(cd.kind === "deny" && cd.reason).toContain("cd <literal path>");
 });
