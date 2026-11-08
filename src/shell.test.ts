@@ -11,6 +11,18 @@ describe("simpleCommands", () => {
 		]);
 	});
 
+	test("reads >&, <& and &> as redirections, not a background &", () => {
+		expect(
+			simpleCommands("git push 2>&1 | tail -2 && cat <&3 &>log; bun x & ls"),
+		).toEqual([
+			["git", "push", "2>&1"],
+			["tail", "-2"],
+			["cat", "<&3", "&>log"],
+			["bun", "x"],
+			["ls"],
+		]);
+	});
+
 	test("keeps quoted text as one word", () => {
 		expect(
 			simpleCommands(`git commit -m "fix: drop --no-verify; use bun"`),

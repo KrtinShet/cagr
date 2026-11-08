@@ -56,7 +56,13 @@ class Splitter {
 			this.depth++;
 			return index + 1;
 		}
-		if (separators.has(char)) {
+		// `2>&1`, `<&3` and `&>file` are redirections, not a background `&`.
+		const redirect =
+			char === "&" &&
+			(line[index - 1] === ">" ||
+				line[index - 1] === "<" ||
+				line[index + 1] === ">");
+		if (separators.has(char) && !redirect) {
 			this.endCommand();
 			if (char === "(") this.depth++;
 			else if (char === ")") this.depth = Math.max(0, this.depth - 1);
