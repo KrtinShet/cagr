@@ -5,7 +5,7 @@ import { gitHookNames } from "./git-hooks";
 import { readTimings } from "./hook/timings";
 import { loadRules } from "./rules/rules";
 import { run } from "./run";
-import { sync } from "./sync";
+import { isGitRepo, notGitRepo, sync } from "./sync";
 
 export const budgetsMs: Record<string, number> = {
 	"command.before": 50,
@@ -93,18 +93,21 @@ export async function doctor(
 	} catch (error) {
 		wiring.push({ ok: false, text: (error as Error).message });
 	}
-	const hooksPath = await run(
-		["git", "config", "--get", "core.hooksPath"],
-		config.root,
-	);
-	wiring.push(
-		hooksPath.output.trim() === config.git.hooks_path
-			? { ok: true, text: `core.hooksPath is ${config.git.hooks_path}.` }
-			: {
-					ok: false,
-					text: `core.hooksPath is ${hooksPath.output.trim() || "not set"}, not ${config.git.hooks_path}. Run \`guardwright install-git-hooks\`.`,
-				},
-	);
+	const hooksPath = (
+		await run(["git", "config", "--get", "core.hooksPath"], config.root)
+	).output.trim();
+	if (!(await isGitRepo(config.root)))
+		wiring.push({ ok: false, text: notGitRepo });
+	else if (hooksPath === config.git.hooks_path)
+		wiring.push({
+			ok: true,
+			text: `core.hooksPath is ${config.git.hooks_path}.`,
+		});
+	else
+		wiring.push({
+			ok: false,
+			text: `${hooksPath ? `core.hooksPath is ${hooksPath}, not ${config.git.hooks_path}` : "core.hooksPath is not set"}, so git does not run guardwright's hooks. Run \`guardwright install-git-hooks\`.`,
+		});
 	for (const hook of gitHookNames) {
 		const file = join(config.root, config.git.hooks_path, hook);
 		try {

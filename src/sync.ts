@@ -201,14 +201,26 @@ function same(current: string | null, desired: string, json: boolean) {
 	}
 }
 
+export class GitSetupError extends Error {}
+
+export const notGitRepo =
+	"This folder is not a git repo, so git never runs the commit-msg and pre-push hooks. Run `git init`, then `guardwright install-git-hooks`.";
+
+export async function isGitRepo(root: string) {
+	return (await run(["git", "rev-parse", "--git-dir"], root)).ok;
+}
+
 /** Writes the git hook scripts and points core.hooksPath at them. */
 export async function installGitHooks(config: Config) {
 	const result = sync(config, { only: "git" });
+	if (!(await isGitRepo(config.root))) throw new GitSetupError(notGitRepo);
 	const set = await run(
 		["git", "config", "core.hooksPath", config.git.hooks_path],
 		config.root,
 	);
 	if (!set.ok)
-		throw new Error(`Could not set core.hooksPath: ${set.output.trim()}`);
+		throw new GitSetupError(
+			`Could not set core.hooksPath: ${set.output.trim()}`,
+		);
 	return result;
 }

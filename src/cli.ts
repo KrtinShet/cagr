@@ -17,7 +17,7 @@ import { runHook } from "./hook/run-hook";
 import { type AgentEvent, agentEvents } from "./hook/types";
 import { init } from "./init";
 import { loadRules, RuleError, testRules } from "./rules/rules";
-import { installGitHooks, sync } from "./sync";
+import { GitSetupError, installGitHooks, sync } from "./sync";
 import { version } from "./version";
 
 const help = `guardwright ${version}: one config for every coding agent's guardrails.
@@ -253,6 +253,7 @@ async function main(argv: string[]): Promise<number> {
 
 const expected = (error: unknown) =>
 	error instanceof UsageError ||
+	error instanceof GitSetupError ||
 	error instanceof ConfigError ||
 	error instanceof RuleError;
 
