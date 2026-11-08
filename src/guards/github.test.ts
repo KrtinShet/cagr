@@ -324,3 +324,17 @@ test("a gate command after a command that moves HEAD or the folder is denied", (
 		expect(gateOrderFinding(line, recommended)).toBeNull();
 	expect(gateOrderFinding("git commit && gh pr create", config())).toBeNull();
 });
+
+test("REST pull request creation by full URL, on github.com or GHES, is gated", () => {
+	for (const line of [
+		"gh api https://api.github.com/repos/o/r/pulls -f head=feat/b -f base=main",
+		"gh api https://ghe.example.com/api/v3/repos/o/r/pulls -f title=x",
+	])
+		expect(isGateCommand(line, recommended)).toBe(true);
+	expect(
+		isGateCommand(
+			"gh api https://api.github.com/repos/o/r/pulls/3/comments -f body=x",
+			recommended,
+		),
+	).toBe(false);
+});

@@ -49,7 +49,9 @@ const reviewApi =
 const resolveApi = /resolveReviewThread/;
 const createApi = /createPullRequest\b/;
 const readyApi = /markPullRequestReadyForReview\b/;
-const pullsEndpoint = /^\/?repos\/[^/]+\/[^/]+\/pulls\/?(?:\?.*)?$/;
+// gh api also takes a full URL, on github.com or on GitHub Enterprise under /api/v3.
+const pullsEndpoint =
+	/^(?:https?:\/\/[^/]+(?:\/api\/v3)?)?\/?repos\/[^/]+\/[^/]+\/pulls\/?(?:\?.*)?$/i;
 // Short flags may be attached to their value (`-ftitle=x`) or follow gh api's one boolean short flag, -i.
 const fieldFlag = /^(?:-i*[fF]|--(?:raw-)?field\b|--input\b)/;
 const methodFlag = /^(?:-i*X|--method=?)(.*)$/;
