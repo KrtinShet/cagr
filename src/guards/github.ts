@@ -179,8 +179,9 @@ export function isGateCommand(line: string, config: Config) {
 
 const withoutOwner = (branch: string) => branch.replace(/^[^:]+:/, "");
 
-/** The value of `gh pr create --head`, `-H` or `--head=`, if given. */
+/** The value of `gh pr create --head`, `-H` or `--head=`, if given. The last one wins, as in gh. */
 function headFlag(words: string[]) {
+	let head: string | null = null;
 	for (const [index, word] of words.entries()) {
 		const value =
 			word === "--head" || word === "-H"
@@ -190,9 +191,9 @@ function headFlag(words: string[]) {
 					: /^-H./.test(word)
 						? word.slice(2)
 						: undefined;
-		if (value) return withoutOwner(value);
+		if (value) head = withoutOwner(value);
 	}
-	return null;
+	return head;
 }
 
 /** The branch a `gh pr create` names with --head, without an `owner:` prefix. */
@@ -231,7 +232,9 @@ function apiFields(args: string[]) {
 }
 
 const inputIndex = (args: string[]) =>
-	args.findIndex((word) => word === "--input" || word.startsWith("--input="));
+	args.findLastIndex(
+		(word) => word === "--input" || word.startsWith("--input="),
+	);
 
 /** The `head` of the JSON body given with --input, when it is a file cagr can read. */
 function inputHead(

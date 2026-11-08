@@ -406,3 +406,24 @@ test("a cd to the same folder, or a git command that leaves HEAD alone, does not
 	])
 		expect(order(line)?.id).toBe("review-gate");
 });
+
+test("with --input or --head given twice, the last one wins, as in gh", () => {
+	const read = (path: string) =>
+		JSON.stringify({ head: path === "b.json" ? "feat/x" : "feat/other" });
+	expect(
+		gateTarget(
+			"gh api repos/o/r/pulls --input a.json --input b.json",
+			recommended,
+			"feat/x",
+			read,
+		),
+	).toEqual({ branch: null });
+	expect(
+		gateTarget(
+			"gh pr create --head feat/other --head feat/x",
+			recommended,
+			"feat/x",
+			none,
+		),
+	).toEqual({ branch: "feat/x" });
+});
