@@ -29,7 +29,7 @@ const config = () =>
 			},
 		},
 		root,
-		join(root, "guardwright.toml"),
+		join(root, "cagr.toml"),
 	);
 const input = (
 	event: HookInput["event"],
@@ -62,7 +62,7 @@ describe("command.before", () => {
 		expect(decision).toEqual({
 			kind: "deny",
 			reason:
-				"This repo uses bun for JavaScript. Use bun or bunx instead of npm, npx, pnpm, pnpx, or yarn. (guardwright: package-manager)",
+				"This repo uses bun for JavaScript. Use bun or bunx instead of npm, npx, pnpm, pnpx, or yarn. (cagr: package-manager)",
 		});
 	});
 
@@ -74,7 +74,7 @@ describe("command.before", () => {
 			),
 		).toMatchObject({
 			kind: "deny",
-			reason: expect.stringContaining("(guardwright: blocked-command)"),
+			reason: expect.stringContaining("(cagr: blocked-command)"),
 		});
 		expect(
 			await handle(
@@ -83,7 +83,7 @@ describe("command.before", () => {
 			),
 		).toMatchObject({
 			kind: "deny",
-			reason: expect.stringContaining("(guardwright: protected-branch)"),
+			reason: expect.stringContaining("(cagr: protected-branch)"),
 		});
 	});
 

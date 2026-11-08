@@ -80,6 +80,30 @@ export const guards: GuardInfo[] = [
 		config:
 			'[git] commit_message = "conventional" | "off" | { pattern, example }, commit_types',
 	},
+	{
+		id: "review-gate",
+		event: "command.before",
+		catches:
+			"A [review] gate command (by default `gh pr create` and `gh pr ready`, also spelled `gh pr new`, with flags before the subcommand, or through `gh api`) when the branch's commit has no review, or the review left an Important finding open. With --head or `gh pr ready <branch>` it checks that branch. A `gh pr ready` that names a number or URL, or a `gh api` call for another branch or one it cannot tell, is denied with a note to run the command from the pull request's branch. So is a gate command after anything on the same line but `git add`, `git push`, `git status`, `git diff` or `git log`. One literal `cd <path> &&` may start the line, and the gate then runs in that folder. A review that could not run lets the command through and tells the human, unless earlier findings are still open.",
+		fix: 'Run `cagr review`, then fix each finding or answer it with `cagr review answer <id> --wrong|--intentional|--minor "<why>"`.',
+		config: "[review] enabled, gate, max_rounds",
+	},
+	{
+		id: "pr-body",
+		event: "command.before",
+		catches:
+			"`gh pr create` with --fill, no body, or a body that lacks a [review] pr_sections heading.",
+		fix: "Pass --body or --body-file with a `## <section>` heading for each section, filled in.",
+		config: "[review] pr_sections",
+	},
+	{
+		id: "agent-approval",
+		event: "command.before",
+		catches:
+			"`gh pr merge`, `gh pr review --approve`, and the merge, auto-merge and approve calls through `gh api`. With review on, resolving a review thread through `gh api`. A `gh alias set` that names any of these or a gate command, and `gh alias import`.",
+		fix: "Say the pull request is ready and let a person approve and merge it. Reply on a review thread instead of resolving it.",
+		config: "[review] agents_may_merge, enabled",
+	},
 ];
 
 export const guardIds = guards.map((guard) => guard.id);

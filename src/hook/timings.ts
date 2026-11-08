@@ -6,7 +6,7 @@ export type Timing = { event: string; check: string; ms: number; at: string };
 
 // One file per repo, so doctor reports only this repo's hooks.
 const file = (root: string) =>
-	join(tmpdir(), "guardwright", `timings-${Bun.hash(root).toString(36)}.json`);
+	join(tmpdir(), "cagr", `timings-${Bun.hash(root).toString(36)}.json`);
 const keep = 200;
 
 export function readTimings(root: string): Timing[] {
@@ -26,7 +26,7 @@ export function recordTimings(root: string, entries: Omit<Timing, "at">[]) {
 			...readTimings(root),
 			...entries.map((entry) => ({ ...entry, at })),
 		].slice(-keep);
-		mkdirSync(join(tmpdir(), "guardwright"), { recursive: true });
+		mkdirSync(join(tmpdir(), "cagr"), { recursive: true });
 		writeFileSync(file(root), JSON.stringify(all));
 	} catch {}
 }

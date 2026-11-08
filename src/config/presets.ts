@@ -4,7 +4,7 @@ export type RawConfig = Record<string, unknown>;
  * Turns a name in `extends` into a raw config, or returns undefined when it
  * does not handle that name. v0.1 has only built-in presets. Presets from git
  * URLs (v0.2) plug in as another resolver that reads a local cache filled by
- * `guardwright sync`, so hooks never touch the network.
+ * `cagr sync`, so hooks never touch the network.
  */
 export type PresetResolver = (name: string) => RawConfig | undefined;
 
@@ -29,6 +29,25 @@ export const builtinPresets: Record<string, RawConfig> = {
 			commit_message: "conventional",
 			block_force_push: true,
 			block_hook_skips: true,
+		},
+		review: {
+			enabled: true,
+			pr_sections: ["Testing", "Risk", "How to revert"],
+			agents_may_merge: false,
+		},
+		risk: {
+			paths: [
+				{
+					glob: ".github/workflows/**",
+					tier: "high",
+					reason: "CI workflows run with the repo's secrets.",
+				},
+				{
+					glob: "{**/*.md,docs/**}",
+					tier: "low",
+					reason: "Docs and copy.",
+				},
+			],
 		},
 		files: {
 			protected: [

@@ -1,4 +1,5 @@
 import { resolve } from "node:path";
+import { annotations, ci, ciReport, publish } from "./ci";
 import { jsonSchema } from "./config/json-schema";
 import { ConfigError, loadConfig } from "./config/load";
 import { type AgentName, agentNames, type Config } from "./config/schema";
@@ -16,22 +17,31 @@ import { editChecks } from "./hook/handlers";
 import { runHook } from "./hook/run-hook";
 import { type AgentEvent, agentEvents } from "./hook/types";
 import { init } from "./init";
+import { ReviewerError } from "./review/agent";
+import { reviewCommand, riskCommand } from "./review/cli";
+import { ghCli } from "./review/github";
+import { AnswerError } from "./review/report";
+import { ReviewInputError } from "./review/review";
 import { loadRules, RuleError, testRules } from "./rules/rules";
-import { GitSetupError, installGitHooks, sync } from "./sync";
+import { GitSetupError, installGitHooks, keptNotes, sync } from "./sync";
 import { version } from "./version";
 
-const help = `guardwright ${version}: one config for every coding agent's guardrails.
+const help = `cagr ${version}: one config for every coding agent's guardrails.
 
-Usage: guardwright <command>
+Usage: cagr <command>
 
-  init [--dry-run] [--force]   Detect the repo, write guardwright.toml, the agent hooks and the git hooks.
+  init [--dry-run] [--force]   Detect the repo, write cagr.toml, the agent hooks and the git hooks.
   sync [--check]               Rewrite the generated agent and git hook files. --check fails on drift.
   install-git-hooks            Write the git hooks and set core.hooksPath.
-  doctor                       Check the wiring, the tools each check needs, and hook timings.
+  doctor [--github]            Check the wiring, the tools each check needs, and hook timings.
+                               --github also checks branch protection through gh.
+  review [...]                 Review this branch with a reviewer agent. \`cagr review help\` for more.
+  risk [--base <b>] [files]    The risk tier of this branch's change, the approvals it needs, the owners.
+  ci [--base <branch>]         In CI: the same checks the hooks ran, on the branch's changed files.
   check <files...>             Run the edit checks and code rules on files.
   explain <id>                 Explain a guard or a code rule.
   rules test                   Check every rule's examples: invalid ones must fire, valid ones must not.
-  schema                       Print the JSON schema for guardwright.toml.
+  schema                       Print the JSON schema for cagr.toml.
   hook <event> --agent <name>  Called by agent hooks: reads the agent's JSON on stdin.
   git <hook> [args]            Called by git hooks: ${gitHookNames.join(", ")}.
 
@@ -43,7 +53,7 @@ function requireConfig(): Config {
 	const config = loadConfig(process.cwd());
 	if (!config)
 		throw new UsageError(
-			"No guardwright.toml (or [tool.guardwright] in pyproject.toml) here or above. Run `guardwright init`.",
+			"No cagr.toml (or [tool.cagr] in pyproject.toml) here or above. Run `cagr init`.",
 		);
 	return config;
 }
@@ -56,8 +66,42 @@ function flag(args: string[], name: string) {
 	return value ?? "";
 }
 
+/** The options each command takes. `hook`, `git` and `review` check their own. */
+const options: Record<string, string[]> = {
+	init: ["--dry-run", "--force"],
+	sync: ["--check"],
+	"install-git-hooks": [],
+	doctor: ["--github"],
+	risk: ["--base"],
+	ci: ["--base"],
+	check: [],
+	explain: [],
+	rules: [],
+	schema: [],
+};
+
+/** Help for a command, or a UsageError for an option it does not take. */
+export function checkOptions(command: string, args: string[]): string | null {
+	const allowed = options[command];
+	if (!allowed) return null;
+	if (args.includes("--help") || args.includes("-h")) return help;
+	const unknown = args.find(
+		(arg) => arg.startsWith("-") && !allowed.includes(arg),
+	);
+	if (unknown)
+		throw new UsageError(
+			`\`cagr ${command}\` has no option ${unknown}. ${allowed.length > 0 ? `It takes ${allowed.join(", ")}.` : "It takes none."} \`cagr help\` lists every command.`,
+		);
+	return null;
+}
+
 async function main(argv: string[]): Promise<number> {
 	const [command, ...args] = argv;
+	const commandHelp = command ? checkOptions(command, args) : null;
+	if (commandHelp) {
+		console.log(commandHelp);
+		return 0;
+	}
 	switch (command) {
 		case undefined:
 		case "help":
@@ -100,7 +144,7 @@ async function main(argv: string[]): Promise<number> {
 				config = loadConfig(process.cwd());
 			} catch (error) {
 				console.error(
-					`guardwright: the ${hook} hook did not run. ${(error as Error).message}`,
+					`cagr: the ${hook} hook did not run. ${(error as Error).message}`,
 				);
 				return 0;
 			}
@@ -109,8 +153,7 @@ async function main(argv: string[]): Promise<number> {
 				hook === "commit-msg"
 					? commitMsg(args[1] ?? ".git/COMMIT_EDITMSG", config)
 					: await prePush(await Bun.stdin.text(), config, process.cwd());
-			for (const message of result.messages)
-				console.error(`guardwright: ${message}`);
+			for (const message of result.messages) console.error(`cagr: ${message}`);
 			if (!result.ok)
 				console.error(
 					`A human can skip this once with ${config.git.skip_env}=1.`,
@@ -131,7 +174,7 @@ async function main(argv: string[]): Promise<number> {
 				`Found:\n${found.length > 0 ? found.join("\n") : "  no JavaScript or Python projects"}\n  agents: ${result.detection.agents.join(", ")}\n  protected branch: ${result.detection.protectedBranch}\n`,
 			);
 			console.log(
-				`${dryRun ? "Would write" : "Wrote"} guardwright.toml:\n\n${result.config}`,
+				`${dryRun ? "Would write" : "Wrote"} cagr.toml:\n\n${result.config}`,
 			);
 			if (!dryRun)
 				console.log(
@@ -143,13 +186,15 @@ async function main(argv: string[]): Promise<number> {
 		case "sync": {
 			const check = args.includes("--check");
 			const result = sync(requireConfig(), { check });
+			for (const note of keptNotes(result.kept, result.removed))
+				console.log(note);
 			if (check) {
 				if (result.drifted.length === 0) {
 					console.log("Generated files are up to date.");
 					return 0;
 				}
 				console.error(
-					`Out of date: ${result.drifted.join(", ")}. Run \`guardwright sync\`.`,
+					`Out of date: ${result.drifted.join(", ")}. Run \`cagr sync\`.`,
 				);
 				return 1;
 			}
@@ -169,15 +214,15 @@ async function main(argv: string[]): Promise<number> {
 			return 0;
 		}
 		case "doctor": {
-			const result = await doctor(requireConfig());
+			const result = await doctor(requireConfig(), {
+				github: args.includes("--github") ? ghCli : undefined,
+			});
 			console.log(result.report);
 			return result.ok ? 0 : 1;
 		}
 		case "check": {
 			if (args.length === 0)
-				throw new UsageError(
-					"Name the files to check: guardwright check <files...>",
-				);
+				throw new UsageError("Name the files to check: cagr check <files...>");
 			const config = requireConfig();
 			const files = args.map((file) => resolve(file));
 			const problems = files
@@ -229,8 +274,7 @@ async function main(argv: string[]): Promise<number> {
 			return 0;
 		}
 		case "rules": {
-			if (args[0] !== "test")
-				throw new UsageError("Usage: guardwright rules test");
+			if (args[0] !== "test") throw new UsageError("Usage: cagr rules test");
 			const rules = loadRules(requireConfig());
 			const results = await testRules(rules);
 			for (const result of results.filter((entry) => !entry.ok))
@@ -242,6 +286,20 @@ async function main(argv: string[]): Promise<number> {
 				`${rules.length} rules, ${results.length} examples, ${failed} failed.`,
 			);
 			return failed === 0 ? 0 : 1;
+		}
+		case "review":
+			return reviewCommand(requireConfig(), args, process.cwd());
+		case "risk":
+			return riskCommand(requireConfig(), args, process.cwd());
+		case "ci": {
+			const base = flag(args, "--base") ?? undefined;
+			const result = await ci(requireConfig(), { cwd: process.cwd(), base });
+			console.log(ciReport(result));
+			if (process.env.GITHUB_ACTIONS) {
+				for (const line of annotations(result)) console.log(line);
+				publish(result);
+			}
+			return result.ok ? 0 : 1;
 		}
 		case "schema":
 			console.log(JSON.stringify(jsonSchema(), null, "\t"));
@@ -255,7 +313,10 @@ const expected = (error: unknown) =>
 	error instanceof UsageError ||
 	error instanceof GitSetupError ||
 	error instanceof ConfigError ||
-	error instanceof RuleError;
+	error instanceof RuleError ||
+	error instanceof ReviewInputError ||
+	error instanceof ReviewerError ||
+	error instanceof AnswerError;
 
 export function runCli(argv: string[]) {
 	main(argv).then(

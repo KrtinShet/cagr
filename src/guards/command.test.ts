@@ -76,7 +76,7 @@ describe("blocks skipping hooks", () => {
 			config({ git: { block_hook_skips: false } }),
 		);
 		expect(loose("git commit --no-verify -m x")).toBeNull();
-		expect(loose("GUARDWRIGHT_SKIP=1 git push")).toBeNull();
+		expect(loose("CAGR_SKIP=1 git push")).toBeNull();
 	});
 });
 
@@ -232,4 +232,47 @@ test("names the guard that fired", () => {
 test("needsGitContext only for git commands", () => {
 	expect(needsGitContext("cd a && git push")).toBe(true);
 	expect(needsGitContext("npm install && echo git")).toBe(false);
+});
+
+test("git and cd run by full path or as .exe are guarded the same", () => {
+	expect(onFeature("/usr/bin/git push --force origin feat/deals")).toBe(
+		reasons.forcePush,
+	);
+	expect(onFeature("git.exe commit -n -m x")).toBe(reasons.noVerify);
+	expect(onMain("/opt/homebrew/bin/git push origin main")).toBe(
+		reasons.pushMain,
+	);
+	expect(needsGitContext("C:/Git/bin/git.exe push")).toBe(true);
+	const inMain = reasonOn("main", true);
+	expect(inMain("/usr/bin/git commit -m x")).toBe(reasons.mainCheckout);
+	expect(inMain("/usr/bin/cd ../wt && git commit -m x")).toBeNull();
+});
+
+describe("redirections", () => {
+	test("an escaped > is an argument, so a flag after it is still seen", () => {
+		expect(onFeature("git commit -m \\> --no-verify")).toBe(reasons.noVerify);
+		expect(onFeature("git push -f>log")).toBe(reasons.forcePush);
+	});
+
+	test("a blocked entry with a redirection matches it, however it is spaced", () => {
+		const cfg = config({
+			commands: {
+				blocked: [
+					{ match: "> .env", reason: "env" },
+					{ match: "psql < prod.sql", reason: "prod" },
+					{ match: "npm publish", reason: "publish" },
+				],
+			},
+		});
+		const reason = (line: string) =>
+			commandFinding(line, cfg, { branch: "feat/x", inMainCheckout: false })
+				?.reason ?? null;
+		expect(reason("echo A=1 > .env")).toBe("env");
+		expect(reason("echo A=1 >.env")).toBe("env");
+		expect(reason("psql < prod.sql")).toBe("prod");
+		expect(reason("psql -c 'select 1'")).toBeNull();
+		expect(reason("echo A=1 > .env.example")).toBeNull();
+		expect(reason("npm 2>&1 publish")).toBe("publish");
+		expect(reason("npm >/dev/null publish --tag x")).toBe("publish");
+	});
 });

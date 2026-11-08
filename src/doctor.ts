@@ -1,8 +1,11 @@
 import { accessSync, constants, existsSync } from "node:fs";
 import { join } from "node:path";
 import type { Config } from "./config/schema";
+import { githubLines } from "./doctor-github";
 import { gitHookNames } from "./git-hooks";
 import { readTimings } from "./hook/timings";
+import { pickAgent } from "./review/agent";
+import type { Gh } from "./review/github";
 import { loadRules } from "./rules/rules";
 import { run } from "./run";
 import { isGitRepo, notGitRepo, sync } from "./sync";
@@ -66,6 +69,7 @@ const available = (program: { name: string; dirs: string[] }, root: string) =>
 
 export async function doctor(
 	config: Config,
+	options: { github?: Gh } = {},
 ): Promise<{ ok: boolean; report: string }> {
 	const sections: [string, Line[]][] = [];
 	const configLines: Line[] = [{ ok: true, text: `Config: ${config.source}` }];
@@ -88,7 +92,7 @@ export async function doctor(
 		for (const file of result.drifted)
 			wiring.push({
 				ok: false,
-				text: `${file} is missing or out of date. Run \`guardwright sync\`.`,
+				text: `${file} is missing or out of date. Run \`cagr sync\`.`,
 			});
 	} catch (error) {
 		wiring.push({ ok: false, text: (error as Error).message });
@@ -106,7 +110,7 @@ export async function doctor(
 	else
 		wiring.push({
 			ok: false,
-			text: `${hooksPath ? `core.hooksPath is ${hooksPath}, not ${config.git.hooks_path}` : "core.hooksPath is not set"}, so git does not run guardwright's hooks. Run \`guardwright install-git-hooks\`.`,
+			text: `${hooksPath ? `core.hooksPath is ${hooksPath}, not ${config.git.hooks_path}` : "core.hooksPath is not set"}, so git does not run cagr's hooks. Run \`cagr install-git-hooks\`.`,
 		});
 	for (const hook of gitHookNames) {
 		const file = join(config.root, config.git.hooks_path, hook);
@@ -116,14 +120,14 @@ export async function doctor(
 			if (existsSync(file))
 				wiring.push({
 					ok: false,
-					text: `${config.git.hooks_path}/${hook} is not executable. Run \`guardwright install-git-hooks\`.`,
+					text: `${config.git.hooks_path}/${hook} is not executable. Run \`cagr install-git-hooks\`.`,
 				});
 		}
 	}
 	sections.push(["Wiring", wiring]);
 
 	const tools: Line[] = [];
-	const program = config.agents.command.split(" ")[0] ?? "guardwright";
+	const program = config.agents.command.split(" ")[0] ?? "cagr";
 	if (!program.includes("{") && !program.includes("$"))
 		tools.push(
 			Bun.which(program)
@@ -156,6 +160,34 @@ export async function doctor(
 		);
 	}
 	sections.push(["Tools", tools]);
+
+	if (config.review.enabled) {
+		const review: Line[] = [];
+		try {
+			const agent = pickAgent(config.review.reviewer);
+			review.push({ ok: true, text: `Reviewer: ${agent.name}.` });
+		} catch (error) {
+			review.push({ ok: false, text: `${(error as Error).message}.` });
+		}
+		review.push(
+			existsSync(join(config.root, config.review.guide))
+				? {
+						ok: true,
+						text: `${config.review.guide} is read into every review.`,
+					}
+				: {
+						ok: true,
+						text: `No ${config.review.guide}. Optional: write what reviewers should check in this repo, and what to skip.`,
+					},
+		);
+		review.push({
+			ok: true,
+			text: `Gate: ${config.review.gate.map((match) => `\`${match}\``).join(", ") || "none"}. Effort ${config.review.effort}, up to ${config.review.max_rounds} rounds.`,
+		});
+		sections.push(["Review", review]);
+	}
+	if (options.github)
+		sections.push(["GitHub", await githubLines(config, options.github)]);
 
 	const timing: Line[] = [];
 	const recorded = readTimings(config.root);

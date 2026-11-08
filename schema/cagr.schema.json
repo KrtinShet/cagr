@@ -1,6 +1,6 @@
 {
 	"$schema": "http://json-schema.org/draft-07/schema#",
-	"title": "guardwright.toml",
+	"title": "cagr.toml",
 	"type": "object",
 	"additionalProperties": false,
 	"properties": {
@@ -28,11 +28,11 @@
 							"codex"
 						]
 					},
-					"description": "Agents whose hook files `guardwright sync` writes."
+					"description": "Agents whose hook files `cagr sync` writes."
 				},
 				"command": {
 					"type": "string",
-					"description": "How the generated hook files call guardwright. \"{root}\" becomes the repo root for each agent."
+					"description": "How the generated hook files call cagr. \"{root}\" becomes the repo root for each agent."
 				}
 			},
 			"description": "Agent adapters."
@@ -292,6 +292,159 @@
 				}
 			},
 			"description": "Custom code rules."
+		},
+		"review": {
+			"type": "object",
+			"additionalProperties": false,
+			"properties": {
+				"enabled": {
+					"type": "boolean",
+					"description": "Gate pull requests on a review by a reviewer agent in a fresh context."
+				},
+				"gate": {
+					"type": "array",
+					"items": {
+						"type": "string"
+					},
+					"description": "Commands that need a passing review of the current commit, matched like [commands] blocked."
+				},
+				"reviewer": {
+					"type": "string",
+					"minLength": 1,
+					"description": "\"auto\", \"claude\", \"codex\", or a command. A command gets {prompt_file} and {schema_file} and prints the findings as JSON."
+				},
+				"model": {
+					"type": "string",
+					"description": "Model for the reviewer agent, if not its default."
+				},
+				"guide": {
+					"type": "string",
+					"description": "The repo's review instructions, read into every review. Missing is fine."
+				},
+				"effort": {
+					"type": "string",
+					"enum": [
+						"quick",
+						"standard",
+						"deep"
+					],
+					"description": "quick: one finder. standard: a bug finder, a security finder and a verifier. deep: three finders and three voting verifiers. High-risk changes always get deep."
+				},
+				"security": {
+					"type": "boolean",
+					"description": "Run a security finder in standard and deep reviews."
+				},
+				"max_rounds": {
+					"type": "integer",
+					"minimum": 1,
+					"description": "After this many rounds the reviewer asks the author to step back and rethink the approach."
+				},
+				"timeout_seconds": {
+					"type": "integer",
+					"minimum": 30,
+					"description": "How long one reviewer agent may run."
+				},
+				"skip": {
+					"type": "array",
+					"items": {
+						"type": "string"
+					},
+					"description": "Globs the reviewer does not review."
+				},
+				"pr_sections": {
+					"type": "array",
+					"items": {
+						"type": "string"
+					},
+					"description": "Headings a pull request body must have. `gh pr create` without them is denied."
+				},
+				"agents_may_merge": {
+					"type": "boolean",
+					"description": "Let agents run `gh pr merge` and `gh pr review --approve`. Off: approval stays with a person."
+				}
+			},
+			"description": "The review gate and the reviewer agent."
+		},
+		"risk": {
+			"type": "object",
+			"additionalProperties": false,
+			"properties": {
+				"default": {
+					"type": "string",
+					"enum": [
+						"low",
+						"medium",
+						"high"
+					],
+					"description": "Tier of a file no [[risk.paths]] entry matches."
+				},
+				"paths": {
+					"type": "array",
+					"items": {
+						"type": "object",
+						"additionalProperties": false,
+						"properties": {
+							"glob": {
+								"type": "string",
+								"minLength": 1,
+								"description": "Files this entry covers."
+							},
+							"tier": {
+								"type": "string",
+								"enum": [
+									"low",
+									"medium",
+									"high"
+								],
+								"description": "Their risk tier."
+							},
+							"owners": {
+								"type": "array",
+								"items": {
+									"type": "string"
+								},
+								"description": "Code owners for these files, written to CODEOWNERS (@user or @org/team)."
+							},
+							"reason": {
+								"type": "string",
+								"description": "Why these files carry this tier."
+							}
+						},
+						"required": [
+							"glob",
+							"tier"
+						]
+					},
+					"description": "A file takes the highest tier of the entries it matches. The change takes the highest tier of its files."
+				}
+			},
+			"description": "Risk tiers set by the change, not the author. Low needs no approval, medium one, high two."
+		},
+		"ci": {
+			"type": "object",
+			"additionalProperties": false,
+			"properties": {
+				"github": {
+					"type": "boolean",
+					"description": "`cagr sync` writes the GitHub workflow, the pull request template and CODEOWNERS."
+				},
+				"review": {
+					"type": "boolean",
+					"description": "The workflow reviews each pull request with `cagr review --ci`. Needs the ANTHROPIC_API_KEY secret."
+				},
+				"nightly": {
+					"type": "array",
+					"items": {
+						"type": "string"
+					},
+					"description": "Globs the workflow reviews every night with `cagr review --scan`, opening an issue for findings."
+				},
+				"install": {
+					"type": "string",
+					"description": "The shell command the workflow uses to install cagr."
+				}
+			},
+			"description": "CI."
 		},
 		"brief": {
 			"type": "array",

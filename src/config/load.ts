@@ -11,15 +11,17 @@ import {
 	configSchema,
 	defaultCommitTypes,
 	defaultExtensions,
+	type Effort,
 	type NameRule,
 	type PackageManager,
+	type RiskTier,
 } from "./schema";
 
 export class ConfigError extends Error {}
 
-export const configFileName = "guardwright.toml";
+export const configFileName = "cagr.toml";
 
-/** The nearest guardwright.toml, or pyproject.toml with [tool.guardwright], from `start` up. */
+/** The nearest cagr.toml, or pyproject.toml with [tool.cagr], from `start` up. */
 export function findConfig(
 	start: string,
 ): { file: string; raw: RawConfig } | null {
@@ -30,8 +32,7 @@ export function findConfig(
 		const pyproject = join(dir, "pyproject.toml");
 		if (existsSync(pyproject)) {
 			const tool = (parseToml(pyproject).tool ?? {}) as RawConfig;
-			if (tool.guardwright)
-				return { file: pyproject, raw: tool.guardwright as RawConfig };
+			if (tool.cagr) return { file: pyproject, raw: tool.cagr as RawConfig };
 		}
 		const parent = dirname(dir);
 		if (parent === dir) return null;
@@ -127,6 +128,9 @@ function applyDefaults(raw: RawConfig, root: string, source: string): Config {
 	const files = (raw.files ?? {}) as RawConfig;
 	const commands = (raw.commands ?? {}) as RawConfig;
 	const rules = (raw.rules ?? {}) as RawConfig;
+	const review = (raw.review ?? {}) as RawConfig;
+	const risk = (raw.risk ?? {}) as RawConfig;
+	const ci = (raw.ci ?? {}) as RawConfig;
 	const commitTypes =
 		(git.commit_types as string[] | undefined) ?? defaultCommitTypes;
 	const prePush = git.pre_push;
@@ -139,7 +143,7 @@ function applyDefaults(raw: RawConfig, root: string, source: string): Config {
 				"claude",
 				"codex",
 			],
-			command: (agents.command as string | undefined) ?? "guardwright",
+			command: (agents.command as string | undefined) ?? "cagr",
 		},
 		git: {
 			protected_branch: (git.protected_branch as string | undefined) || null,
@@ -152,7 +156,7 @@ function applyDefaults(raw: RawConfig, root: string, source: string): Config {
 					: ((prePush as string[] | undefined) ?? []),
 			block_force_push: (git.block_force_push as boolean | undefined) ?? false,
 			block_hook_skips: (git.block_hook_skips as boolean | undefined) ?? false,
-			skip_env: (git.skip_env as string | undefined) ?? "GUARDWRIGHT_SKIP",
+			skip_env: (git.skip_env as string | undefined) ?? "CAGR_SKIP",
 			hooks_path: (git.hooks_path as string | undefined) ?? ".githooks",
 			worktree_only: (git.worktree_only as boolean | undefined) ?? false,
 			worktree_dir: (git.worktree_dir as string | undefined) ?? ".worktrees",
@@ -190,7 +194,42 @@ function applyDefaults(raw: RawConfig, root: string, source: string): Config {
 			),
 		},
 		rules: {
-			dirs: (rules.dirs as string[] | undefined) ?? [".guardwright/rules"],
+			dirs: (rules.dirs as string[] | undefined) ?? [".cagr/rules"],
+		},
+		review: {
+			enabled: (review.enabled as boolean | undefined) ?? false,
+			gate: (review.gate as string[] | undefined) ?? [
+				"gh pr create",
+				"gh pr ready",
+			],
+			reviewer: (review.reviewer as string | undefined) ?? "auto",
+			model: (review.model as string | undefined) ?? null,
+			guide: (review.guide as string | undefined) ?? "REVIEW.md",
+			effort: (review.effort as Effort | undefined) ?? "standard",
+			security: (review.security as boolean | undefined) ?? true,
+			max_rounds: (review.max_rounds as number | undefined) ?? 3,
+			timeout_seconds: (review.timeout_seconds as number | undefined) ?? 600,
+			skip: (review.skip as string[] | undefined) ?? [],
+			pr_sections: (review.pr_sections as string[] | undefined) ?? [],
+			agents_may_merge:
+				(review.agents_may_merge as boolean | undefined) ?? true,
+		},
+		risk: {
+			default: (risk.default as RiskTier | undefined) ?? "medium",
+			paths: ((risk.paths as RawConfig[] | undefined) ?? []).map((entry) => ({
+				glob: entry.glob as string,
+				tier: entry.tier as RiskTier,
+				owners: (entry.owners as string[] | undefined) ?? [],
+				reason: (entry.reason as string | undefined) ?? null,
+			})),
+		},
+		ci: {
+			github: (ci.github as boolean | undefined) ?? false,
+			review: (ci.review as boolean | undefined) ?? false,
+			nightly: (ci.nightly as string[] | undefined) ?? [],
+			install:
+				(ci.install as string | undefined) ??
+				"curl -fsSL https://github.com/krtinshet/cagr/releases/latest/download/install.sh | sh",
 		},
 		brief: (raw.brief as string[] | undefined) ?? [],
 	};

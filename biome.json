@@ -1,7 +1,9 @@
 {
 	"$schema": "https://biomejs.dev/schemas/2.6.6/schema.json",
 	"vcs": { "enabled": true, "clientKind": "git", "useIgnoreFile": true },
-	"files": { "includes": ["**", "!dist", "!schema/guardwright.schema.json"] },
+	"files": {
+		"includes": ["**", "!dist", "!schema/cagr.schema.json", "!docs/**/*.md"]
+	},
 	"linter": {
 		"rules": {
 			"preset": "recommended",

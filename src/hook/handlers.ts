@@ -1,18 +1,29 @@
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { brief } from "../brief";
 import type { Config } from "../config/schema";
 import { gitContext } from "../git";
 import { commandFinding, needsGitContext } from "../guards/command";
 import { editFinding } from "../guards/edit";
 import { render } from "../guards/finding";
+import {
+	agentApprovalFinding,
+	gatePlan,
+	gateTarget,
+	githubReasons,
+	isGateCommand,
+	prBodyFinding,
+} from "../guards/github";
 import { insideRoot } from "../paths";
+import { gateResult } from "../review/gate";
+import { readRecord, recordPath } from "../review/store";
 import {
 	findInFiles,
 	formatFinding,
 	loadRules,
 	RuleError,
 } from "../rules/rules";
-import { runShell } from "../run";
+import { run, runShell } from "../run";
 import { type CheckResult, needsCheck, stopDecision } from "../stop-decision";
 import {
 	clearTurnState,
@@ -61,9 +72,92 @@ async function commandBefore(
 				git.toplevel === git.mainCheckout,
 		};
 	}
-	const finding = commandFinding(input.command, config, context);
-	return finding
-		? { kind: "deny", reason: render(finding) }
+	const early =
+		commandFinding(input.command, config, context) ??
+		agentApprovalFinding(input.command, config);
+	if (early) return { kind: "deny", reason: render(early) };
+	if (!isGateCommand(input.command, config)) return { kind: "allow" };
+	const plan = gatePlan(input.command, config, input.cwd);
+	if ("finding" in plan) return { kind: "deny", reason: render(plan.finding) };
+	const body = prBodyFinding(input.command, config, (path) =>
+		readText(resolve(plan.dir, path)),
+	);
+	if (body) return { kind: "deny", reason: render(body) };
+	return reviewGate(input.command, plan.dir, config, input.cwd);
+}
+
+function readText(path: string) {
+	try {
+		return readFileSync(path, "utf8");
+	} catch {
+		return null;
+	}
+}
+
+/** Reads the branch's review record: two quick git calls (three when the command names a branch) and one file, to stay inside the command budget. */
+async function reviewGate(
+	command: string,
+	cwd: string,
+	config: Config,
+	hookCwd: string,
+): Promise<Decision> {
+	const git = await gitContext(cwd);
+	if (!git.commonDir) {
+		// A cd out of a repo must not turn the gate off: `cd /tmp && gh pr create -R o/r --head b`.
+		if (cwd === hookCwd || !(await gitContext(hookCwd)).commonDir)
+			return { kind: "allow" };
+		return {
+			kind: "deny",
+			reason: render({
+				id: "review-gate",
+				reason: githubReasons.cdOutsideRepo(),
+			}),
+		};
+	}
+	const target = gateTarget(command, config, git.branch, (path) =>
+		readText(resolve(cwd, path)),
+	);
+	if ("reason" in target)
+		return {
+			kind: "deny",
+			reason: render({ id: "review-gate", reason: target.reason }),
+		};
+	const named = target.branch;
+	const branch = named ?? git.branch;
+	if (!branch)
+		return {
+			kind: "deny",
+			reason: render({
+				id: "review-gate",
+				reason:
+					"HEAD is detached, so cagr cannot tell which branch this pull request is for. Check out the branch (`git switch <branch>`), or name it with --head <branch>.",
+			}),
+		};
+	let head = git.head;
+	if (named && named !== git.branch) {
+		const result = await run(
+			["git", "rev-parse", "--verify", "-q", `refs/heads/${named}^{commit}`],
+			cwd,
+		);
+		head = result.ok ? result.stdout.trim() : null;
+		if (!head)
+			return {
+				kind: "deny",
+				reason: render({
+					id: "review-gate",
+					reason: `There is no local branch ${named}, so cagr cannot check its review. Check it out, run \`cagr review\` there, and open the pull request from it.`,
+				}),
+			};
+	}
+	const record = readRecord(recordPath(git.commonDir, branch));
+	const result = gateResult(record, head, config);
+	if (result.kind === "deny")
+		return {
+			kind: "deny",
+			reason: render({ id: "review-gate", reason: result.reason }),
+		};
+	return result.notice
+		? { kind: "allow", notice: result.notice }
 		: { kind: "allow" };
 }
 
@@ -204,7 +298,7 @@ async function turnEnd(input: HookInput, config: Config): Promise<Decision> {
 	if (decision.action === "give-up")
 		return {
 			kind: "allow",
-			notice: `guardwright: ${decision.message} The agent was let go so it does not loop. Run the checks yourself before you merge.`,
+			notice: `cagr: ${decision.message} The agent was let go so it does not loop. Run the checks yourself before you merge.`,
 		};
 	return { kind: "allow" };
 }

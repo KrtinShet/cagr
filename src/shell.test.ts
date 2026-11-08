@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { programWords, simpleCommands } from "./shell";
+import { commandsWithNesting, programWords, simpleCommands } from "./shell";
 
 describe("simpleCommands", () => {
 	test("splits on control operators", () => {
@@ -9,6 +9,25 @@ describe("simpleCommands", () => {
 			["git", "status"],
 			["cat"],
 		]);
+	});
+
+	test("drops redirections and their targets, and reads >& as one, not a background &", () => {
+		expect(
+			simpleCommands(
+				"git push 2>&1 | tail -2 && cat <&3 &>log; bun x & ls > out 2>> err",
+			),
+		).toEqual([["git", "push"], ["tail", "-2"], ["cat"], ["bun", "x"], ["ls"]]);
+		expect(simpleCommands(">out echo hi >& log")).toEqual([["echo", "hi"]]);
+		expect(simpleCommands(`echo ">x" '2>&1' \\> 2\\>x`)).toEqual([
+			["echo", ">x", "2>&1", ">", "2>x"],
+		]);
+		expect(
+			simpleCommands(`gh pr ready 2>"$LOG" && gh pr create>/dev/null`),
+		).toEqual([
+			["gh", "pr", "ready"],
+			["gh", "pr", "create"],
+		]);
+		expect(simpleCommands("cat <<EOF")).toEqual([["cat"]]);
 	});
 
 	test("keeps quoted text as one word", () => {
@@ -41,6 +60,23 @@ describe("programWords", () => {
 		expect(programWords(["CI=1", "sudo", "env", "A=b", "npm", "i"])).toEqual([
 			"npm",
 			"i",
+		]);
+	});
+});
+
+describe("commandsWithNesting", () => {
+	test("marks commands inside ( ), $( ) and backticks", () => {
+		expect(
+			commandsWithNesting(
+				"git add . && (cd /x) && echo $(git switch b) `pwd` && gh pr create",
+			).map(({ words, nested }) => [words[0], nested]),
+		).toEqual([
+			["git", false],
+			["cd", true],
+			["echo", false],
+			["git", true],
+			["pwd", true],
+			["gh", false],
 		]);
 	});
 });

@@ -1,9 +1,15 @@
 import type { Config } from "../config/schema";
-import { programWords, simpleCommands, withoutHeredocBodies } from "../shell";
+import {
+	commandsWithRedirections,
+	programName,
+	programWords,
+	simpleCommands,
+	withoutHeredocBodies,
+} from "../shell";
 import type { Finding } from "./finding";
 import { packageManagerFinding } from "./package-manager";
 
-const gitOptionsWithValue = new Set([
+export const gitOptionsWithValue = new Set([
 	"-C",
 	"-c",
 	"--git-dir",
@@ -62,7 +68,7 @@ export const commandReasons = {
 /** Whether the command needs the current branch or checkout to be judged. */
 export function needsGitContext(line: string) {
 	return simpleCommands(withoutHeredocBodies(line)).some(
-		(words) => programWords(words)[0] === "git",
+		(words) => programName(programWords(words)) === "git",
 	);
 }
 
@@ -71,11 +77,23 @@ export function commandFinding(
 	config: Config,
 	context: CommandContext,
 ): Finding | null {
-	const commands = simpleCommands(withoutHeredocBodies(line));
+	const commands = commandsWithRedirections(withoutHeredocBodies(line));
 	// A `cd` or `git -C` points git elsewhere, and the guard cannot tell where.
 	const staysInMainCheckout =
-		context.inMainCheckout && !commands.some(([program]) => program === "cd");
-	for (const words of commands) {
+		context.inMainCheckout &&
+		!commands.some(({ words }) => programName(programWords(words)) === "cd");
+	for (const { words, raw } of commands) {
+		// An entry that names a redirection (`match = "> .env"`) matches with them kept.
+		// Any other entry matches without them, so `npm 2>&1 publish` is still `npm publish`.
+		const blocked = config.commands.blocked.find((entry) => {
+			const withRedirections = hasRedirection(entry.match);
+			return containsWords(
+				withRedirections ? raw : words,
+				entry.match,
+				withRedirections,
+			);
+		});
+		if (blocked) return { id: "blocked-command", reason: blocked.reason };
 		const finding = simpleCommandFinding(words, config, {
 			...context,
 			inMainCheckout: staysInMainCheckout,
@@ -96,14 +114,10 @@ function simpleCommandFinding(
 		words.some((word) => word.startsWith(`${git.skip_env}=`))
 	)
 		return { id: "hook-skip", reason: commandReasons.skipHooks(config) };
-	const blocked = config.commands.blocked.find((entry) =>
-		containsWords(words, entry.match),
-	);
-	if (blocked) return { id: "blocked-command", reason: blocked.reason };
 	const program = programWords(words);
 	const manager = packageManagerFinding(program, config);
 	if (manager) return manager;
-	if (program[0] !== "git") return null;
+	if (programName(program) !== "git") return null;
 	const args = program.slice(1);
 	if (context.inMainCheckout && changesMainCheckout(args))
 		return { id: "worktree-only", reason: commandReasons.mainCheckout(config) };
@@ -189,9 +203,19 @@ function pushTarget(refspec: string, branch: string | null): string | null {
 	return name === "HEAD" || name === "@" ? branch : name;
 }
 
+function hasRedirection(match: string) {
+	const command = commandsWithRedirections(match)[0];
+	return command !== undefined && command.raw.length !== command.words.length;
+}
+
 /** True when `match`'s words appear in order, next to each other, in `words`. */
-export function containsWords(words: string[], match: string) {
-	const needle = simpleCommands(match)[0] ?? [];
+export function containsWords(
+	words: string[],
+	match: string,
+	withRedirections = false,
+) {
+	const command = commandsWithRedirections(match)[0];
+	const needle = (withRedirections ? command?.raw : command?.words) ?? [];
 	if (needle.length === 0) return false;
 	for (let start = 0; start + needle.length <= words.length; start++)
 		if (needle.every((word, offset) => words[start + offset] === word))

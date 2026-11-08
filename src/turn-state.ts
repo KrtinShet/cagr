@@ -8,7 +8,7 @@ const empty: TurnState = { files: [], failedStops: 0 };
 
 export function stateFile(
 	sessionId: string,
-	directory = join(tmpdir(), "guardwright", "sessions"),
+	directory = join(tmpdir(), "cagr", "sessions"),
 ) {
 	return join(directory, `${sessionId.replace(/[^\w-]/g, "_")}.json`);
 }

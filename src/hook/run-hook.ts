@@ -8,7 +8,7 @@ import type { AgentEvent, Decision } from "./types";
 /**
  * One agent hook call: the agent's JSON in, its output text back. A broken
  * config or an internal error lets the call through and tells the human, so
- * guardwright never stops an agent for its own failure.
+ * cagr never stops an agent for its own failure.
  */
 export async function runHook(
 	agent: AgentName,
@@ -33,7 +33,7 @@ export async function runHook(
 				: `${(error as Error).stack ?? error}`;
 		decision = {
 			kind: "allow",
-			notice: `guardwright is off for this call because of an error. ${message}`,
+			notice: `cagr is off for this call because of an error. ${message}`,
 		};
 	}
 	if (root)

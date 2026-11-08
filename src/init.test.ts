@@ -1,9 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { resolveConfig } from "./config/load";
-import { configToml, detect, formatGenerated } from "./init";
+import { configToml, detect, formatGenerated, init } from "./init";
 
 const none = () => null;
 
@@ -116,7 +116,7 @@ test("the written config loads and keeps what was found", async () => {
 	const loaded = resolveConfig(
 		Bun.TOML.parse(configToml(detection)) as never,
 		root,
-		"guardwright.toml",
+		"cagr.toml",
 	);
 	expect(loaded.git.protected_branch).toBe("main");
 	expect(loaded.git.pre_push).toEqual(["bun run verify"]);
@@ -141,7 +141,7 @@ test("the generated JSON files go through the repo's on_edit commands", async ()
 	const config = resolveConfig(
 		{ stack: [{ language: "typescript", on_edit: ["touch {files}.seen"] }] },
 		root,
-		join(root, "guardwright.toml"),
+		join(root, "cagr.toml"),
 	);
 	await formatGenerated(config, [
 		".claude/settings.json",
@@ -153,4 +153,16 @@ test("the generated JSON files go through the repo's on_edit commands", async ()
 	expect(await Bun.file(join(root, ".githooks/pre-push.seen")).exists()).toBe(
 		false,
 	);
+});
+
+test("init writes a starter REVIEW.md and keeps one that exists", async () => {
+	const fresh = await project({ "package.json": "{}" });
+	const result = await init(fresh);
+	expect(result.written).toContain("REVIEW.md");
+	expect(await readFile(join(fresh, "REVIEW.md"), "utf8")).toContain(
+		"## Always check",
+	);
+	const kept = await project({ "package.json": "{}", "REVIEW.md": "mine\n" });
+	expect((await init(kept)).written).not.toContain("REVIEW.md");
+	expect(await readFile(join(kept, "REVIEW.md"), "utf8")).toBe("mine\n");
 });

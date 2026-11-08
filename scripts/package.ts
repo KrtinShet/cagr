@@ -1,5 +1,5 @@
 // Lays out what each channel publishes, from the binaries in dist/. Nothing is published.
-//   dist/npm/      the `guardwright` wrapper and one @guardwright/cli-* package per platform
+//   dist/npm/      the `cagr` wrapper and one cagr-* package per platform
 //   dist/wheels/   one py3-none-<platform> wheel per platform, binary in .data/scripts
 //   dist/release/  the bare binaries, SHA256SUMS and install.sh, for a GitHub release
 import {
@@ -20,11 +20,18 @@ const dist = join(root, "dist");
 const description =
 	"One config for every coding agent's guardrails: commands, files, git, and code rules.";
 const license = "MIT";
+const licenseFile = join(root, "LICENSE");
+const meta = {
+	homepage: "https://krtinshet.github.io/cagr/",
+	repository: { type: "git", url: "git+https://github.com/krtinshet/cagr.git" },
+	bugs: { url: "https://github.com/krtinshet/cagr/issues" },
+	author: "Krtin Shet",
+};
 
 const npmOs = (target: Target) =>
 	target.platform === "win32" ? "windows" : target.platform;
 const npmName = (target: Target) =>
-	`@guardwright/cli-${npmOs(target)}-${target.arch}${target.libc ? `-${target.libc}` : ""}`;
+	`cagr-${npmOs(target)}-${target.arch}${target.libc ? `-${target.libc}` : ""}`;
 const wheelTag: Record<string, string> = {
 	"darwin-arm64-": "macosx_11_0_arm64",
 	"darwin-x64-": "macosx_10_15_x86_64",
@@ -46,20 +53,30 @@ for (const dir of ["npm", "wheels", "release"])
 const json = (value: unknown) => `${JSON.stringify(value, null, 2)}\n`;
 
 // npm
-const wrapper = join(dist, "npm", "guardwright");
+const wrapper = join(dist, "npm", "cagr");
 mkdirSync(join(wrapper, "bin"), { recursive: true });
-copyFileSync(
-	join(root, "packaging/npm/guardwright.js"),
-	join(wrapper, "bin/guardwright.js"),
-);
+copyFileSync(join(root, "packaging/npm/cagr.js"), join(wrapper, "bin/cagr.js"));
+copyFileSync(licenseFile, join(wrapper, "LICENSE"));
+copyFileSync(join(root, "README.md"), join(wrapper, "README.md"));
 writeFileSync(
 	join(wrapper, "package.json"),
 	json({
-		name: "guardwright",
+		name: "cagr",
 		version,
 		description,
 		license,
-		bin: { guardwright: "bin/guardwright.js" },
+		...meta,
+		keywords: [
+			"coding-agents",
+			"claude-code",
+			"codex",
+			"guardrails",
+			"hooks",
+			"ast-grep",
+			"code-review",
+			"git-hooks",
+		],
+		bin: { cagr: "bin/cagr.js" },
 		files: ["bin"],
 		optionalDependencies: Object.fromEntries(
 			built.map((target) => [npmName(target), version]),
@@ -67,18 +84,20 @@ writeFileSync(
 	}),
 );
 for (const target of built) {
-	const dir = join(dist, "npm", npmName(target).replace("@guardwright/", ""));
-	const exe = target.platform === "win32" ? "guardwright.exe" : "guardwright";
+	const dir = join(dist, "npm", npmName(target));
+	const exe = target.platform === "win32" ? "cagr.exe" : "cagr";
 	mkdirSync(dir, { recursive: true });
 	copyFileSync(join(dist, binaryName(target)), join(dir, exe));
 	chmodSync(join(dir, exe), 0o755);
+	copyFileSync(licenseFile, join(dir, "LICENSE"));
 	writeFileSync(
 		join(dir, "package.json"),
 		json({
 			name: npmName(target),
 			version,
-			description: `The guardwright binary for ${npmOs(target)} ${target.arch}${target.libc ? ` ${target.libc}` : ""}.`,
+			description: `The cagr binary for ${npmOs(target)} ${target.arch}${target.libc ? ` ${target.libc}` : ""}.`,
 			license,
+			...meta,
 			os: [target.platform],
 			cpu: [target.arch],
 			...(target.platform === "linux"
@@ -97,25 +116,26 @@ for (const target of built) {
 	const tag = wheelTag[
 		`${target.platform}-${target.arch}-${target.libc}`
 	] as string;
-	const info = `guardwright-${version}.dist-info`;
-	const exe = target.platform === "win32" ? "guardwright.exe" : "guardwright";
+	const info = `cagr-${version}.dist-info`;
+	const exe = target.platform === "win32" ? "cagr.exe" : "cagr";
 	const files: [string, Uint8Array<ArrayBuffer>, number][] = [
 		[
-			`guardwright-${version}.data/scripts/${exe}`,
+			`cagr-${version}.data/scripts/${exe}`,
 			new Uint8Array(readFileSync(join(dist, binaryName(target)))),
 			0o755,
 		],
 		[
 			`${info}/METADATA`,
 			text(
-				`Metadata-Version: 2.1\nName: guardwright\nVersion: ${version}\nSummary: ${description}\nLicense: ${license}\nRequires-Python: >=3.8\n`,
+				`Metadata-Version: 2.1\nName: cagr\nVersion: ${version}\nSummary: ${description}\nLicense: ${license}\nRequires-Python: >=3.8\n`,
 			),
 			0o644,
 		],
+		[`${info}/LICENSE`, new Uint8Array(readFileSync(licenseFile)), 0o644],
 		[
 			`${info}/WHEEL`,
 			text(
-				`Wheel-Version: 1.0\nGenerator: guardwright scripts/package.ts\nRoot-Is-Purelib: false\nTag: py3-none-${tag}\n`,
+				`Wheel-Version: 1.0\nGenerator: cagr scripts/package.ts\nRoot-Is-Purelib: false\nTag: py3-none-${tag}\n`,
 			),
 			0o644,
 		],
@@ -128,7 +148,7 @@ for (const target of built) {
 	].join("\n");
 	files.push([`${info}/RECORD`, text(`${record}\n`), 0o644]);
 	writeFileSync(
-		join(dist, "wheels", `guardwright-${version}-py3-none-${tag}.whl`),
+		join(dist, "wheels", `cagr-${version}-py3-none-${tag}.whl`),
 		zip(files),
 	);
 }

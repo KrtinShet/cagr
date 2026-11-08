@@ -53,6 +53,24 @@ export function bool(opts: Doc = {}): Node {
 	};
 }
 
+export function num(opts: Doc & { min?: number } = {}): Node {
+	return {
+		check(value, path, errors) {
+			if (typeof value !== "number" || !Number.isInteger(value)) {
+				errors.push(`${path} must be a whole number, not ${typeName(value)}.`);
+				return;
+			}
+			if (opts.min !== undefined && value < opts.min)
+				errors.push(`${path} must be at least ${opts.min}.`);
+		},
+		json: () => ({
+			type: "integer",
+			...(opts.min !== undefined ? { minimum: opts.min } : {}),
+			...(opts.description ? { description: opts.description } : {}),
+		}),
+	};
+}
+
 export function arr(item: Node, opts: Doc = {}): Node {
 	return {
 		check(value, path, errors) {
