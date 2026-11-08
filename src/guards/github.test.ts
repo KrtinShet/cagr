@@ -210,3 +210,23 @@ test("REST pull request creation is gated whatever the flag order or spelling", 
 	])
 		expect(isGateCommand(line, recommended)).toBe(false);
 });
+
+test("a body file or body attached to its flag counts as a body", () => {
+	const file = "## Testing\n## Risk\n## How to revert\n";
+	const read = (path: string) => (path === "pr.md" ? file : null);
+	for (const line of [
+		"gh pr create -t x --body-file=pr.md",
+		"gh pr create -t x -Fpr.md",
+	])
+		expect(prBodyFinding(line, recommended, read)).toBeNull();
+	expect(
+		prBodyFinding("gh pr create -t x -bdone", recommended, none)?.reason,
+	).toContain("The body lacks");
+	expect(
+		prBodyFinding(
+			"gh pr create -t x -Fother.md",
+			recommended,
+			() => "## Testing",
+		)?.reason,
+	).toContain("lacks");
+});

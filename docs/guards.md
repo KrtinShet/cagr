@@ -233,7 +233,7 @@ The gate lets the command through when:
 
 - with `--fill`, which writes the body from commits;
 - with no body at all;
-- with a `--body` or `--body-file` that lacks a `## <section>` heading.
+- with a `--body` or `--body-file` that lacks a `## <section>` heading. The value may be attached to its flag: `--body=...`, `-b...`, `--body-file=pr.md` or `-Fpr.md`.
 
 `--web` (or `-w`) is allowed, since the body is written in the browser. A body read from stdin (`--body-file -`) or from a file that cannot be read is not checked.
 

@@ -189,6 +189,20 @@ const bodyFlags = new Set([
 	"-w",
 ]);
 
+// `--body=x`, `-bx`, `--body-file=x` and `-Fx`: gh accepts a value attached to its flag.
+const attachedBody = /^(?:--body(?:-file)?=|-[bF].)/;
+
+/** The path `gh pr create` reads its body from, if it names one. */
+function bodyFile(words: string[]): string | undefined {
+	for (const [index, word] of words.entries()) {
+		if (word === "--body-file" || word === "-F") return words[index + 1] ?? "";
+		if (word.startsWith("--body-file="))
+			return word.slice("--body-file=".length);
+		if (/^-F./.test(word)) return word.slice(2);
+	}
+	return undefined;
+}
+
 /** On `gh pr create`, the body must carry each [review] pr_sections heading. */
 export function prBodyFinding(
 	line: string,
@@ -206,7 +220,7 @@ export function prBodyFinding(
 		reason: `${what} Pass the body with --body or --body-file, with these headings filled in:\n\n${prTemplate(sections)}`,
 	});
 	const used = create.filter(
-		(word) => bodyFlags.has(word) || word.startsWith("--body="),
+		(word) => bodyFlags.has(word) || attachedBody.test(word),
 	);
 	if (used.some((word) => word.startsWith("--fill") || word === "-f"))
 		return reason(
@@ -214,18 +228,14 @@ export function prBodyFinding(
 		);
 	if (used.some((word) => word === "--web" || word === "-w")) return null;
 	let body: string | null = null;
-	const fileIndex = create.findIndex(
-		(word) => word === "--body-file" || word === "-F",
-	);
-	if (fileIndex !== -1) {
-		const path = create[fileIndex + 1];
+	const path = bodyFile(create);
+	if (path !== undefined) {
 		if (!path || path === "-") return null;
 		body = readFile(path);
 		if (body === null) return null;
 	} else if (
 		used.some(
-			(word) =>
-				word === "--body" || word === "-b" || word.startsWith("--body="),
+			(word) => word === "--body" || word === "-b" || attachedBody.test(word),
 		)
 	) {
 		// The body is often a heredoc inside $(...), which the word splitter drops, so check the raw line.
