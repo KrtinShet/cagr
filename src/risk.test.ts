@@ -31,6 +31,7 @@ test("the change takes its highest file, with that file's reasons and owners", (
 	expect(result.owners).toEqual(["@org/security"]);
 	expect(result.reasons).toEqual(["Sign-in."]);
 	expect(riskReport(result)).toContain("Needs 2 human approvals");
+	expect(riskReport(result)).toContain("Why: Sign-in.\n");
 });
 
 test("docs alone are low and need no approval", () => {

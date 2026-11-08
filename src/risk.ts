@@ -72,7 +72,9 @@ export function riskReport(result: RiskResult) {
 		`Risk: ${result.tier}. Needs ${result.approvals === 0 ? "no human approval once checks and review pass" : `${result.approvals} human approval${result.approvals === 1 ? "" : "s"}`}.`,
 	];
 	if (result.reasons.length > 0)
-		lines.push(`Why: ${result.reasons.join("; ")}.`);
+		lines.push(
+			`Why: ${result.reasons.map((reason) => reason.replace(/\.$/, "")).join("; ")}.`,
+		);
 	if (result.owners.length > 0)
 		lines.push(`Owners: ${result.owners.join(", ")}.`);
 	const byTier = (tier: RiskTier) =>
