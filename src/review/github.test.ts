@@ -48,6 +48,7 @@ function fakeGh(options: {
 	threadAuthor?: string;
 	rejectInline?: boolean;
 	rejectAll?: boolean;
+	rejectState?: boolean;
 }) {
 	const posts: { args: string[]; body: Record<string, unknown> }[] = [];
 	const gh: Gh = async (args, stdin) => {
@@ -93,6 +94,10 @@ function fakeGh(options: {
 			body.comments.length > 0
 		)
 			throw new Error("gh api failed: line must be part of the diff");
+		if (options.rejectState && args.some((arg) => arg.includes("/issues/")))
+			throw new Error(
+				"gh api -X POST failed: Resource not accessible by integration (HTTP 403)",
+			);
 		posts.push({ args, body });
 		return "{}";
 	};
@@ -309,4 +314,17 @@ test("a review GitHub will not take is reported, and the state is still saved", 
 	expect(
 		posts.some((post) => post.args.includes("repos/o/r/issues/3/comments")),
 	).toBe(true);
+});
+
+test("a state comment GitHub will not take is reported, not thrown, and names fork pull requests", async () => {
+	const { repo, config, env } = await prRepo();
+	const { gh } = fakeGh({ rejectState: true });
+	const result = await ciReview(config, repo.root, {
+		gh,
+		env,
+		agent: brokenAgent,
+	});
+	expect(result.ok).toBe(true);
+	expect(result.report).toContain("The review state could not be saved");
+	expect(result.report).toContain("pull requests from forks");
 });

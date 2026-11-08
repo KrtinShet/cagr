@@ -87,6 +87,8 @@ How it works:
 
 The job fails while an Important finding is open. It fails open: if the reviewer could not run, the job passes, unless findings from an earlier run are still open.
 
+If the review or the state comment cannot be written, the job says so in its report and carries on, and the next run starts from no state. Pull requests from forks get a read-only token and no secrets, so this job cannot review them: the reviewer cannot run and nothing can be written. The report says so. Review fork pull requests by hand.
+
 Make `review` a required check (see below) so the gate holds even for pull requests opened in the browser.
 
 ## Check branch protection

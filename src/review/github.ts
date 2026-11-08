@@ -225,6 +225,8 @@ async function saveState(
 	);
 }
 
+const readOnlyToken = /\b403\b|Resource not accessible by integration/i;
+
 /** One CI review round on a pull request. Fails while an Important finding is open. */
 export async function ciReview(
 	config: Config,
@@ -275,8 +277,14 @@ export async function ciReview(
 				posted = `\n\nThe review could not be posted to the pull request: ${error.message}`;
 			},
 		);
-	await saveState(gh, pr, existing, outcome.record);
-	const report = `${reviewReport(outcome, config.review.max_rounds)}${posted}`;
+	let saved = "";
+	await saveState(gh, pr, existing, outcome.record).catch((error: Error) => {
+		saved = `\n\nThe review state could not be saved to the pull request, so the next run starts over: ${error.message}`;
+		if (readOnlyToken.test(error.message))
+			saved +=
+				"\nThe token cannot write to this pull request. GitHub gives pull requests from forks a read-only token and no secrets, so this job cannot review them. Review fork pull requests by hand, or run `cagr review` on a branch in this repo.";
+	});
+	const report = `${reviewReport(outcome, config.review.max_rounds)}${posted}${saved}`;
 	// Fail open: a reviewer that could not run does not hold the pull request, but findings already open still do.
 	return {
 		ok: outcome.round?.error
