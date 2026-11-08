@@ -66,8 +66,42 @@ function flag(args: string[], name: string) {
 	return value ?? "";
 }
 
+/** The options each command takes. `hook`, `git` and `review` check their own. */
+const options: Record<string, string[]> = {
+	init: ["--dry-run", "--force"],
+	sync: ["--check"],
+	"install-git-hooks": [],
+	doctor: ["--github"],
+	risk: ["--base"],
+	ci: ["--base"],
+	check: [],
+	explain: [],
+	rules: [],
+	schema: [],
+};
+
+/** Help for a command, or a UsageError for an option it does not take. */
+export function checkOptions(command: string, args: string[]): string | null {
+	const allowed = options[command];
+	if (!allowed) return null;
+	if (args.includes("--help") || args.includes("-h")) return help;
+	const unknown = args.find(
+		(arg) => arg.startsWith("-") && !allowed.includes(arg),
+	);
+	if (unknown)
+		throw new UsageError(
+			`\`guardwright ${command}\` has no option ${unknown}. ${allowed.length > 0 ? `It takes ${allowed.join(", ")}.` : "It takes none."} \`guardwright help\` lists every command.`,
+		);
+	return null;
+}
+
 async function main(argv: string[]): Promise<number> {
 	const [command, ...args] = argv;
+	const commandHelp = command ? checkOptions(command, args) : null;
+	if (commandHelp) {
+		console.log(commandHelp);
+		return 0;
+	}
 	switch (command) {
 		case undefined:
 		case "help":
