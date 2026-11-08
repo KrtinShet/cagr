@@ -176,7 +176,7 @@ export async function githubLines(config: Config, gh: Gh): Promise<Line[]> {
 					? { ok: true, text: `The \`${name}\` job is a required check.` }
 					: {
 							ok: false,
-							text: `The \`${name}\` job from the guardwright workflow is not a required check, so a red run can still merge. Add it under required status checks. ${fix}`,
+							text: `The \`${name}\` job from the cagr workflow is not a required check, so a red run can still merge. Add it under required status checks. ${fix}`,
 						},
 			);
 	}

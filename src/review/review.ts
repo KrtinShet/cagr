@@ -33,7 +33,7 @@ import {
 	severities,
 } from "./types";
 
-/** A problem with the repo state, not with guardwright: the message says what to do. */
+/** A problem with the repo state, not with cagr: the message says what to do. */
 export class ReviewInputError extends Error {}
 
 export type ReviewOptions = {
@@ -98,7 +98,7 @@ export async function review(
 	const git = await gitContext(options.cwd);
 	if (!git.toplevel || !git.commonDir || !git.head)
 		throw new ReviewInputError(
-			"Run `guardwright review` inside a git repo with at least one commit.",
+			"Run `cagr review` inside a git repo with at least one commit.",
 		);
 	const cwd = git.toplevel;
 	const head = git.head;

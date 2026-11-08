@@ -17,7 +17,7 @@ const block = (finding: ReviewFinding) => {
 	return lines.join("\n");
 };
 
-/** What `guardwright review` prints: counts first, then the findings, then what to do next. */
+/** What `cagr review` prints: counts first, then the findings, then what to do next. */
 export function reviewReport(
 	outcome: ReviewOutcome,
 	maxRounds: number,
@@ -25,12 +25,12 @@ export function reviewReport(
 	if (outcome.skipped) {
 		const open = blocking(outcome.record);
 		return open.length > 0
-			? `${outcome.skipped}\n\nStill open:\n${open.map(block).join("\n")}\n\nFix them, commit, and run \`guardwright review\` again. ${answerHint(open[0]?.id ?? "f1")}`
+			? `${outcome.skipped}\n\nStill open:\n${open.map(block).join("\n")}\n\nFix them, commit, and run \`cagr review\` again. ${answerHint(open[0]?.id ?? "f1")}`
 			: outcome.skipped;
 	}
 	const round = outcome.round;
 	if (round?.error)
-		return `The reviewer could not run: ${round.error}\n\nThe gate lets the pull request through and tells the human it went out unreviewed. Fix the reviewer and run \`guardwright review\` again if you can.`;
+		return `The reviewer could not run: ${round.error}\n\nThe gate lets the pull request through and tells the human it went out unreviewed. Fix the reviewer and run \`cagr review\` again if you can.`;
 	const sections: string[] = [
 		`Round ${round?.n ?? 1}${round ? ` (${round.scope}, ${round.effort}, ${round.tier} risk, ${round.reviewer})` : ""}: ${round?.summary ?? ""}`,
 	];
@@ -59,7 +59,7 @@ export function reviewReport(
 			"Passed. No Important finding is open, so the gate lets the pull request through.",
 		);
 	else {
-		const steps = `Next: fix each Important finding, commit, and run \`guardwright review\` again. It reviews only the new commits. ${answerHint(open[0]?.id ?? "f1")}`;
+		const steps = `Next: fix each Important finding, commit, and run \`cagr review\` again. It reviews only the new commits. ${answerHint(open[0]?.id ?? "f1")}`;
 		const rounds = outcome.record.rounds.filter((entry) => !entry.error).length;
 		sections.push(
 			rounds >= maxRounds
@@ -113,7 +113,7 @@ export function answerFinding(
 	const finding = record?.findings.find((entry) => entry.id === id);
 	if (!finding)
 		throw new AnswerError(
-			`No finding "${id}" on this branch. \`guardwright review status\` lists them.`,
+			`No finding "${id}" on this branch. \`cagr review status\` lists them.`,
 		);
 	finding.status = "answered";
 	finding.answer = { kind, reason: reason.trim() };

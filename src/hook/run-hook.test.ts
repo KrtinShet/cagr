@@ -16,12 +16,12 @@ test("a config error lets the call through and tells the human", async () => {
 		bashCall,
 		"/repo",
 		() => {
-			throw new ConfigError("guardwright.toml:3:1: not valid TOML");
+			throw new ConfigError("cagr.toml:3:1: not valid TOML");
 		},
 	);
 	expect(JSON.parse(output)).toEqual({
 		systemMessage:
-			"guardwright is off for this call because of an error. guardwright.toml:3:1: not valid TOML",
+			"cagr is off for this call because of an error. cagr.toml:3:1: not valid TOML",
 	});
 });
 
@@ -33,7 +33,7 @@ test("bad JSON on stdin also fails open", async () => {
 	).toContain("off for this call");
 });
 
-test("no config means guardwright stays out of the way", async () => {
+test("no config means cagr stays out of the way", async () => {
 	expect(
 		await runHook("claude", "command.before", bashCall, "/repo", () => null),
 	).toBe("");
@@ -50,7 +50,7 @@ test("a found config is enforced", async () => {
 });
 
 test("no environment variable turns the hooks off", async () => {
-	process.env.GUARDWRIGHT_REVIEWER = "1";
+	process.env.CAGR_REVIEWER = "1";
 	try {
 		expect(
 			await runHook("claude", "command.before", bashCall, "/repo", () =>
@@ -58,6 +58,6 @@ test("no environment variable turns the hooks off", async () => {
 			),
 		).toContain('"deny"');
 	} finally {
-		delete process.env.GUARDWRIGHT_REVIEWER;
+		delete process.env.CAGR_REVIEWER;
 	}
 });

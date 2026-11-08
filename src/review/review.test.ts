@@ -69,7 +69,7 @@ async function branchRepo() {
 	const config = resolveConfig(
 		{ review: { enabled: true } },
 		repo.root,
-		join(repo.root, "guardwright.toml"),
+		join(repo.root, "cagr.toml"),
 	);
 	return { ...repo, config };
 }
@@ -106,7 +106,7 @@ describe("review", () => {
 		expect(outcome.found[0]?.id).toBe("f1");
 		expect(outcome.passed).toBe(false);
 		expect(outcome.file && existsSync(outcome.file)).toBe(true);
-		expect(outcome.file).toContain(join(".git", "guardwright", "reviews"));
+		expect(outcome.file).toContain(join(".git", "cagr", "reviews"));
 	});
 
 	test("round 2 reviews only the new commits, marks fixed findings, and passes", async () => {

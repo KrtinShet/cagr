@@ -18,7 +18,7 @@ test("review state survives a round trip through a comment", () => {
 	const saved = record([round()], [finding()]);
 	expect(decodeState(`text\n${encodeState(saved)}\nmore`)).toEqual(saved);
 	expect(decodeState("no marker")).toBeNull();
-	expect(decodeState("<!-- guardwright-review bm90IGpzb24= -->")).toBeNull();
+	expect(decodeState("<!-- cagr-review bm90IGpzb24= -->")).toBeNull();
 });
 
 test("the pull request comes from the GitHub event", async () => {
@@ -63,7 +63,7 @@ function fakeGh(options: {
 									comments: {
 										nodes: [
 											{
-												body: `x <!-- guardwright:${id} -->`,
+												body: `x <!-- cagr:${id} -->`,
 												author: {
 													login: options.threadAuthor ?? "github-actions",
 												},
@@ -163,7 +163,7 @@ test("a CI round posts inline comments, saves state, and fails on an open findin
 		body: string;
 	}[];
 	expect(comments[0]?.path).toBe("src/a.ts");
-	expect(comments[0]?.body).toContain("<!-- guardwright:f1 -->");
+	expect(comments[0]?.body).toContain("<!-- cagr:f1 -->");
 	const statePost = posts.find((post) =>
 		post.args.includes("repos/o/r/issues/3/comments"),
 	);
@@ -210,7 +210,7 @@ test("when GitHub rejects an inline comment the findings go in the review body",
 		post.args.some((arg) => arg.endsWith("/reviews")),
 	);
 	expect(reviewPost?.body.comments).toBeUndefined();
-	expect(String(reviewPost?.body.body)).toContain("<!-- guardwright:f1 -->");
+	expect(String(reviewPost?.body.body)).toContain("<!-- cagr:f1 -->");
 });
 
 test("a reviewer that cannot run does not fail the check", async () => {

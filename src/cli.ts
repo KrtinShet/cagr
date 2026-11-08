@@ -26,22 +26,22 @@ import { loadRules, RuleError, testRules } from "./rules/rules";
 import { GitSetupError, installGitHooks, keptNotes, sync } from "./sync";
 import { version } from "./version";
 
-const help = `guardwright ${version}: one config for every coding agent's guardrails.
+const help = `cagr ${version}: one config for every coding agent's guardrails.
 
-Usage: guardwright <command>
+Usage: cagr <command>
 
-  init [--dry-run] [--force]   Detect the repo, write guardwright.toml, the agent hooks and the git hooks.
+  init [--dry-run] [--force]   Detect the repo, write cagr.toml, the agent hooks and the git hooks.
   sync [--check]               Rewrite the generated agent and git hook files. --check fails on drift.
   install-git-hooks            Write the git hooks and set core.hooksPath.
   doctor [--github]            Check the wiring, the tools each check needs, and hook timings.
                                --github also checks branch protection through gh.
-  review [...]                 Review this branch with a reviewer agent. \`guardwright review help\` for more.
+  review [...]                 Review this branch with a reviewer agent. \`cagr review help\` for more.
   risk [--base <b>] [files]    The risk tier of this branch's change, the approvals it needs, the owners.
   ci [--base <branch>]         In CI: the same checks the hooks ran, on the branch's changed files.
   check <files...>             Run the edit checks and code rules on files.
   explain <id>                 Explain a guard or a code rule.
   rules test                   Check every rule's examples: invalid ones must fire, valid ones must not.
-  schema                       Print the JSON schema for guardwright.toml.
+  schema                       Print the JSON schema for cagr.toml.
   hook <event> --agent <name>  Called by agent hooks: reads the agent's JSON on stdin.
   git <hook> [args]            Called by git hooks: ${gitHookNames.join(", ")}.
 
@@ -53,7 +53,7 @@ function requireConfig(): Config {
 	const config = loadConfig(process.cwd());
 	if (!config)
 		throw new UsageError(
-			"No guardwright.toml (or [tool.guardwright] in pyproject.toml) here or above. Run `guardwright init`.",
+			"No cagr.toml (or [tool.cagr] in pyproject.toml) here or above. Run `cagr init`.",
 		);
 	return config;
 }
@@ -90,7 +90,7 @@ export function checkOptions(command: string, args: string[]): string | null {
 	);
 	if (unknown)
 		throw new UsageError(
-			`\`guardwright ${command}\` has no option ${unknown}. ${allowed.length > 0 ? `It takes ${allowed.join(", ")}.` : "It takes none."} \`guardwright help\` lists every command.`,
+			`\`cagr ${command}\` has no option ${unknown}. ${allowed.length > 0 ? `It takes ${allowed.join(", ")}.` : "It takes none."} \`cagr help\` lists every command.`,
 		);
 	return null;
 }
@@ -144,7 +144,7 @@ async function main(argv: string[]): Promise<number> {
 				config = loadConfig(process.cwd());
 			} catch (error) {
 				console.error(
-					`guardwright: the ${hook} hook did not run. ${(error as Error).message}`,
+					`cagr: the ${hook} hook did not run. ${(error as Error).message}`,
 				);
 				return 0;
 			}
@@ -153,8 +153,7 @@ async function main(argv: string[]): Promise<number> {
 				hook === "commit-msg"
 					? commitMsg(args[1] ?? ".git/COMMIT_EDITMSG", config)
 					: await prePush(await Bun.stdin.text(), config, process.cwd());
-			for (const message of result.messages)
-				console.error(`guardwright: ${message}`);
+			for (const message of result.messages) console.error(`cagr: ${message}`);
 			if (!result.ok)
 				console.error(
 					`A human can skip this once with ${config.git.skip_env}=1.`,
@@ -175,7 +174,7 @@ async function main(argv: string[]): Promise<number> {
 				`Found:\n${found.length > 0 ? found.join("\n") : "  no JavaScript or Python projects"}\n  agents: ${result.detection.agents.join(", ")}\n  protected branch: ${result.detection.protectedBranch}\n`,
 			);
 			console.log(
-				`${dryRun ? "Would write" : "Wrote"} guardwright.toml:\n\n${result.config}`,
+				`${dryRun ? "Would write" : "Wrote"} cagr.toml:\n\n${result.config}`,
 			);
 			if (!dryRun)
 				console.log(
@@ -194,7 +193,7 @@ async function main(argv: string[]): Promise<number> {
 					return 0;
 				}
 				console.error(
-					`Out of date: ${result.drifted.join(", ")}. Run \`guardwright sync\`.`,
+					`Out of date: ${result.drifted.join(", ")}. Run \`cagr sync\`.`,
 				);
 				return 1;
 			}
@@ -222,9 +221,7 @@ async function main(argv: string[]): Promise<number> {
 		}
 		case "check": {
 			if (args.length === 0)
-				throw new UsageError(
-					"Name the files to check: guardwright check <files...>",
-				);
+				throw new UsageError("Name the files to check: cagr check <files...>");
 			const config = requireConfig();
 			const files = args.map((file) => resolve(file));
 			const problems = files
@@ -276,8 +273,7 @@ async function main(argv: string[]): Promise<number> {
 			return 0;
 		}
 		case "rules": {
-			if (args[0] !== "test")
-				throw new UsageError("Usage: guardwright rules test");
+			if (args[0] !== "test") throw new UsageError("Usage: cagr rules test");
 			const rules = loadRules(requireConfig());
 			const results = await testRules(rules);
 			for (const result of results.filter((entry) => !entry.ok))

@@ -92,7 +92,7 @@ export async function doctor(
 		for (const file of result.drifted)
 			wiring.push({
 				ok: false,
-				text: `${file} is missing or out of date. Run \`guardwright sync\`.`,
+				text: `${file} is missing or out of date. Run \`cagr sync\`.`,
 			});
 	} catch (error) {
 		wiring.push({ ok: false, text: (error as Error).message });
@@ -110,7 +110,7 @@ export async function doctor(
 	else
 		wiring.push({
 			ok: false,
-			text: `${hooksPath ? `core.hooksPath is ${hooksPath}, not ${config.git.hooks_path}` : "core.hooksPath is not set"}, so git does not run guardwright's hooks. Run \`guardwright install-git-hooks\`.`,
+			text: `${hooksPath ? `core.hooksPath is ${hooksPath}, not ${config.git.hooks_path}` : "core.hooksPath is not set"}, so git does not run cagr's hooks. Run \`cagr install-git-hooks\`.`,
 		});
 	for (const hook of gitHookNames) {
 		const file = join(config.root, config.git.hooks_path, hook);
@@ -120,14 +120,14 @@ export async function doctor(
 			if (existsSync(file))
 				wiring.push({
 					ok: false,
-					text: `${config.git.hooks_path}/${hook} is not executable. Run \`guardwright install-git-hooks\`.`,
+					text: `${config.git.hooks_path}/${hook} is not executable. Run \`cagr install-git-hooks\`.`,
 				});
 		}
 	}
 	sections.push(["Wiring", wiring]);
 
 	const tools: Line[] = [];
-	const program = config.agents.command.split(" ")[0] ?? "guardwright";
+	const program = config.agents.command.split(" ")[0] ?? "cagr";
 	if (!program.includes("{") && !program.includes("$"))
 		tools.push(
 			Bun.which(program)

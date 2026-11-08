@@ -12,7 +12,7 @@ import { emptyRecord, type ReviewRecord } from "./types";
 export function recordPath(commonDir: string, branch: string) {
 	return join(
 		commonDir,
-		"guardwright",
+		"cagr",
 		"reviews",
 		`${branch.replace(/[^\w.-]/g, "__")}.json`,
 	);
@@ -38,7 +38,7 @@ export function writeRecord(file: string, record: ReviewRecord) {
 }
 
 export function allRecords(commonDir: string): ReviewRecord[] {
-	const dir = join(commonDir, "guardwright", "reviews");
+	const dir = join(commonDir, "cagr", "reviews");
 	if (!existsSync(dir)) return [];
 	return readdirSync(dir)
 		.filter((name) => name.endsWith(".json"))

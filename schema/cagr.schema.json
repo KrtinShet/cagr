@@ -1,6 +1,6 @@
 {
 	"$schema": "http://json-schema.org/draft-07/schema#",
-	"title": "guardwright.toml",
+	"title": "cagr.toml",
 	"type": "object",
 	"additionalProperties": false,
 	"properties": {
@@ -28,11 +28,11 @@
 							"codex"
 						]
 					},
-					"description": "Agents whose hook files `guardwright sync` writes."
+					"description": "Agents whose hook files `cagr sync` writes."
 				},
 				"command": {
 					"type": "string",
-					"description": "How the generated hook files call guardwright. \"{root}\" becomes the repo root for each agent."
+					"description": "How the generated hook files call cagr. \"{root}\" becomes the repo root for each agent."
 				}
 			},
 			"description": "Agent adapters."
@@ -426,22 +426,22 @@
 			"properties": {
 				"github": {
 					"type": "boolean",
-					"description": "`guardwright sync` writes the GitHub workflow, the pull request template and CODEOWNERS."
+					"description": "`cagr sync` writes the GitHub workflow, the pull request template and CODEOWNERS."
 				},
 				"review": {
 					"type": "boolean",
-					"description": "The workflow reviews each pull request with `guardwright review --ci`. Needs the ANTHROPIC_API_KEY secret."
+					"description": "The workflow reviews each pull request with `cagr review --ci`. Needs the ANTHROPIC_API_KEY secret."
 				},
 				"nightly": {
 					"type": "array",
 					"items": {
 						"type": "string"
 					},
-					"description": "Globs the workflow reviews every night with `guardwright review --scan`, opening an issue for findings."
+					"description": "Globs the workflow reviews every night with `cagr review --scan`, opening an issue for findings."
 				},
 				"install": {
 					"type": "string",
-					"description": "The shell command the workflow uses to install guardwright."
+					"description": "The shell command the workflow uses to install cagr."
 				}
 			},
 			"description": "CI."

@@ -22,11 +22,11 @@ if (!host)
 const binary =
 	process.argv[2] ?? join(import.meta.dir, "..", "dist", binaryName(host));
 
-const work = mkdtempSync(join(tmpdir(), "guardwright-e2e-"));
+const work = mkdtempSync(join(tmpdir(), "cagr-e2e-"));
 const bin = join(work, "bin");
 mkdirSync(bin);
-copyFileSync(binary, join(bin, "guardwright"));
-Bun.spawnSync(["chmod", "755", join(bin, "guardwright")]);
+copyFileSync(binary, join(bin, "cagr"));
+Bun.spawnSync(["chmod", "755", join(bin, "cagr")]);
 const env = {
 	...process.env,
 	PATH: `${bin}:${process.env.PATH}`,
@@ -114,13 +114,9 @@ function hook(
 			!g.matcher ||
 			(tool !== undefined && new RegExp(`^(${g.matcher})$`).test(tool)),
 	);
-	const command = group?.hooks.find((h) =>
-		h.command.includes("guardwright"),
-	)?.command;
+	const command = group?.hooks.find((h) => h.command.includes("cagr"))?.command;
 	if (!command)
-		throw new Error(
-			`No guardwright hook for ${native} ${tool ?? ""} in ${file}.`,
-		);
+		throw new Error(`No cagr hook for ${native} ${tool ?? ""} in ${file}.`);
 	const input = JSON.stringify({
 		session_id: `${session}-${project.split("/").at(-1)}-${agent}`,
 		cwd: project,
@@ -192,25 +188,21 @@ function gitChecks(project: string) {
 		["git", "push", "-q", "origin", "HEAD:main"],
 		project,
 		undefined,
-		{ GUARDWRIGHT_SKIP: "1" },
+		{ CAGR_SKIP: "1" },
 	);
-	expect(
-		"a human can skip once with GUARDWRIGHT_SKIP=1",
-		skip.code === 0,
-		skip.err,
-	);
+	expect("a human can skip once with CAGR_SKIP=1", skip.code === 0, skip.err);
 }
 
 function initAndDoctor(project: string) {
-	const init = run(["guardwright", "init"], project);
-	expect("guardwright init", init.code === 0, init.out + init.err);
-	const check = run(["guardwright", "sync", "--check"], project);
-	expect("guardwright sync --check", check.code === 0, check.out + check.err);
+	const init = run(["cagr", "init"], project);
+	expect("cagr init", init.code === 0, init.out + init.err);
+	const check = run(["cagr", "sync", "--check"], project);
+	expect("cagr sync --check", check.code === 0, check.out + check.err);
 }
 
 function doctor(project: string) {
-	const result = run(["guardwright", "doctor"], project);
-	expect("guardwright doctor", result.code === 0, result.out + result.err);
+	const result = run(["cagr", "doctor"], project);
+	expect("cagr doctor", result.code === 0, result.out + result.err);
 }
 
 // TypeScript
@@ -231,12 +223,12 @@ function doctor(project: string) {
 	sh("bunx biome check --write . >/dev/null", project);
 	initAndDoctor(project);
 	writeFileSync(
-		join(project, "guardwright.toml"),
-		`${readFileSync(join(project, "guardwright.toml"), "utf8")}\n[commands]\nblocked = [{ match = "prisma db push", reason = "Use \`bun run db:migrate --name <change>\`." }]\n`,
+		join(project, "cagr.toml"),
+		`${readFileSync(join(project, "cagr.toml"), "utf8")}\n[commands]\nblocked = [{ match = "prisma db push", reason = "Use \`bun run db:migrate --name <change>\`." }]\n`,
 	);
-	mkdirSync(join(project, ".guardwright/rules"), { recursive: true });
+	mkdirSync(join(project, ".cagr/rules"), { recursive: true });
 	writeFileSync(
-		join(project, ".guardwright/rules/no-console-log.yml"),
+		join(project, ".cagr/rules/no-console-log.yml"),
 		[
 			"id: no-console-log",
 			"language: typescript",
@@ -250,9 +242,9 @@ function doctor(project: string) {
 			"",
 		].join("\n"),
 	);
-	const rulesTest = run(["guardwright", "rules", "test"], project);
+	const rulesTest = run(["cagr", "rules", "test"], project);
 	expect(
-		"guardwright rules test",
+		"cagr rules test",
 		rulesTest.code === 0,
 		rulesTest.out + rulesTest.err,
 	);
@@ -452,9 +444,9 @@ function doctor(project: string) {
 	);
 	hook(project, "codex", "PreToolUse", bash("bun run lint"), "allow", "bun");
 
-	const checkCmd = run(["guardwright", "check", "index.ts"], project);
+	const checkCmd = run(["cagr", "check", "index.ts"], project);
 	expect(
-		"guardwright check index.ts",
+		"cagr check index.ts",
 		checkCmd.code === 0,
 		checkCmd.out + checkCmd.err,
 	);
@@ -471,15 +463,15 @@ function reviewGate(project: string) {
 	writeFileSync(
 		reviewer,
 		`if grep -q '"findings"' "$1"; then
-  echo '{"summary":"1 important.","findings":[{"severity":"important","category":"bug","file":"guardwright.toml","line":1,"title":"The reviewer is a script","detail":"","bug_class":""}],"fixed":[]}'
+  echo '{"summary":"1 important.","findings":[{"severity":"important","category":"bug","file":"cagr.toml","line":1,"title":"The reviewer is a script","detail":"","bug_class":""}],"fixed":[]}'
 else
   echo '{"candidates":[{"id":"C1","real":true,"severity":"important","reason":"yes"}],"previous":[]}'
 fi
 `,
 	);
 	writeFileSync(
-		join(project, "guardwright.toml"),
-		`${readFileSync(join(project, "guardwright.toml"), "utf8")}\n[review]\nreviewer = "sh ${reviewer} {schema_file}"\n`,
+		join(project, "cagr.toml"),
+		`${readFileSync(join(project, "cagr.toml"), "utf8")}\n[review]\nreviewer = "sh ${reviewer} {schema_file}"\n`,
 	);
 	sh("git commit -qam 'chore: use a scripted reviewer'", project);
 	const body =
@@ -502,10 +494,10 @@ fi
 		"deny",
 		"agents do not merge",
 	);
-	const first = run(["guardwright", "review"], project);
+	const first = run(["cagr", "review"], project);
 	expect(
-		"guardwright review finds an Important problem and exits 1",
-		first.code === 1 && first.out.includes("f1 guardwright.toml:1"),
+		"cagr review finds an Important problem and exits 1",
+		first.code === 1 && first.out.includes("f1 cagr.toml:1"),
 		first.out + first.err,
 	);
 	const denied = hook(
@@ -518,13 +510,13 @@ fi
 	);
 	expect(
 		"the denial names f1 and how to answer it",
-		denied.includes("f1 guardwright.toml:1") &&
-			denied.includes("guardwright review answer f1"),
+		denied.includes("f1 cagr.toml:1") &&
+			denied.includes("cagr review answer f1"),
 		"",
 	);
 	const answer = run(
 		[
-			"guardwright",
+			"cagr",
 			"review",
 			"answer",
 			"f1",
@@ -533,11 +525,7 @@ fi
 		],
 		project,
 	);
-	expect(
-		"guardwright review answer f1",
-		answer.code === 0,
-		answer.out + answer.err,
-	);
+	expect("cagr review answer f1", answer.code === 0, answer.out + answer.err);
 	hook(project, "claude", "PreToolUse", bash(create), "allow", "f1 answered");
 	sh("git commit -q --allow-empty -m 'chore: one more commit'", project);
 	hook(
@@ -548,9 +536,9 @@ fi
 		"deny",
 		"a commit after the review",
 	);
-	const status = run(["guardwright", "review", "status"], project);
+	const status = run(["cagr", "review", "status"], project);
 	expect(
-		"guardwright review status",
+		"cagr review status",
 		status.code === 0 && status.out.includes("before your latest commit"),
 		status.out + status.err,
 	);
@@ -576,9 +564,9 @@ fi
 		"def double(n: int) -> int:\n    return n * 2\n",
 	);
 	initAndDoctor(project);
-	mkdirSync(join(project, ".guardwright/rules"), { recursive: true });
+	mkdirSync(join(project, ".cagr/rules"), { recursive: true });
 	writeFileSync(
-		join(project, ".guardwright/rules/no-print.yml"),
+		join(project, ".cagr/rules/no-print.yml"),
 		[
 			"id: no-print",
 			"language: python",

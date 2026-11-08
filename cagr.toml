@@ -1,4 +1,4 @@
-# guardwright config. `guardwright doctor` checks it; `guardwright sync` applies it.
+# cagr config. `cagr doctor` checks it; `cagr sync` applies it.
 extends = ["recommended"]
 
 [agents]
@@ -30,10 +30,10 @@ on_turn_end = ["bun run lint", "bun run check-types"]
 # reason = "Use `bun run db:migrate --name <change>`."
 
 # The preset gates `gh pr create` on a review by a reviewer agent and keeps merging with people.
-# REVIEW.md says what the reviewer should check. `guardwright review help` shows the commands.
+# REVIEW.md says what the reviewer should check. `cagr review help` shows the commands.
 [review]
 effort = "standard"
-skip = ["schema/guardwright.schema.json", "bun.lock"]
+skip = ["schema/cagr.schema.json", "bun.lock"]
 
 # Risk tiers by path: low needs no approval, medium one, high two. The change takes its highest file.
 [[risk.paths]]
@@ -46,7 +46,7 @@ glob = "src/hook/run-hook.ts"
 tier = "high"
 reason = "Every agent call goes through it, and it must fail open."
 
-# GitHub: `guardwright sync` writes the workflow, the PR template and CODEOWNERS.
+# GitHub: `cagr sync` writes the workflow, the PR template and CODEOWNERS.
 # [ci]
 # github = true
 # review = true          # needs the ANTHROPIC_API_KEY secret

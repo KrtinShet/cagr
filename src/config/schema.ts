@@ -59,11 +59,11 @@ export const configSchema: Node = obj({
 	agents: obj(
 		{
 			enabled: arr(str({ enum: agentNames }), {
-				description: "Agents whose hook files `guardwright sync` writes.",
+				description: "Agents whose hook files `cagr sync` writes.",
 			}),
 			command: str({
 				description:
-					'How the generated hook files call guardwright. "{root}" becomes the repo root for each agent.',
+					'How the generated hook files call cagr. "{root}" becomes the repo root for each agent.',
 			}),
 		},
 		{ description: "Agent adapters." },
@@ -270,18 +270,17 @@ export const configSchema: Node = obj({
 		{
 			github: bool({
 				description:
-					"`guardwright sync` writes the GitHub workflow, the pull request template and CODEOWNERS.",
+					"`cagr sync` writes the GitHub workflow, the pull request template and CODEOWNERS.",
 			}),
 			review: bool({
 				description:
-					"The workflow reviews each pull request with `guardwright review --ci`. Needs the ANTHROPIC_API_KEY secret.",
+					"The workflow reviews each pull request with `cagr review --ci`. Needs the ANTHROPIC_API_KEY secret.",
 			}),
 			nightly: strings(
-				"Globs the workflow reviews every night with `guardwright review --scan`, opening an issue for findings.",
+				"Globs the workflow reviews every night with `cagr review --scan`, opening an issue for findings.",
 			),
 			install: str({
-				description:
-					"The shell command the workflow uses to install guardwright.",
+				description: "The shell command the workflow uses to install cagr.",
 			}),
 		},
 		{ description: "CI." },

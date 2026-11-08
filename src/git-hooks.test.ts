@@ -37,12 +37,10 @@ describe("commit-msg", () => {
 
 	test("a human can skip with the skip variable", async () => {
 		expect(
-			commitMsg(await message("bad"), recommended, { GUARDWRIGHT_SKIP: "1" })
-				.ok,
+			commitMsg(await message("bad"), recommended, { CAGR_SKIP: "1" }).ok,
 		).toBe(true);
 		expect(
-			commitMsg(await message("bad"), recommended, { GUARDWRIGHT_SKIP: "0" })
-				.ok,
+			commitMsg(await message("bad"), recommended, { CAGR_SKIP: "0" }).ok,
 		).toBe(false);
 	});
 });
@@ -102,7 +100,7 @@ describe("pre-push", () => {
 		const result = await prePush(line("main", second), repo(), root, {});
 		expect(result.messages).toEqual([
 			expect.stringMatching(
-				/^Do not push to main\..*\(guardwright: protected-branch\)$/,
+				/^Do not push to main\..*\(cagr: protected-branch\)$/,
 			),
 		]);
 	});
@@ -124,7 +122,7 @@ describe("pre-push", () => {
 			{},
 		);
 		expect(result.messages).toEqual([
-			expect.stringContaining("(guardwright: force-push)"),
+			expect.stringContaining("(cagr: force-push)"),
 		]);
 		expect(
 			(
@@ -176,7 +174,7 @@ describe("pre-push", () => {
 		expect(
 			(
 				await prePush(line("main", second), repo(), root, {
-					GUARDWRIGHT_SKIP: "1",
+					CAGR_SKIP: "1",
 				})
 			).ok,
 		).toBe(true);

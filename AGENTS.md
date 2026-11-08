@@ -1,14 +1,14 @@
 # AGENTS.md
 
-guardwright: a harness for coding agents. TypeScript on Bun, shipped as one compiled binary.
+cagr: a harness for coding agents. TypeScript on Bun, shipped as one compiled binary.
 
 ## Commands
 
 - `bun run verify`: lint, type check and tests. Run it before you finish.
 - `bun run format`: fix formatting.
-- `bun run build --host`: compile `dist/guardwright-<os>-<arch>` for this machine. `bun run build` builds every platform.
+- `bun run build --host`: compile `dist/cagr-<os>-<arch>` for this machine. `bun run build` builds every platform.
 - `bun run e2e`: run the host binary against fresh TypeScript and Python projects.
-- `bun run schema`: regenerate `schema/guardwright.schema.json` after changing `src/config/schema.ts`.
+- `bun run schema`: regenerate `schema/cagr.schema.json` after changing `src/config/schema.ts`.
 
 ## Map
 
@@ -24,6 +24,6 @@ guardwright: a harness for coding agents. TypeScript on Bun, shipped as one comp
 - Use bun for everything.
 - Every block message says what to do instead.
 - Every new guard, rule or branch gets a test that fails when the code breaks.
-- Hooks fail open: an error in guardwright lets the call through and tells the human.
+- Hooks fail open: an error in cagr lets the call through and tells the human.
 - Keep to the budgets: command.before < 50ms, file.after_edit < 1s, turn.end < 60s.
 - Plain words. No em dashes, no emojis. Comments only for a non-obvious why.

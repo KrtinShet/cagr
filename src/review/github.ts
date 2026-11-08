@@ -26,8 +26,8 @@ export const ghCli: Gh = async (args, stdin) => {
 	return result.stdout;
 };
 
-const marker = "guardwright-review";
-const stateLine = /<!-- guardwright-review ([A-Za-z0-9+/=]+) -->/;
+const marker = "cagr-review";
+const stateLine = /<!-- cagr-review ([A-Za-z0-9+/=]+) -->/;
 
 export const encodeState = (record: ReviewRecord) =>
 	`<!-- ${marker} ${Buffer.from(JSON.stringify(record)).toString("base64")} -->`;
@@ -59,7 +59,7 @@ export function pullRequestFromEvent(
 	const path = env.GITHUB_EVENT_PATH;
 	if (!path || !env.GITHUB_REPOSITORY)
 		throw new ReviewInputError(
-			"`guardwright review --ci` runs in GitHub Actions on a pull_request event.",
+			"`cagr review --ci` runs in GitHub Actions on a pull_request event.",
 		);
 	const event = JSON.parse(readFileSync(path, "utf8")) as {
 		pull_request?: {
@@ -71,7 +71,7 @@ export function pullRequestFromEvent(
 	};
 	if (!event.pull_request)
 		throw new ReviewInputError(
-			"This event has no pull request. Run `guardwright review --ci` on pull_request events.",
+			"This event has no pull request. Run `cagr review --ci` on pull_request events.",
 		);
 	return {
 		number: event.pull_request.number,
@@ -155,14 +155,14 @@ export async function resolvedFindings(
 		const first = thread.comments.nodes[0];
 		// A thread counts only when the workflow started it, so a hand-made comment with the marker does not.
 		if (!thread.isResolved || !isWorkflowBot(first?.author?.login)) continue;
-		const id = first?.body.match(/<!-- guardwright:(f\d+) -->/)?.[1];
+		const id = first?.body.match(/<!-- cagr:(f\d+) -->/)?.[1];
 		if (id) resolved.set(id, thread.resolvedBy?.login ?? "someone");
 	}
 	return resolved;
 }
 
 const commentBody = (finding: ReviewFinding) =>
-	`**${finding.severity === "important" ? "Important" : finding.severity === "nit" ? "Nit" : "Pre-existing"}** (${finding.category}, ${finding.id}): ${finding.title}\n\n${finding.detail}${finding.bug_class ? `\n\nClass: ${finding.bug_class}.` : ""}\n\nFix it, or resolve this thread with a reply saying why it is wrong, intentional or minor.\n<!-- guardwright:${finding.id} -->`;
+	`**${finding.severity === "important" ? "Important" : finding.severity === "nit" ? "Nit" : "Pre-existing"}** (${finding.category}, ${finding.id}): ${finding.title}\n\n${finding.detail}${finding.bug_class ? `\n\nClass: ${finding.bug_class}.` : ""}\n\nFix it, or resolve this thread with a reply saying why it is wrong, intentional or minor.\n<!-- cagr:${finding.id} -->`;
 
 /** Posts the round as a PR review with inline comments. Comments GitHub cannot place go in the body. */
 export async function postReview(
@@ -176,7 +176,7 @@ export async function postReview(
 	);
 	const loose = outcome.found.filter((finding) => !inline.includes(finding));
 	const body = [
-		`### guardwright review\n\n${reviewReport(outcome, maxRounds)}`,
+		`### cagr review\n\n${reviewReport(outcome, maxRounds)}`,
 		...loose.map(commentBody),
 	].join("\n\n---\n\n");
 	const payload = (comments: ReviewFinding[]) =>
@@ -215,7 +215,7 @@ async function saveState(
 	record: ReviewRecord,
 ) {
 	const open = blocking(record);
-	const body = `**guardwright review**: ${open.length === 0 ? "no Important finding open." : `${open.length} Important finding${open.length === 1 ? "" : "s"} open (${open.map((finding) => finding.id).join(", ")}).`}\n\n${encodeState(record)}`;
+	const body = `**cagr review**: ${open.length === 0 ? "no Important finding open." : `${open.length} Important finding${open.length === 1 ? "" : "s"} open (${open.map((finding) => finding.id).join(", ")}).`}\n\n${encodeState(record)}`;
 	const path = existing
 		? `repos/${pr.repo}/issues/comments/${existing.id}`
 		: `repos/${pr.repo}/issues/${pr.number}/comments`;
@@ -259,7 +259,7 @@ export async function ciReview(
 	).stdout.trim();
 	if (checkedOut !== pr.head)
 		throw new ReviewInputError(
-			`The checkout is ${checkedOut.slice(0, 7)}, not the pull request's head ${pr.head.slice(0, 7)}, so the review would cover the wrong commit. Check out the head: in actions/checkout, set \`ref: \${{ github.event.pull_request.head.sha }}\`, or run \`guardwright sync\` to rewrite the workflow.`,
+			`The checkout is ${checkedOut.slice(0, 7)}, not the pull request's head ${pr.head.slice(0, 7)}, so the review would cover the wrong commit. Check out the head: in actions/checkout, set \`ref: \${{ github.event.pull_request.head.sha }}\`, or run \`cagr sync\` to rewrite the workflow.`,
 		);
 	const outcome = await review(config, {
 		cwd,

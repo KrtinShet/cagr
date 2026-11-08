@@ -17,7 +17,7 @@ async function setup() {
 	const config = resolveConfig(
 		{ extends: ["recommended"] },
 		repo.root,
-		join(repo.root, "guardwright.toml"),
+		join(repo.root, "cagr.toml"),
 	);
 	const file = recordPath(join(repo.root, ".git"), "feat/x");
 	const create = (command = `gh pr create -t x ${body}`): HookInput => ({

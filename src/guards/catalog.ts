@@ -85,7 +85,7 @@ export const guards: GuardInfo[] = [
 		event: "command.before",
 		catches:
 			"A [review] gate command (by default `gh pr create` and `gh pr ready`, also spelled `gh pr new`, with flags before the subcommand, or through `gh api`) when the branch's commit has no review, or the review left an Important finding open. With --head it checks that branch. A review that could not run lets the command through and tells the human, unless earlier findings are still open.",
-		fix: 'Run `guardwright review`, then fix each finding or answer it with `guardwright review answer <id> --wrong|--intentional|--minor "<why>"`.',
+		fix: 'Run `cagr review`, then fix each finding or answer it with `cagr review answer <id> --wrong|--intentional|--minor "<why>"`.',
 		config: "[review] enabled, gate, max_rounds",
 	},
 	{

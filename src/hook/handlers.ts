@@ -107,7 +107,7 @@ async function reviewGate(
 			reason: render({
 				id: "review-gate",
 				reason:
-					"HEAD is detached, so guardwright cannot tell which branch this pull request is for. Check out the branch (`git switch <branch>`), or name it with --head <branch>.",
+					"HEAD is detached, so cagr cannot tell which branch this pull request is for. Check out the branch (`git switch <branch>`), or name it with --head <branch>.",
 			}),
 		};
 	let head = git.head;
@@ -122,7 +122,7 @@ async function reviewGate(
 				kind: "deny",
 				reason: render({
 					id: "review-gate",
-					reason: `There is no local branch ${named}, so guardwright cannot check its review. Check it out, run \`guardwright review\` there, and open the pull request from it.`,
+					reason: `There is no local branch ${named}, so cagr cannot check its review. Check it out, run \`cagr review\` there, and open the pull request from it.`,
 				}),
 			};
 	}
@@ -275,7 +275,7 @@ async function turnEnd(input: HookInput, config: Config): Promise<Decision> {
 	if (decision.action === "give-up")
 		return {
 			kind: "allow",
-			notice: `guardwright: ${decision.message} The agent was let go so it does not loop. Run the checks yourself before you merge.`,
+			notice: `cagr: ${decision.message} The agent was let go so it does not loop. Run the checks yourself before you merge.`,
 		};
 	return { kind: "allow" };
 }

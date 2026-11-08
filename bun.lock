@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "guardwright-dev",
+      "name": "cagr-dev",
       "dependencies": {
         "@ast-grep/lang-go": "^0.0.6",
         "@ast-grep/lang-python": "^0.0.6",

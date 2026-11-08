@@ -3,8 +3,8 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { jsonSchema } from "./json-schema";
 
-test("schema/guardwright.schema.json matches the config schema (run `bun run schema`)", () => {
-	const file = join(import.meta.dir, "../../schema/guardwright.schema.json");
+test("schema/cagr.schema.json matches the config schema (run `bun run schema`)", () => {
+	const file = join(import.meta.dir, "../../schema/cagr.schema.json");
 	expect(JSON.parse(readFileSync(file, "utf8"))).toEqual(jsonSchema());
 });
 

@@ -1,4 +1,4 @@
-// Compiles one self-contained guardwright binary per platform into dist/.
+// Compiles one self-contained cagr binary per platform into dist/.
 // Usage: bun scripts/build.ts [--host] [target...]
 import { mkdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";

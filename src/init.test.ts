@@ -116,7 +116,7 @@ test("the written config loads and keeps what was found", async () => {
 	const loaded = resolveConfig(
 		Bun.TOML.parse(configToml(detection)) as never,
 		root,
-		"guardwright.toml",
+		"cagr.toml",
 	);
 	expect(loaded.git.protected_branch).toBe("main");
 	expect(loaded.git.pre_push).toEqual(["bun run verify"]);
@@ -141,7 +141,7 @@ test("the generated JSON files go through the repo's on_edit commands", async ()
 	const config = resolveConfig(
 		{ stack: [{ language: "typescript", on_edit: ["touch {files}.seen"] }] },
 		root,
-		join(root, "guardwright.toml"),
+		join(root, "cagr.toml"),
 	);
 	await formatGenerated(config, [
 		".claude/settings.json",

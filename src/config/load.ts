@@ -19,9 +19,9 @@ import {
 
 export class ConfigError extends Error {}
 
-export const configFileName = "guardwright.toml";
+export const configFileName = "cagr.toml";
 
-/** The nearest guardwright.toml, or pyproject.toml with [tool.guardwright], from `start` up. */
+/** The nearest cagr.toml, or pyproject.toml with [tool.cagr], from `start` up. */
 export function findConfig(
 	start: string,
 ): { file: string; raw: RawConfig } | null {
@@ -32,8 +32,7 @@ export function findConfig(
 		const pyproject = join(dir, "pyproject.toml");
 		if (existsSync(pyproject)) {
 			const tool = (parseToml(pyproject).tool ?? {}) as RawConfig;
-			if (tool.guardwright)
-				return { file: pyproject, raw: tool.guardwright as RawConfig };
+			if (tool.cagr) return { file: pyproject, raw: tool.cagr as RawConfig };
 		}
 		const parent = dirname(dir);
 		if (parent === dir) return null;
@@ -144,7 +143,7 @@ function applyDefaults(raw: RawConfig, root: string, source: string): Config {
 				"claude",
 				"codex",
 			],
-			command: (agents.command as string | undefined) ?? "guardwright",
+			command: (agents.command as string | undefined) ?? "cagr",
 		},
 		git: {
 			protected_branch: (git.protected_branch as string | undefined) || null,
@@ -157,7 +156,7 @@ function applyDefaults(raw: RawConfig, root: string, source: string): Config {
 					: ((prePush as string[] | undefined) ?? []),
 			block_force_push: (git.block_force_push as boolean | undefined) ?? false,
 			block_hook_skips: (git.block_hook_skips as boolean | undefined) ?? false,
-			skip_env: (git.skip_env as string | undefined) ?? "GUARDWRIGHT_SKIP",
+			skip_env: (git.skip_env as string | undefined) ?? "CAGR_SKIP",
 			hooks_path: (git.hooks_path as string | undefined) ?? ".githooks",
 			worktree_only: (git.worktree_only as boolean | undefined) ?? false,
 			worktree_dir: (git.worktree_dir as string | undefined) ?? ".worktrees",
@@ -195,7 +194,7 @@ function applyDefaults(raw: RawConfig, root: string, source: string): Config {
 			),
 		},
 		rules: {
-			dirs: (rules.dirs as string[] | undefined) ?? [".guardwright/rules"],
+			dirs: (rules.dirs as string[] | undefined) ?? [".cagr/rules"],
 		},
 		review: {
 			enabled: (review.enabled as boolean | undefined) ?? false,
@@ -230,7 +229,7 @@ function applyDefaults(raw: RawConfig, root: string, source: string): Config {
 			nightly: (ci.nightly as string[] | undefined) ?? [],
 			install:
 				(ci.install as string | undefined) ??
-				"curl -fsSL https://github.com/guardwright/guardwright/releases/latest/download/install.sh | sh",
+				"curl -fsSL https://github.com/krtinshet/cagr/releases/latest/download/install.sh | sh",
 		},
 		brief: (raw.brief as string[] | undefined) ?? [],
 	};

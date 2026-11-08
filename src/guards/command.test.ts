@@ -76,7 +76,7 @@ describe("blocks skipping hooks", () => {
 			config({ git: { block_hook_skips: false } }),
 		);
 		expect(loose("git commit --no-verify -m x")).toBeNull();
-		expect(loose("GUARDWRIGHT_SKIP=1 git push")).toBeNull();
+		expect(loose("CAGR_SKIP=1 git push")).toBeNull();
 	});
 });
 

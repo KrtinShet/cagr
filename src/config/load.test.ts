@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { ConfigError, loadConfig, merge, resolveConfig } from "./load";
 
 const resolve = (raw: Record<string, unknown>) =>
-	resolveConfig(raw, "/repo", "guardwright.toml");
+	resolveConfig(raw, "/repo", "cagr.toml");
 const problems = (raw: Record<string, unknown>) => {
 	try {
 		resolve(raw);
@@ -17,23 +17,20 @@ const problems = (raw: Record<string, unknown>) => {
 };
 
 describe("finding the config", () => {
-	test("reads guardwright.toml from a parent folder", async () => {
+	test("reads cagr.toml from a parent folder", async () => {
 		const dir = await mkdtemp(join(tmpdir(), "gw-config-"));
-		await writeFile(
-			join(dir, "guardwright.toml"),
-			'extends = ["recommended"]\n',
-		);
+		await writeFile(join(dir, "cagr.toml"), 'extends = ["recommended"]\n');
 		await mkdir(join(dir, "src/a"), { recursive: true });
 		const config = loadConfig(join(dir, "src/a"));
 		expect(config?.root).toBe(dir);
 		expect(config?.git.protected_branch).toBe("main");
 	});
 
-	test("reads [tool.guardwright] from pyproject.toml", async () => {
+	test("reads [tool.cagr] from pyproject.toml", async () => {
 		const dir = await mkdtemp(join(tmpdir(), "gw-config-"));
 		await writeFile(
 			join(dir, "pyproject.toml"),
-			'[project]\nname = "x"\n\n[tool.guardwright]\n[tool.guardwright.git]\nprotected_branch = "trunk"\n',
+			'[project]\nname = "x"\n\n[tool.cagr]\n[tool.cagr.git]\nprotected_branch = "trunk"\n',
 		);
 		expect(loadConfig(dir)?.git.protected_branch).toBe("trunk");
 	});
@@ -46,13 +43,8 @@ describe("finding the config", () => {
 
 	test("reports bad TOML with its line", async () => {
 		const dir = await mkdtemp(join(tmpdir(), "gw-config-"));
-		await writeFile(
-			join(dir, "guardwright.toml"),
-			"[git]\nprotected_branch = \n",
-		);
-		expect(() => loadConfig(dir)).toThrow(
-			/guardwright\.toml:\d+:\d+: not valid TOML/,
-		);
+		await writeFile(join(dir, "cagr.toml"), "[git]\nprotected_branch = \n");
+		expect(() => loadConfig(dir)).toThrow(/cagr\.toml:\d+:\d+: not valid TOML/);
 	});
 });
 
@@ -146,7 +138,7 @@ describe("defaults", () => {
 		expect(config.files.protected).toEqual([]);
 		expect(config.agents).toEqual({
 			enabled: ["claude", "codex"],
-			command: "guardwright",
+			command: "cagr",
 		});
 	});
 

@@ -32,7 +32,7 @@ export type EvalResult = {
 };
 
 export const evalDir = (config: Config) =>
-	join(config.root, ".guardwright", "review-evals");
+	join(config.root, ".cagr", "review-evals");
 
 export function loadEvalCases(dir: string): EvalCase[] {
 	if (!existsSync(dir)) return [];
@@ -115,9 +115,7 @@ export async function runEvals(
 ): Promise<EvalResult[]> {
 	const git = await gitContext(cwd);
 	if (!git.toplevel || !git.commonDir)
-		throw new ReviewInputError(
-			"Run `guardwright review eval` inside the repo.",
-		);
+		throw new ReviewInputError("Run `cagr review eval` inside the repo.");
 	const cases = loadEvalCases(evalDir(config)).filter(
 		(entry) => !options.only || entry.name === options.only,
 	);
@@ -129,7 +127,7 @@ export async function runEvals(
 	for (const testCase of cases) {
 		const tree = join(
 			git.commonDir,
-			"guardwright",
+			"cagr",
 			"eval-trees",
 			testCase.name.replace(/[^\w.-]/g, "_"),
 		);
@@ -181,7 +179,7 @@ export async function runEvals(
 }
 
 const lastRunFile = (commonDir: string) =>
-	join(commonDir, "guardwright", "evals", "last.json");
+	join(commonDir, "cagr", "evals", "last.json");
 
 export function evalReport(
 	results: EvalResult[],
@@ -224,6 +222,6 @@ export function readLastRun(commonDir: string): EvalResult[] | null {
 
 export function writeLastRun(commonDir: string, results: EvalResult[]) {
 	const file = lastRunFile(commonDir);
-	mkdirSync(join(commonDir, "guardwright", "evals"), { recursive: true });
+	mkdirSync(join(commonDir, "cagr", "evals"), { recursive: true });
 	writeFileSync(file, `${JSON.stringify(results, null, "\t")}\n`);
 }

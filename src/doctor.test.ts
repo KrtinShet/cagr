@@ -27,13 +27,11 @@ test("a check needs its runner, and the tool behind an exec runner", () => {
 describe("doctor on a folder that is not a git repo", () => {
 	test("says to run git init, and install-git-hooks says so too", async () => {
 		const root = await mkdtemp(join(tmpdir(), "gw-doctor-"));
-		const config = resolveConfig({}, root, join(root, "guardwright.toml"));
+		const config = resolveConfig({}, root, join(root, "cagr.toml"));
 		sync(config);
 		const { ok, report } = await doctor(config);
 		expect(ok).toBe(false);
-		expect(report).toContain(
-			"Run `git init`, then `guardwright install-git-hooks`.",
-		);
+		expect(report).toContain("Run `git init`, then `cagr install-git-hooks`.");
 		expect(installGitHooks(config)).rejects.toBeInstanceOf(GitSetupError);
 	});
 });

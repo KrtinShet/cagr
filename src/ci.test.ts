@@ -14,13 +14,9 @@ async function branch(
 	subject: string,
 ) {
 	const repo = await tempRepo();
-	const config = resolveConfig(
-		raw,
-		repo.root,
-		join(repo.root, "guardwright.toml"),
-	);
+	const config = resolveConfig(raw, repo.root, join(repo.root, "cagr.toml"));
 	sync(config);
-	await repo.commit("chore: add guardwright", {});
+	await repo.commit("chore: add cagr", {});
 	await repo.git("checkout", "-q", "-b", "feat/x");
 	await repo.commit(subject, files);
 	return { repo, config };

@@ -69,7 +69,7 @@ function cacheDir() {
 		(process.platform === "win32"
 			? (process.env.LOCALAPPDATA ?? join(homedir(), "AppData", "Local"))
 			: join(homedir(), ".cache"));
-	return join(base, "guardwright", version);
+	return join(base, "cagr", version);
 }
 
 async function libraryPath(parser: DynamicParser): Promise<string | null> {

@@ -15,7 +15,7 @@ import { ReviewInputError, resolveBase, review } from "./review";
 import { allRecords, readRecord, recordPath, writeRecord } from "./store";
 import { type AnswerKind, answerKinds } from "./types";
 
-export const reviewHelp = `Usage: guardwright review [options]
+export const reviewHelp = `Usage: cagr review [options]
 
   review [--base <branch>] [--full] [--effort quick|standard|deep]
                                Review this branch's commits with a reviewer agent. After round 1 only new commits.
@@ -26,7 +26,7 @@ export const reviewHelp = `Usage: guardwright review [options]
                                Answer a finding instead of fixing it. A person reads every answer.
   review status                The findings on this branch and their state.
   review stats                 Rounds to pass and how findings were answered, across branches.
-  review eval [--case <name>]  Score the reviewer on .guardwright/review-evals/*.toml.
+  review eval [--case <name>]  Score the reviewer on .cagr/review-evals/*.toml.
 
 Exit codes: 0 passed, 1 Important findings open, 2 error.`;
 
@@ -47,7 +47,7 @@ function takeFlag(args: string[], name: string) {
 	return true;
 }
 
-/** The options of a plain `guardwright review`. Throws on anything else. */
+/** The options of a plain `cagr review`. Throws on anything else. */
 export function parseReviewArgs(args: string[]) {
 	const rest = [...args];
 	const issue = takeFlag(rest, "--issue");
@@ -63,7 +63,7 @@ export function parseReviewArgs(args: string[]) {
 		scan = rest.splice(scanIndex, end - scanIndex).slice(1);
 		if (scan.length === 0)
 			throw new ReviewInputError(
-				"Name the globs to scan: guardwright review --scan 'src/**'",
+				"Name the globs to scan: cagr review --scan 'src/**'",
 			);
 	}
 	if (rest.length > 0)
@@ -105,7 +105,7 @@ export async function reviewCommand(
 			| undefined;
 		if (!id || !kind)
 			throw new ReviewInputError(
-				`Usage: guardwright review answer <id> --wrong|--intentional|--minor "<why>"`,
+				`Usage: cagr review answer <id> --wrong|--intentional|--minor "<why>"`,
 			);
 		const reason = args[args.indexOf(`--${kind}`) + 1] ?? "";
 		const { file, record } = await branchRecord(cwd);
@@ -163,7 +163,7 @@ export async function reviewCommand(
 				"issue",
 				"create",
 				"--title",
-				`guardwright scan: ${outcome.found.length} finding${outcome.found.length === 1 ? "" : "s"} in ${scan.join(", ")}`,
+				`cagr scan: ${outcome.found.length} finding${outcome.found.length === 1 ? "" : "s"} in ${scan.join(", ")}`,
 				"--body-file",
 				"-",
 			],

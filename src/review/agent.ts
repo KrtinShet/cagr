@@ -97,7 +97,7 @@ export function claudeResult(output: string): ClaudeEvent | null {
 const codex: ReviewAgent = {
 	name: "codex",
 	async ask(request) {
-		const dir = mkdtempSync(join(tmpdir(), "guardwright-review-"));
+		const dir = mkdtempSync(join(tmpdir(), "cagr-review-"));
 		try {
 			const schemaFile = join(dir, "schema.json");
 			const outFile = join(dir, "out.json");
@@ -143,7 +143,7 @@ export function commandAgent(command: string): ReviewAgent {
 	return {
 		name: command.split(" ")[0] ?? "command",
 		async ask(request) {
-			const dir = mkdtempSync(join(tmpdir(), "guardwright-review-"));
+			const dir = mkdtempSync(join(tmpdir(), "cagr-review-"));
 			try {
 				const promptFile = join(dir, "prompt.md");
 				const schemaFile = join(dir, "schema.json");

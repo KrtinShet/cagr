@@ -79,8 +79,7 @@ export async function ci(
 		check(
 			"Generated files",
 			drift.map(
-				(file) =>
-					`${file} is out of date. Run \`guardwright sync\` and commit.`,
+				(file) => `${file} is out of date. Run \`cagr sync\` and commit.`,
 			),
 		),
 	);
@@ -130,7 +129,7 @@ export async function ci(
 	);
 	if (touched)
 		editProblems.push(
-			`The edit checks changed files, so the branch was not formatted or fixed before commit. Run the checks locally (\`guardwright check <files>\`) and commit:\n${touched}`,
+			`The edit checks changed files, so the branch was not formatted or fixed before commit. Run the checks locally (\`cagr check <files>\`) and commit:\n${touched}`,
 		);
 	checks.push(check("Edit checks", editProblems));
 
@@ -251,7 +250,7 @@ export function summary(result: CiResult) {
 	);
 	const failed = result.checks.filter((entry) => !entry.ok);
 	return [
-		`## guardwright: ${result.ok ? "all checks pass" : `${failed.length} check${failed.length === 1 ? "" : "s"} failed`}`,
+		`## cagr: ${result.ok ? "all checks pass" : `${failed.length} check${failed.length === 1 ? "" : "s"} failed`}`,
 		"",
 		`Risk tier: **${result.tier}**`,
 		"",

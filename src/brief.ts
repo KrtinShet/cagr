@@ -8,7 +8,7 @@ export function brief(
 	rules: Rule[] = safeRules(config),
 ): string {
 	const lines = [
-		"guardwright checks this repo. When it blocks something, its message says what to do instead.",
+		"cagr checks this repo. When it blocks something, its message says what to do instead.",
 	];
 	const managers = new Map<string, string[]>();
 	for (const stack of config.stack) {
@@ -66,11 +66,11 @@ export function brief(
 	}
 	if (rules.length > 0)
 		lines.push(
-			`- ${rules.length} code rule${rules.length === 1 ? "" : "s"} (${rules.map((rule) => rule.id).join(", ")}). \`guardwright explain <id>\` shows one.`,
+			`- ${rules.length} code rule${rules.length === 1 ? "" : "s"} (${rules.map((rule) => rule.id).join(", ")}). \`cagr explain <id>\` shows one.`,
 		);
 	if (config.review.enabled && config.review.gate.length > 0)
 		lines.push(
-			`- Before ${config.review.gate.map((match) => `\`${match}\``).join(" or ")}, commit and run \`guardwright review\` (give it a 15 minute timeout). Fix or answer every Important finding.${config.review.pr_sections.length > 0 ? ` The pull request body needs these headings: ${config.review.pr_sections.join(", ")}.` : ""}`,
+			`- Before ${config.review.gate.map((match) => `\`${match}\``).join(" or ")}, commit and run \`cagr review\` (give it a 15 minute timeout). Fix or answer every Important finding.${config.review.pr_sections.length > 0 ? ` The pull request body needs these headings: ${config.review.pr_sections.join(", ")}.` : ""}`,
 		);
 	if (!config.review.agents_may_merge)
 		lines.push("- Do not merge or approve pull requests. A person does that.");

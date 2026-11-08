@@ -322,7 +322,7 @@ const list = (values: string[]) => `[${values.map(q).join(", ")}]`;
 
 export const starterReviewGuide = `# Review guide
 
-\`guardwright review\` reads this file into every review. Say what matters in this repo and what does not.
+\`cagr review\` reads this file into every review. Say what matters in this repo and what does not.
 
 ## Always check
 
@@ -341,7 +341,7 @@ export const starterReviewGuide = `# Review guide
 
 export function configToml(detection: Detection): string {
 	const lines = [
-		"# guardwright config. `guardwright doctor` checks it; `guardwright sync` applies it.",
+		"# cagr config. `cagr doctor` checks it; `cagr sync` applies it.",
 		'extends = ["recommended"]',
 		"",
 		"[agents]",
@@ -384,7 +384,7 @@ export function configToml(detection: Detection): string {
 		'# reason = "Use `bun run db:migrate --name <change>`."',
 		"",
 		"# The preset gates `gh pr create` on a review by a reviewer agent and keeps merging with people.",
-		"# REVIEW.md says what the reviewer should check. `guardwright review help` shows the commands.",
+		"# REVIEW.md says what the reviewer should check. `cagr review help` shows the commands.",
 		"# [review]",
 		'# effort = "standard"   # quick, standard or deep; high-risk changes always get deep',
 		'# skip = ["**/*.snap"]',
@@ -396,7 +396,7 @@ export function configToml(detection: Detection): string {
 		'# owners = ["@your-org/security"]',
 		'# reason = "Sign-in and sessions."',
 		"",
-		"# GitHub: `guardwright sync` writes the workflow, the PR template and CODEOWNERS.",
+		"# GitHub: `cagr sync` writes the workflow, the PR template and CODEOWNERS.",
 		"# [ci]",
 		"# github = true",
 		"# review = true          # needs the ANTHROPIC_API_KEY secret",
@@ -435,7 +435,7 @@ export async function init(
 	const file = join(root, configFileName);
 	if (existsSync(file) && !options.force)
 		throw new Error(
-			`${configFileName} already exists. Run \`guardwright sync\` to rewrite the adapter files, or pass --force to start over.`,
+			`${configFileName} already exists. Run \`cagr sync\` to rewrite the adapter files, or pass --force to start over.`,
 		);
 	const detection = await detect(root);
 	const text = configToml(detection);
@@ -458,7 +458,7 @@ export async function init(
 		notes.push(`Set git core.hooksPath to ${config.git.hooks_path}.`);
 	} else
 		notes.push(
-			"Not a git repo, so the git hooks were written but core.hooksPath was not set. Run `guardwright install-git-hooks` after `git init`.",
+			"Not a git repo, so the git hooks were written but core.hooksPath was not set. Run `cagr install-git-hooks` after `git init`.",
 		);
 	if (config.agents.enabled.includes("codex"))
 		notes.push(

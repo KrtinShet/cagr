@@ -9,7 +9,7 @@ test("no review denies and says to run one", () => {
 	const result = gateResult(null, head, settings);
 	expect(result.kind).toBe("deny");
 	expect(result.kind === "deny" && result.reason).toContain(
-		"Run `guardwright review`",
+		"Run `cagr review`",
 	);
 });
 
@@ -25,7 +25,7 @@ test("open Important findings deny and name each one with how to answer it", () 
 	expect(result.kind).toBe("deny");
 	const reason = result.kind === "deny" ? result.reason : "";
 	expect(reason).toContain("f1 src/a.ts:4  Crash on empty list");
-	expect(reason).toContain("guardwright review answer f1 --wrong");
+	expect(reason).toContain("cagr review answer f1 --wrong");
 	expect(reason).not.toContain("Step back");
 });
 
@@ -68,7 +68,7 @@ test("a review that could not run does not open the gate on findings still open"
 	const reason = result.kind === "deny" ? result.reason : "";
 	expect(reason).toContain("could not run (claude timed out)");
 	expect(reason).toContain("f1 src/a.ts:4");
-	expect(reason).toContain("guardwright review answer f1");
+	expect(reason).toContain("cagr review answer f1");
 });
 
 test("after an earlier good round, a failed one says the newest commits go out unreviewed", () => {

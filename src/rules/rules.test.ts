@@ -37,9 +37,9 @@ examples:
 
 async function repo(rules: Record<string, string>) {
 	const root = await mkdtemp(join(tmpdir(), "gw-rules-"));
-	await mkdir(join(root, ".guardwright/rules"), { recursive: true });
+	await mkdir(join(root, ".cagr/rules"), { recursive: true });
 	for (const [name, text] of Object.entries(rules))
-		await writeFile(join(root, ".guardwright/rules", name), text);
+		await writeFile(join(root, ".cagr/rules", name), text);
 	return { root, config: resolveConfig({}, root, "test.toml") };
 }
 
