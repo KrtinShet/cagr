@@ -227,12 +227,15 @@ function apiFields(args: string[]) {
 	return fields;
 }
 
-/** The `head` of a JSON body given with --input, when it is a file cagr can read. */
-function inputHead(args: string[], readFile: (path: string) => string | null) {
-	const index = args.findIndex(
-		(word) => word === "--input" || word.startsWith("--input="),
-	);
-	if (index === -1) return undefined;
+const inputIndex = (args: string[]) =>
+	args.findIndex((word) => word === "--input" || word.startsWith("--input="));
+
+/** The `head` of the JSON body given with --input, when it is a file cagr can read. */
+function inputHead(
+	args: string[],
+	index: number,
+	readFile: (path: string) => string | null,
+) {
 	const word = args[index] as string;
 	const path = word.includes("=")
 		? word.slice(word.indexOf("=") + 1)
@@ -252,9 +255,13 @@ function apiHead(
 	line: string,
 	readFile: (path: string) => string | null,
 ) {
-	const fields = apiFields(raw.slice(1));
-	if (!createApi.test(line))
-		return fields.get("head") ?? inputHead(raw.slice(1), readFile);
+	const args = raw.slice(1);
+	const input = inputIndex(args);
+	// With --input, gh sends the fields as query parameters and the body comes from the file.
+	if (input !== -1)
+		return createApi.test(line) ? undefined : inputHead(args, input, readFile);
+	const fields = apiFields(args);
+	if (!createApi.test(line)) return fields.get("head");
 	const literal = line.match(/headRefName\s*:\s*\\?"([^"\\]+)/);
 	if (literal) return literal[1];
 	const variable = line.match(/headRefName\s*:\s*\$(\w+)/)?.[1];

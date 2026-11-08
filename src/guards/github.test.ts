@@ -338,3 +338,21 @@ test("REST pull request creation by full URL, on github.com or GHES, is gated", 
 		),
 	).toBe(false);
 });
+
+test("with --input the head comes only from the input file", () => {
+	const target = (line: string, read: (path: string) => string | null) =>
+		gateTarget(line, recommended, "feat/x", read);
+	const other = () => JSON.stringify({ head: "feat/other", base: "main" });
+	expect(
+		target("gh api repos/o/r/pulls --input body.json -f head=feat/x", other),
+	).toEqual({ reason: expect.stringContaining("Check out feat/other") });
+	expect(
+		target("gh api repos/o/r/pulls --input body.json -f head=feat/x", none),
+	).toEqual({ reason: expect.stringContaining("cannot tell which branch") });
+	expect(
+		target(
+			`gh api graphql --input q.json -f query='mutation { createPullRequest(input: {headRefName: "feat/x"}) { clientMutationId } }'`,
+			none,
+		),
+	).toEqual({ reason: expect.stringContaining("cannot tell which branch") });
+});
