@@ -8,6 +8,7 @@ import {
 import { dirname, join, relative } from "node:path";
 import type { AgentName, Config } from "./config/schema";
 import { type GitHookName, gitHookNames } from "./git-hooks";
+import { codeowners, pullRequestTemplate, workflowYaml } from "./github-files";
 import type { AgentEvent } from "./hook/types";
 import { toPosix } from "./paths";
 import { run } from "./run";
@@ -146,6 +147,26 @@ function targets(config: Config, only?: "git"): Target[] {
 			executable: true,
 			desired: () => gitHookScript(config, hook),
 		});
+	if (only !== "git" && config.ci.github) {
+		list.push({
+			path: join(config.root, ".github", "workflows", "guardwright.yml"),
+			executable: false,
+			desired: () => workflowYaml(config),
+		});
+		if (config.review.pr_sections.length > 0)
+			list.push({
+				path: join(config.root, ".github", "pull_request_template.md"),
+				executable: false,
+				desired: () => pullRequestTemplate(config),
+			});
+		const owners = codeowners(config);
+		if (owners)
+			list.push({
+				path: join(config.root, ".github", "CODEOWNERS"),
+				executable: false,
+				desired: () => owners,
+			});
+	}
 	return list;
 }
 

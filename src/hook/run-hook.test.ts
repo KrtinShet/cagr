@@ -48,3 +48,16 @@ test("a found config is enforced", async () => {
 	);
 	expect(output.hookSpecificOutput.permissionDecision).toBe("deny");
 });
+
+test("inside a reviewer agent the hooks stay out of the way", async () => {
+	process.env.GUARDWRIGHT_REVIEWER = "1";
+	try {
+		expect(
+			await runHook("claude", "command.before", bashCall, "/repo", () =>
+				config({ stack: [{ language: "typescript", package_manager: "bun" }] }),
+			),
+		).toBe("");
+	} finally {
+		delete process.env.GUARDWRIGHT_REVIEWER;
+	}
+});

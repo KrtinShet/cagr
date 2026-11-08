@@ -80,6 +80,30 @@ export const guards: GuardInfo[] = [
 		config:
 			'[git] commit_message = "conventional" | "off" | { pattern, example }, commit_types',
 	},
+	{
+		id: "review-gate",
+		event: "command.before",
+		catches:
+			"A [review] gate command (by default `gh pr create` and `gh pr ready`) when the current commit has no review, or the review left an Important finding open. A review that could not run lets the command through and tells the human.",
+		fix: 'Run `guardwright review`, then fix each finding or answer it with `guardwright review answer <id> --wrong|--intentional|--minor "<why>"`.',
+		config: "[review] enabled, gate, max_rounds",
+	},
+	{
+		id: "pr-body",
+		event: "command.before",
+		catches:
+			"`gh pr create` with --fill, no body, or a body that lacks a [review] pr_sections heading.",
+		fix: "Pass --body or --body-file with a `## <section>` heading for each section, filled in.",
+		config: "[review] pr_sections",
+	},
+	{
+		id: "agent-approval",
+		event: "command.before",
+		catches:
+			"`gh pr merge`, `gh pr review --approve`, and the merge, auto-merge and approve calls through `gh api`.",
+		fix: "Say the pull request is ready and let a person approve and merge it.",
+		config: "[review] agents_may_merge",
+	},
 ];
 
 export const guardIds = guards.map((guard) => guard.id);

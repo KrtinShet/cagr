@@ -1,11 +1,19 @@
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { brief } from "../brief";
 import type { Config } from "../config/schema";
 import { gitContext } from "../git";
 import { commandFinding, needsGitContext } from "../guards/command";
 import { editFinding } from "../guards/edit";
 import { render } from "../guards/finding";
+import {
+	agentApprovalFinding,
+	isGateCommand,
+	prBodyFinding,
+} from "../guards/github";
 import { insideRoot } from "../paths";
+import { gateResult } from "../review/gate";
+import { readRecord, recordPath } from "../review/store";
 import {
 	findInFiles,
 	formatFinding,
@@ -61,9 +69,40 @@ async function commandBefore(
 				git.toplevel === git.mainCheckout,
 		};
 	}
-	const finding = commandFinding(input.command, config, context);
-	return finding
-		? { kind: "deny", reason: render(finding) }
+	const finding =
+		commandFinding(input.command, config, context) ??
+		agentApprovalFinding(input.command, config) ??
+		(isGateCommand(input.command, config)
+			? prBodyFinding(input.command, config, (path) =>
+					readText(resolve(input.cwd, path)),
+				)
+			: null);
+	if (finding) return { kind: "deny", reason: render(finding) };
+	if (!isGateCommand(input.command, config)) return { kind: "allow" };
+	return reviewGate(input.cwd, config);
+}
+
+function readText(path: string) {
+	try {
+		return readFileSync(path, "utf8");
+	} catch {
+		return null;
+	}
+}
+
+/** Reads the branch's review record: one git call and one file, to stay inside the command budget. */
+async function reviewGate(cwd: string, config: Config): Promise<Decision> {
+	const git = await gitContext(cwd);
+	if (!git.commonDir || !git.branch) return { kind: "allow" };
+	const record = readRecord(recordPath(git.commonDir, git.branch));
+	const result = gateResult(record, git.head, config);
+	if (result.kind === "deny")
+		return {
+			kind: "deny",
+			reason: render({ id: "review-gate", reason: result.reason }),
+		};
+	return result.notice
+		? { kind: "allow", notice: result.notice }
 		: { kind: "allow" };
 }
 

@@ -1,4 +1,5 @@
 import { resolve } from "node:path";
+import { annotations, ci, ciReport, publish } from "./ci";
 import { jsonSchema } from "./config/json-schema";
 import { ConfigError, loadConfig } from "./config/load";
 import { type AgentName, agentNames, type Config } from "./config/schema";
@@ -16,6 +17,11 @@ import { editChecks } from "./hook/handlers";
 import { runHook } from "./hook/run-hook";
 import { type AgentEvent, agentEvents } from "./hook/types";
 import { init } from "./init";
+import { ReviewerError } from "./review/agent";
+import { reviewCommand, riskCommand } from "./review/cli";
+import { ghCli } from "./review/github";
+import { AnswerError } from "./review/report";
+import { ReviewInputError } from "./review/review";
 import { loadRules, RuleError, testRules } from "./rules/rules";
 import { GitSetupError, installGitHooks, sync } from "./sync";
 import { version } from "./version";
@@ -27,7 +33,11 @@ Usage: guardwright <command>
   init [--dry-run] [--force]   Detect the repo, write guardwright.toml, the agent hooks and the git hooks.
   sync [--check]               Rewrite the generated agent and git hook files. --check fails on drift.
   install-git-hooks            Write the git hooks and set core.hooksPath.
-  doctor                       Check the wiring, the tools each check needs, and hook timings.
+  doctor [--github]            Check the wiring, the tools each check needs, and hook timings.
+                               --github also checks branch protection through gh.
+  review [...]                 Review this branch with a reviewer agent. \`guardwright review help\` for more.
+  risk [--base <b>] [files]    The risk tier of this branch's change, the approvals it needs, the owners.
+  ci [--base <branch>]         In CI: the same checks the hooks ran, on the branch's changed files.
   check <files...>             Run the edit checks and code rules on files.
   explain <id>                 Explain a guard or a code rule.
   rules test                   Check every rule's examples: invalid ones must fire, valid ones must not.
@@ -169,7 +179,9 @@ async function main(argv: string[]): Promise<number> {
 			return 0;
 		}
 		case "doctor": {
-			const result = await doctor(requireConfig());
+			const result = await doctor(requireConfig(), {
+				github: args.includes("--github") ? ghCli : undefined,
+			});
 			console.log(result.report);
 			return result.ok ? 0 : 1;
 		}
@@ -243,6 +255,20 @@ async function main(argv: string[]): Promise<number> {
 			);
 			return failed === 0 ? 0 : 1;
 		}
+		case "review":
+			return reviewCommand(requireConfig(), args, process.cwd());
+		case "risk":
+			return riskCommand(requireConfig(), args, process.cwd());
+		case "ci": {
+			const base = flag(args, "--base") ?? undefined;
+			const result = await ci(requireConfig(), { cwd: process.cwd(), base });
+			console.log(ciReport(result));
+			if (process.env.GITHUB_ACTIONS) {
+				for (const line of annotations(result)) console.log(line);
+				publish(result);
+			}
+			return result.ok ? 0 : 1;
+		}
 		case "schema":
 			console.log(JSON.stringify(jsonSchema(), null, "\t"));
 			return 0;
@@ -255,7 +281,10 @@ const expected = (error: unknown) =>
 	error instanceof UsageError ||
 	error instanceof GitSetupError ||
 	error instanceof ConfigError ||
-	error instanceof RuleError;
+	error instanceof RuleError ||
+	error instanceof ReviewInputError ||
+	error instanceof ReviewerError ||
+	error instanceof AnswerError;
 
 export function runCli(argv: string[]) {
 	main(argv).then(

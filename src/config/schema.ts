@@ -1,4 +1,4 @@
-import { arr, bool, type Node, obj, oneOf, str } from "./schema-dsl";
+import { arr, bool, type Node, num, obj, oneOf, str } from "./schema-dsl";
 
 export const agentNames = ["claude", "codex"] as const;
 export type AgentName = (typeof agentNames)[number];
@@ -14,6 +14,11 @@ export const packageManagers = [
 	"pipenv",
 ] as const;
 export type PackageManager = (typeof packageManagers)[number];
+
+export const riskTiers = ["low", "medium", "high"] as const;
+export type RiskTier = (typeof riskTiers)[number];
+export const efforts = ["quick", "standard", "deep"] as const;
+export type Effort = (typeof efforts)[number];
 
 const strings = (description: string) => arr(str(), { description });
 const oneOrMore = (description: string) =>
@@ -180,6 +185,107 @@ export const configSchema: Node = obj({
 		},
 		{ description: "Custom code rules." },
 	),
+	review: obj(
+		{
+			enabled: bool({
+				description:
+					"Gate pull requests on a review by a reviewer agent in a fresh context.",
+			}),
+			gate: strings(
+				"Commands that need a passing review of the current commit, matched like [commands] blocked.",
+			),
+			reviewer: str({
+				minLength: 1,
+				description:
+					'"auto", "claude", "codex", or a command. A command gets {prompt_file} and {schema_file} and prints the findings as JSON.',
+			}),
+			model: str({
+				description: "Model for the reviewer agent, if not its default.",
+			}),
+			guide: str({
+				description:
+					"The repo's review instructions, read into every review. Missing is fine.",
+			}),
+			effort: str({
+				enum: efforts,
+				description:
+					"quick: one finder. standard: a bug finder, a security finder and a verifier. deep: three finders and three voting verifiers. High-risk changes always get deep.",
+			}),
+			security: bool({
+				description: "Run a security finder in standard and deep reviews.",
+			}),
+			max_rounds: num({
+				min: 1,
+				description:
+					"After this many rounds the reviewer asks the author to step back and rethink the approach.",
+			}),
+			timeout_seconds: num({
+				min: 30,
+				description: "How long one reviewer agent may run.",
+			}),
+			skip: strings("Globs the reviewer does not review."),
+			pr_sections: strings(
+				"Headings a pull request body must have. `gh pr create` without them is denied.",
+			),
+			agents_may_merge: bool({
+				description:
+					"Let agents run `gh pr merge` and `gh pr review --approve`. Off: approval stays with a person.",
+			}),
+		},
+		{ description: "The review gate and the reviewer agent." },
+	),
+	risk: obj(
+		{
+			default: str({
+				enum: riskTiers,
+				description: "Tier of a file no [[risk.paths]] entry matches.",
+			}),
+			paths: arr(
+				obj(
+					{
+						glob: str({
+							minLength: 1,
+							description: "Files this entry covers.",
+						}),
+						tier: str({ enum: riskTiers, description: "Their risk tier." }),
+						owners: strings(
+							"Code owners for these files, written to CODEOWNERS (@user or @org/team).",
+						),
+						reason: str({ description: "Why these files carry this tier." }),
+					},
+					{ required: ["glob", "tier"] },
+				),
+				{
+					description:
+						"A file takes the highest tier of the entries it matches. The change takes the highest tier of its files.",
+				},
+			),
+		},
+		{
+			description:
+				"Risk tiers set by the change, not the author. Low needs no approval, medium one, high two.",
+		},
+	),
+	ci: obj(
+		{
+			github: bool({
+				description:
+					"`guardwright sync` writes the GitHub workflow, the pull request template and CODEOWNERS.",
+			}),
+			review: bool({
+				description:
+					"The workflow reviews each pull request with `guardwright review --ci`. Needs the ANTHROPIC_API_KEY secret.",
+			}),
+			nightly: strings(
+				"Globs the workflow reviews every night with `guardwright review --scan`, opening an issue for findings.",
+			),
+			install: str({
+				description:
+					"The shell command the workflow uses to install guardwright.",
+			}),
+		},
+		{ description: "CI." },
+	),
 	brief: strings("Extra lines for the session start brief."),
 });
 
@@ -200,6 +306,12 @@ export type Stack = {
 };
 export type ProtectedFile = { glob: string; except: string[]; reason: string };
 export type BlockedCommand = { match: string; reason: string };
+export type RiskPath = {
+	glob: string;
+	tier: RiskTier;
+	owners: string[];
+	reason: string | null;
+};
 
 export type Config = {
 	root: string;
@@ -223,6 +335,27 @@ export type Config = {
 	files: { protected: ProtectedFile[] };
 	commands: { blocked: BlockedCommand[] };
 	rules: { dirs: string[] };
+	review: {
+		enabled: boolean;
+		gate: string[];
+		reviewer: string;
+		model: string | null;
+		guide: string;
+		effort: Effort;
+		security: boolean;
+		max_rounds: number;
+		timeout_seconds: number;
+		skip: string[];
+		pr_sections: string[];
+		agents_may_merge: boolean;
+	};
+	risk: { default: RiskTier; paths: RiskPath[] };
+	ci: {
+		github: boolean;
+		review: boolean;
+		nightly: string[];
+		install: string;
+	};
 	brief: string[];
 };
 

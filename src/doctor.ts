@@ -1,8 +1,11 @@
 import { accessSync, constants, existsSync } from "node:fs";
 import { join } from "node:path";
 import type { Config } from "./config/schema";
+import { githubLines } from "./doctor-github";
 import { gitHookNames } from "./git-hooks";
 import { readTimings } from "./hook/timings";
+import { pickAgent } from "./review/agent";
+import type { Gh } from "./review/github";
 import { loadRules } from "./rules/rules";
 import { run } from "./run";
 import { isGitRepo, notGitRepo, sync } from "./sync";
@@ -66,6 +69,7 @@ const available = (program: { name: string; dirs: string[] }, root: string) =>
 
 export async function doctor(
 	config: Config,
+	options: { github?: Gh } = {},
 ): Promise<{ ok: boolean; report: string }> {
 	const sections: [string, Line[]][] = [];
 	const configLines: Line[] = [{ ok: true, text: `Config: ${config.source}` }];
@@ -156,6 +160,34 @@ export async function doctor(
 		);
 	}
 	sections.push(["Tools", tools]);
+
+	if (config.review.enabled) {
+		const review: Line[] = [];
+		try {
+			const agent = pickAgent(config.review.reviewer);
+			review.push({ ok: true, text: `Reviewer: ${agent.name}.` });
+		} catch (error) {
+			review.push({ ok: false, text: `${(error as Error).message}.` });
+		}
+		review.push(
+			existsSync(join(config.root, config.review.guide))
+				? {
+						ok: true,
+						text: `${config.review.guide} is read into every review.`,
+					}
+				: {
+						ok: true,
+						text: `No ${config.review.guide}. Optional: write what reviewers should check in this repo, and what to skip.`,
+					},
+		);
+		review.push({
+			ok: true,
+			text: `Gate: ${config.review.gate.map((match) => `\`${match}\``).join(", ") || "none"}. Effort ${config.review.effort}, up to ${config.review.max_rounds} rounds.`,
+		});
+		sections.push(["Review", review]);
+	}
+	if (options.github)
+		sections.push(["GitHub", await githubLines(config, options.github)]);
 
 	const timing: Line[] = [];
 	const recorded = readTimings(config.root);

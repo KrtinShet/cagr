@@ -320,6 +320,25 @@ export async function detect(
 const q = (value: string) => JSON.stringify(value);
 const list = (values: string[]) => `[${values.map(q).join(", ")}]`;
 
+export const starterReviewGuide = `# Review guide
+
+\`guardwright review\` reads this file into every review. Say what matters in this repo and what does not.
+
+## Always check
+
+- Errors are handled where they happen, or passed up with context. Nothing fails silently.
+- New behavior has a test that would fail if the code broke.
+- Inputs from users, files and the network are checked before use.
+
+## Important here
+
+<!-- The places where a bug costs the most: money, auth, data loss, migrations. -->
+
+## Skip
+
+<!-- Generated code, vendored code, snapshots. Style is left to the linters. -->
+`;
+
 export function configToml(detection: Detection): string {
 	const lines = [
 		"# guardwright config. `guardwright doctor` checks it; `guardwright sync` applies it.",
@@ -364,6 +383,25 @@ export function configToml(detection: Detection): string {
 		'# match = "prisma db push"',
 		'# reason = "Use `bun run db:migrate --name <change>`."',
 		"",
+		"# The preset gates `gh pr create` on a review by a reviewer agent and keeps merging with people.",
+		"# REVIEW.md says what the reviewer should check. `guardwright review help` shows the commands.",
+		"# [review]",
+		'# effort = "standard"   # quick, standard or deep; high-risk changes always get deep',
+		'# skip = ["**/*.snap"]',
+		"",
+		"# Risk tiers by path: low needs no approval, medium one, high two. The change takes its highest file.",
+		"# [[risk.paths]]",
+		'# glob = "src/auth/**"',
+		'# tier = "high"',
+		'# owners = ["@your-org/security"]',
+		'# reason = "Sign-in and sessions."',
+		"",
+		"# GitHub: `guardwright sync` writes the workflow, the PR template and CODEOWNERS.",
+		"# [ci]",
+		"# github = true",
+		"# review = true          # needs the ANTHROPIC_API_KEY secret",
+		'# nightly = ["src/**"]',
+		"",
 	);
 	return lines.join("\n");
 }
@@ -407,6 +445,11 @@ export async function init(
 	const config = loadConfig(root);
 	if (!config) throw new Error(`Could not read back ${file}.`);
 	const written = [configFileName, ...sync(config).written];
+	const guide = join(root, config.review.guide);
+	if (config.review.enabled && !existsSync(guide)) {
+		writeFileSync(guide, starterReviewGuide);
+		written.push(config.review.guide);
+	}
 	await formatGenerated(config, written);
 	if (detection.isGitRepo) {
 		await installGitHooks(config);

@@ -10,6 +10,8 @@ test("the brief lists what the config enforces, briefly", () => {
 		'- Git: never push to main, push a branch and open a pull request; branches look like feat/deal-pipeline; commit subjects look like "feat(deals): add pipeline board"; no force pushes; no --no-verify.',
 		"- Do not edit: .env*, {bun.lock,bun.lockb,package-lock.json,pnpm-lock.yaml,yarn.lock,uv.lock,poetry.lock,Pipfile.lock,Cargo.lock,go.sum}, packages/db/prisma/migrations/**.",
 		"- Do not run: `prisma db push`, `prisma migrate dev`, `prisma migrate reset`.",
+		"- Before `gh pr create` or `gh pr ready`, commit and run `guardwright review` (give it a 15 minute timeout). Fix or answer every Important finding. The pull request body needs these headings: Testing, Risk, How to revert.",
+		"- Do not merge or approve pull requests. A person does that.",
 	]);
 });
 

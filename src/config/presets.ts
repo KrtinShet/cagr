@@ -30,6 +30,25 @@ export const builtinPresets: Record<string, RawConfig> = {
 			block_force_push: true,
 			block_hook_skips: true,
 		},
+		review: {
+			enabled: true,
+			pr_sections: ["Testing", "Risk", "How to revert"],
+			agents_may_merge: false,
+		},
+		risk: {
+			paths: [
+				{
+					glob: ".github/workflows/**",
+					tier: "high",
+					reason: "CI workflows run with the repo's secrets.",
+				},
+				{
+					glob: "{**/*.md,docs/**}",
+					tier: "low",
+					reason: "Docs and copy.",
+				},
+			],
+		},
 		files: {
 			protected: [
 				{

@@ -11,8 +11,10 @@ import {
 	configSchema,
 	defaultCommitTypes,
 	defaultExtensions,
+	type Effort,
 	type NameRule,
 	type PackageManager,
+	type RiskTier,
 } from "./schema";
 
 export class ConfigError extends Error {}
@@ -127,6 +129,9 @@ function applyDefaults(raw: RawConfig, root: string, source: string): Config {
 	const files = (raw.files ?? {}) as RawConfig;
 	const commands = (raw.commands ?? {}) as RawConfig;
 	const rules = (raw.rules ?? {}) as RawConfig;
+	const review = (raw.review ?? {}) as RawConfig;
+	const risk = (raw.risk ?? {}) as RawConfig;
+	const ci = (raw.ci ?? {}) as RawConfig;
 	const commitTypes =
 		(git.commit_types as string[] | undefined) ?? defaultCommitTypes;
 	const prePush = git.pre_push;
@@ -191,6 +196,41 @@ function applyDefaults(raw: RawConfig, root: string, source: string): Config {
 		},
 		rules: {
 			dirs: (rules.dirs as string[] | undefined) ?? [".guardwright/rules"],
+		},
+		review: {
+			enabled: (review.enabled as boolean | undefined) ?? false,
+			gate: (review.gate as string[] | undefined) ?? [
+				"gh pr create",
+				"gh pr ready",
+			],
+			reviewer: (review.reviewer as string | undefined) ?? "auto",
+			model: (review.model as string | undefined) ?? null,
+			guide: (review.guide as string | undefined) ?? "REVIEW.md",
+			effort: (review.effort as Effort | undefined) ?? "standard",
+			security: (review.security as boolean | undefined) ?? true,
+			max_rounds: (review.max_rounds as number | undefined) ?? 3,
+			timeout_seconds: (review.timeout_seconds as number | undefined) ?? 600,
+			skip: (review.skip as string[] | undefined) ?? [],
+			pr_sections: (review.pr_sections as string[] | undefined) ?? [],
+			agents_may_merge:
+				(review.agents_may_merge as boolean | undefined) ?? true,
+		},
+		risk: {
+			default: (risk.default as RiskTier | undefined) ?? "medium",
+			paths: ((risk.paths as RawConfig[] | undefined) ?? []).map((entry) => ({
+				glob: entry.glob as string,
+				tier: entry.tier as RiskTier,
+				owners: (entry.owners as string[] | undefined) ?? [],
+				reason: (entry.reason as string | undefined) ?? null,
+			})),
+		},
+		ci: {
+			github: (ci.github as boolean | undefined) ?? false,
+			review: (ci.review as boolean | undefined) ?? false,
+			nightly: (ci.nightly as string[] | undefined) ?? [],
+			install:
+				(ci.install as string | undefined) ??
+				"curl -fsSL https://github.com/guardwright/guardwright/releases/latest/download/install.sh | sh",
 		},
 		brief: (raw.brief as string[] | undefined) ?? [],
 	};
