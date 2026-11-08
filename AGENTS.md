@@ -27,4 +27,3 @@ guardwright: a harness for coding agents. TypeScript on Bun, shipped as one comp
 - Hooks fail open: an error in guardwright lets the call through and tells the human.
 - Keep to the budgets: command.before < 50ms, file.after_edit < 1s, turn.end < 60s.
 - Plain words. No em dashes, no emojis. Comments only for a non-obvious why.
-- Check ROADMAP.md before adding a feature: some are out of scope on purpose.

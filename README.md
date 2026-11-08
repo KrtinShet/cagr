@@ -111,7 +111,7 @@ review = true             # the workflow reviews each PR; needs the ANTHROPIC_AP
 nightly = ["src/**"]      # reviews old code every night and opens an issue
 ```
 
-In CI, `guardwright ci` runs the checks the agent ran (edit checks, turn-end checks, code rules, commit and branch names, generated files, the PR body) on the branch's changed files, so a change made without the hooks cannot merge. `guardwright review --ci` posts the review as inline PR comments; resolving a thread counts as an answer. `guardwright doctor --github` checks the branch protection that only GitHub can enforce: approvals, stale approval dismissal, thread resolution, code owners, required checks. [NORTHSTAR.md](NORTHSTAR.md) maps each part to the pipeline it comes from.
+In CI, `guardwright ci` runs the checks the agent ran (edit checks, turn-end checks, code rules, commit and branch names, generated files, the PR body) on the branch's changed files, so a change made without the hooks cannot merge. `guardwright review --ci` posts the review as inline PR comments; resolving a thread counts as an answer. `guardwright doctor --github` checks the branch protection that only GitHub can enforce: approvals, stale approval dismissal, thread resolution, code owners, required checks.
 
 ## Commands
 
@@ -144,5 +144,3 @@ Do not use it to hold back an agent you do not trust. Use a sandbox for that.
 
 - On Alpine and other musl systems, install `libstdc++` and `libgcc` first (`apk add libstdc++ libgcc`).
 - When the `guardwright` binary is not installed, the git hooks print a warning and let the commit or push through, so a teammate without it is not stuck.
-
-See [ROADMAP.md](ROADMAP.md) for what v0.1 leaves out.
