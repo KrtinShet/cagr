@@ -7,7 +7,7 @@ Coding agents slip. They run `npm install` in a bun repo, push to `main`, edit `
 - **Commands**: it denies the wrong package manager, a push to the protected branch, a force push, hook skips, and any command you list, before the command runs.
 - **Files**: it denies edits to protected files such as `.env*` and lockfiles, before the edit happens.
 - **Edits**: after each edit it runs your formatters and linters (Biome, ESLint, Ruff) and your own ast-grep code rules, on the changed files only.
-- **End of turn**: the agent may not finish while your checks (tsc, mypy, pytest, `bun run lint`) fail. After 3 blocked stops it lets the agent go and tells the human, so it never traps the agent in a loop.
+- **End of turn**: the agent may not finish while your checks (tsc, mypy, pytest, `bun run lint`) fail. It blocks at most 2 stops in a row, then lets the agent go and tells the human, so it never traps the agent in a loop.
 - **Pull requests**: `gh pr create` is denied until a reviewer agent in a fresh context has reviewed the current commit and every Important finding is fixed or answered. Agents may not merge or approve. See [Review](#review).
 - **Git**: the commit-msg and pre-push hooks check commit subjects, branch names and pushes to `main`. They cover any agent, and any human, even without agent hooks.
 
@@ -15,11 +15,21 @@ cagr does not replace your tools. It runs them at the right moment and shows the
 
 It works with Claude Code and Codex today, and through the git hooks with every other agent.
 
+## Docs
+
+The full docs are in [docs/](docs/README.md):
+
+- [Getting started](docs/getting-started.md): install, `cagr init`, `cagr doctor`.
+- [Configuration](docs/configuration.md): every key in `cagr.toml`.
+- [Guards](docs/guards.md): every built-in guard and its message.
+- [Hooks and events](docs/hooks-and-events.md), [Code rules](docs/code-rules.md), [Review](docs/review.md), [CI](docs/ci.md).
+- [CLI reference](docs/cli.md) and [Limits and troubleshooting](docs/limits.md).
+
 ## Quick start
 
 ```sh
 curl -fsSL https://github.com/krtinshet/cagr/releases/latest/download/install.sh | sh
-# or: bun add -d cagr    /    uv tool install cagr
+# or: bun add -d cagr    /    npm i -D cagr
 
 cd your-repo
 cagr init      # detects your stacks, writes cagr.toml and the hook files
@@ -85,7 +95,7 @@ examples:
 
 `cagr review` reviews the branch against its base with a reviewer agent: Claude Code or Codex, whichever you run, started read-only in a fresh context. It reads `REVIEW.md` (what matters in this repo), the diff, the commit messages and the risk tier, and reads any other file it needs.
 
-- **Effort** sets the agents. `quick`: one bug finder. `standard`: a bug finder and a security finder, then a verifier that drops what it cannot confirm. `deep`: three finders and three verifiers, keeping a finding when two agree. A high-risk change always gets `deep`.
+- **Effort** sets the agents. `quick`: one bug finder. `standard`: a bug finder and a security finder, then a verifier that drops what it cannot confirm. `deep`: three finders and three verifiers, keeping a finding when two agree. A high-risk change gets `deep` unless you pass `--effort`.
 - **Findings** are Important, Nit or Pre-existing. Style findings are dropped. Only Important ones hold the gate.
 - **Rounds**: after round 1 the reviewer sees only the new commits and the open findings, marks what was fixed, and does not repeat itself. After `max_rounds` (3) it tells the author to step back.
 - **Answers**: a finding that is wrong or intentional gets an answer instead of a fix: `cagr review answer f2 --wrong "the list is never empty here"`. A person reads every answer. `review stats` shows rounds to pass and how often findings were answered as wrong, which is the reviewer's noise.
