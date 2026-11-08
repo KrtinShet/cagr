@@ -83,10 +83,16 @@ export function commandFinding(
 		context.inMainCheckout &&
 		!commands.some(({ words }) => programName(programWords(words)) === "cd");
 	for (const { words, raw } of commands) {
-		// Blocked entries see the redirections, so `match = "> .env"` works.
-		const blocked = config.commands.blocked.find((entry) =>
-			containsWords(raw, entry.match, true),
-		);
+		// An entry that names a redirection (`match = "> .env"`) matches with them kept.
+		// Any other entry matches without them, so `npm 2>&1 publish` is still `npm publish`.
+		const blocked = config.commands.blocked.find((entry) => {
+			const withRedirections = hasRedirection(entry.match);
+			return containsWords(
+				withRedirections ? raw : words,
+				entry.match,
+				withRedirections,
+			);
+		});
 		if (blocked) return { id: "blocked-command", reason: blocked.reason };
 		const finding = simpleCommandFinding(words, config, {
 			...context,
@@ -195,6 +201,11 @@ function pushTarget(refspec: string, branch: string | null): string | null {
 		: refspec;
 	const name = destination.replace(/^\+/, "").replace(/^refs\/heads\//, "");
 	return name === "HEAD" || name === "@" ? branch : name;
+}
+
+function hasRedirection(match: string) {
+	const command = commandsWithRedirections(match)[0];
+	return command !== undefined && command.raw.length !== command.words.length;
 }
 
 /** True when `match`'s words appear in order, next to each other, in `words`. */

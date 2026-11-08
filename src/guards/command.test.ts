@@ -260,6 +260,7 @@ describe("redirections", () => {
 				blocked: [
 					{ match: "> .env", reason: "env" },
 					{ match: "psql < prod.sql", reason: "prod" },
+					{ match: "npm publish", reason: "publish" },
 				],
 			},
 		});
@@ -271,5 +272,7 @@ describe("redirections", () => {
 		expect(reason("psql < prod.sql")).toBe("prod");
 		expect(reason("psql -c 'select 1'")).toBeNull();
 		expect(reason("echo A=1 > .env.example")).toBeNull();
+		expect(reason("npm 2>&1 publish")).toBe("publish");
+		expect(reason("npm >/dev/null publish --tag x")).toBe("publish");
 	});
 });
