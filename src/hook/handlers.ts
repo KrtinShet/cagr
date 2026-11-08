@@ -75,9 +75,9 @@ async function commandBefore(
 		commandFinding(input.command, config, context) ??
 		agentApprovalFinding(input.command, config) ??
 		(isGateCommand(input.command, config)
-			? (prBodyFinding(input.command, config, (path) =>
+			? prBodyFinding(input.command, config, (path) =>
 					readText(resolve(input.cwd, path)),
-				) ?? gateOrderFinding(input.command, config))
+				)
 			: null);
 	if (finding) return { kind: "deny", reason: render(finding) };
 	if (!isGateCommand(input.command, config)) return { kind: "allow" };
@@ -100,6 +100,8 @@ async function reviewGate(
 ): Promise<Decision> {
 	const git = await gitContext(cwd);
 	if (!git.commonDir) return { kind: "allow" };
+	const order = gateOrderFinding(command, config, cwd);
+	if (order) return { kind: "deny", reason: render(order) };
 	const target = gateTarget(command, config, git.branch, (path) =>
 		readText(resolve(cwd, path)),
 	);

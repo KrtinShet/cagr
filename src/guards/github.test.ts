@@ -311,7 +311,7 @@ test("a gate command after a command that moves HEAD or the folder is denied", (
 		["git commit -m x && gh api repos/o/r/pulls -f head=feat/x", "git commit"],
 	];
 	for (const [line, moved] of moves)
-		expect(gateOrderFinding(line, recommended)?.reason).toContain(
+		expect(gateOrderFinding(line, recommended, "/repo")?.reason).toContain(
 			`runs \`${moved}\` before`,
 		);
 	for (const line of [
@@ -321,8 +321,10 @@ test("a gate command after a command that moves HEAD or the folder is denied", (
 		"git commit -am x",
 		"echo 'git commit && gh pr create'",
 	])
-		expect(gateOrderFinding(line, recommended)).toBeNull();
-	expect(gateOrderFinding("git commit && gh pr create", config())).toBeNull();
+		expect(gateOrderFinding(line, recommended, "/repo")).toBeNull();
+	expect(
+		gateOrderFinding("git commit && gh pr create", config(), "/repo"),
+	).toBeNull();
 });
 
 test("REST pull request creation by full URL, on github.com or GHES, is gated", () => {
@@ -369,10 +371,38 @@ test("gh pr checkout, git branch -f and git update-ref count as moving HEAD", ()
 		["git update-ref refs/heads/feat/x abc && gh pr create", "git update-ref"],
 	];
 	for (const [line, moved] of moves)
-		expect(gateOrderFinding(line, recommended)?.reason).toContain(
+		expect(gateOrderFinding(line, recommended, "/repo")?.reason).toContain(
 			`runs \`${moved}\` before`,
 		);
 	expect(
-		gateOrderFinding("git branch -v && gh pr create", recommended),
+		gateOrderFinding("git branch -v && gh pr create", recommended, "/repo"),
 	).toBeNull();
+});
+
+test("a cd to the same folder, or a git command that leaves HEAD alone, does not deny", () => {
+	const order = (line: string) =>
+		gateOrderFinding(line, recommended, "/work/repo");
+	for (const line of [
+		"cd /work/repo && gh pr create",
+		"cd . && gh pr create",
+		"cd ../repo && gh pr ready",
+		"cd /tmp && cd /work/repo && gh pr create",
+		"git checkout -- src/a.ts && gh pr create",
+		"git checkout main -- src/a.ts && gh pr create",
+		"git reset && gh pr create",
+		"git reset -- src/a.ts && gh pr create",
+		"git reset -q HEAD && gh pr create",
+	])
+		expect(order(line)).toBeNull();
+	for (const line of [
+		"cd /work/other && gh pr create",
+		"cd && gh pr create",
+		"cd - && gh pr create",
+		'cd "$DIR" && gh pr create',
+		"popd && gh pr create",
+		"git checkout feat/b && gh pr create",
+		"git reset --hard HEAD~1 && gh pr create",
+		"git reset main -- src/a.ts && gh pr create",
+	])
+		expect(order(line)?.id).toBe("review-gate");
 });

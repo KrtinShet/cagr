@@ -1,4 +1,6 @@
 import { expect, test } from "bun:test";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { resolveConfig } from "../config/load";
 import { recordPath, writeRecord } from "../review/store";
@@ -173,6 +175,27 @@ test("a line that commits, switches or moves before the gate command is denied",
 	expect(
 		await handle(
 			create(`git push -u origin HEAD && gh pr create -t x ${body}`),
+			config,
+		),
+	).toEqual({ kind: "allow" });
+});
+
+test("a cd to the repo the hook runs in is allowed, and outside a git repo the order check does not deny", async () => {
+	const { repo, head, config, file, create } = await setup();
+	writeRecord(file, record([round({ head })], [], "feat/x"));
+	expect(
+		await handle(
+			create(`cd ${repo.root} && gh pr create -t x ${body}`),
+			config,
+		),
+	).toEqual({ kind: "allow" });
+	const outside = mkdtempSync(join(tmpdir(), "cagr-nogit-"));
+	expect(
+		await handle(
+			{
+				...create(`git commit -am x && gh pr create -t x ${body}`),
+				cwd: outside,
+			},
 			config,
 		),
 	).toEqual({ kind: "allow" });

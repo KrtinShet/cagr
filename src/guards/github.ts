@@ -1,4 +1,6 @@
-import { basename } from "node:path";
+import { realpathSync } from "node:fs";
+import { homedir } from "node:os";
+import { basename, join, resolve } from "node:path";
 import type { Config } from "../config/schema";
 import { programWords, simpleCommands, withoutHeredocBodies } from "../shell";
 import { containsWords, gitOptionsWithValue } from "./command";
@@ -294,6 +296,18 @@ function mover(words: string[]) {
 	while ((words[index] ?? "").startsWith("-"))
 		index += gitOptionsWithValue.has(words[index] as string) ? 2 : 1;
 	const subcommand = words[index];
+	const args = words.slice(index + 1);
+	// `git checkout [<tree-ish>] -- <path>` restores files and leaves HEAD alone.
+	if (subcommand === "checkout" && args.includes("--")) return null;
+	if (subcommand === "reset") {
+		const end = args.indexOf("--");
+		const commit = (end === -1 ? args : args.slice(0, end)).find(
+			(word) => !word.startsWith("-"),
+		);
+		return commit === undefined || commit === "HEAD" || commit === "@"
+			? null
+			: "git reset";
+	}
 	if (subcommand === "branch")
 		return words
 			.slice(index + 1)
@@ -303,23 +317,54 @@ function mover(words: string[]) {
 	return subcommand && movesHead.has(subcommand) ? `git ${subcommand}` : null;
 }
 
+/** The folder a `cd` or `pushd` goes to, or null when cagr cannot tell. */
+function cdTarget(words: string[], dir: string | null) {
+	if (programName(words) === "popd" || dir === null) return null;
+	const args = words.slice(1).filter((word) => !/^-[LPe@]+$/.test(word));
+	const target = args[0] === "--" ? args[1] : args[0];
+	if (target === undefined || target === "~") return homedir();
+	if (target === "-" || /[$`*?]/.test(target)) return null;
+	if (target.startsWith("~/")) return join(homedir(), target.slice(2));
+	return resolve(dir, target);
+}
+
+const realpath = (path: string) => {
+	try {
+		return realpathSync(path);
+	} catch {
+		return resolve(path);
+	}
+};
+
 /**
  * A gate command after a command on the same line that moves HEAD or the
  * folder. The gate reads HEAD before the line runs, so it would check the
- * wrong commit.
+ * wrong commit. A `cd` to the folder the line starts in is fine.
  */
-export function gateOrderFinding(line: string, config: Config): Finding | null {
+export function gateOrderFinding(
+	line: string,
+	config: Config,
+	cwd: string,
+): Finding | null {
 	if (!config.review.enabled || config.review.gate.length === 0) return null;
+	const start = realpath(cwd);
 	let moved: string | null = null;
+	let cd: string | null = null;
+	let dir: string | null = cwd;
 	for (const raw of commandsOf(line)) {
 		const words = gateWords(raw, line, config);
-		if (words && moved) {
+		const away = cd !== null && (dir === null || realpath(dir) !== start);
+		const before = moved ?? (away ? cd : null);
+		if (words && before) {
 			const gate =
 				config.review.gate.find((match) => containsWords(words, match)) ??
 				"gh api";
-			return { id: "review-gate", reason: githubReasons.order(moved, gate) };
+			return { id: "review-gate", reason: githubReasons.order(before, gate) };
 		}
-		moved ??= mover(raw);
+		if (movesCwd.has(programName(raw))) {
+			cd = programName(raw);
+			dir = cdTarget(raw, dir);
+		} else moved ??= mover(raw);
 	}
 	return null;
 }
