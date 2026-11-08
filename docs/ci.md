@@ -26,6 +26,8 @@ Then run `cagr sync` and commit what it writes:
 
 While a file still has the mark, `cagr sync` rewrites it. Once you take the mark out, sync leaves the file alone and prints a note.
 
+Sync also leaves these out when you keep your own copy somewhere else GitHub reads it, so it never shadows yours. For CODEOWNERS that is `CODEOWNERS` at the root or `docs/CODEOWNERS`. For the PR template it is a `pull_request_template.md` at the root, in `docs/` or in `.github/` in any case (such as `PULL_REQUEST_TEMPLATE.md`), or a `PULL_REQUEST_TEMPLATE/` folder in any of those. Sync prints a note naming your file.
+
 ## The workflow
 
 `.github/workflows/cagr.yml` runs on pull requests (opened, synchronize, reopened, ready_for_review, edited), on the merge queue (`merge_group`), and, when `ci.nightly` is set, every night at 03:00 UTC. It has up to three jobs:

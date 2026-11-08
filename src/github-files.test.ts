@@ -118,3 +118,42 @@ test("sync keeps a hand-written CODEOWNERS and PR template, and says so", () => 
 	);
 	expect(sync(on).written).toContain(".github/CODEOWNERS");
 });
+
+test("sync writes no CODEOWNERS or PR template when GitHub would read the user's from another place", () => {
+	const setups: [Record<string, string>, string[]][] = [
+		[{ CODEOWNERS: "* @a\n" }, ["CODEOWNERS"]],
+		[{ "docs/CODEOWNERS": "* @a\n" }, ["docs/CODEOWNERS"]],
+		[{ "PULL_REQUEST_TEMPLATE.md": "## What\n" }, ["PULL_REQUEST_TEMPLATE.md"]],
+		[
+			{ "docs/pull_request_template.md": "x\n" },
+			["docs/pull_request_template.md"],
+		],
+		[
+			{ ".github/PULL_REQUEST_TEMPLATE/feature.md": "x\n" },
+			[".github/PULL_REQUEST_TEMPLATE"],
+		],
+	];
+	for (const [files, kept] of setups) {
+		const root = mkdtempSync(join(tmpdir(), "gw-ghfiles-"));
+		for (const [path, text] of Object.entries(files)) {
+			mkdirSync(join(root, path, ".."), { recursive: true });
+			writeFileSync(join(root, path), text);
+		}
+		const on = resolveConfig(
+			{
+				extends: ["recommended"],
+				ci: { github: true },
+				risk: { paths: [{ glob: "src/**", tier: "high", owners: ["@sec"] }] },
+			},
+			root,
+			join(root, "g.toml"),
+		);
+		const result = sync(on);
+		expect(result.kept).toEqual(kept);
+		const generated = kept[0]?.includes("CODEOWNERS")
+			? ".github/CODEOWNERS"
+			: ".github/pull_request_template.md";
+		expect(existsSync(join(root, generated))).toBe(false);
+		expect(sync(on, { check: true }).drifted).toEqual([]);
+	}
+});
