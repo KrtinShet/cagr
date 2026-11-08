@@ -156,3 +156,24 @@ test("gh pr ready checks the branch it names, and denies a number or another hea
 		),
 	).toEqual({ kind: "allow" });
 });
+
+test("a line that commits, switches or moves before the gate command is denied", async () => {
+	const { head, config, file, create } = await setup();
+	writeRecord(file, record([round({ head })], [], "feat/x"));
+	for (const command of [
+		`git commit -am fix && git push -u origin HEAD && gh pr create -t x ${body}`,
+		"git switch feat/b && gh pr ready",
+		`cd ../other && gh pr create -t x ${body}`,
+	]) {
+		const decision = await handle(create(command), config);
+		expect(decision.kind === "deny" && decision.reason).toContain(
+			"as a command of its own",
+		);
+	}
+	expect(
+		await handle(
+			create(`git push -u origin HEAD && gh pr create -t x ${body}`),
+			config,
+		),
+	).toEqual({ kind: "allow" });
+});

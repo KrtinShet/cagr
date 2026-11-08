@@ -1,7 +1,7 @@
 import { basename } from "node:path";
 import type { Config } from "../config/schema";
 import { programWords, simpleCommands, withoutHeredocBodies } from "../shell";
-import { containsWords } from "./command";
+import { containsWords, gitOptionsWithValue } from "./command";
 import type { Finding } from "./finding";
 
 const commandsOf = (line: string) =>
@@ -87,6 +87,8 @@ export const githubReasons = {
 		`This \`gh api\` call opens a pull request from ${head}, not from the checked-out branch${current ? ` ${current}` : ""}, so cagr cannot check its review. Check out ${head}, run \`cagr review\` there, and open the pull request with \`gh pr create\` with no --head.`,
 	unknownHead: () =>
 		"cagr cannot tell which branch this `gh api` call opens a pull request from, so it cannot check the review. Check out the branch and open the pull request with `gh pr create`.",
+	order: (moved: string, gate: string) =>
+		`This line runs \`${moved}\` before \`${gate}\`. cagr checks the review before the line runs, against the commit and folder it starts in, so it would check the wrong commit. Run \`${moved}\` first, then run \`${gate}\` as a command of its own. A \`git push\` before it is fine.`,
 	manyBranches: () =>
 		"This line opens or readies pull requests for more than one branch, and cagr checks one branch's review at a time. Run each gate command on its own, from its branch.",
 };
@@ -255,6 +257,53 @@ function apiHead(
 	if (literal) return literal[1];
 	const variable = line.match(/headRefName\s*:\s*\$(\w+)/)?.[1];
 	return variable ? fields.get(variable) : undefined;
+}
+
+const movesHead = new Set([
+	"commit",
+	"merge",
+	"rebase",
+	"reset",
+	"switch",
+	"checkout",
+	"am",
+	"cherry-pick",
+	"pull",
+	"revert",
+]);
+const movesCwd = new Set(["cd", "pushd", "popd"]);
+
+/** The command, as a message names it, when it can move HEAD or the folder. */
+function mover(words: string[]) {
+	const program = programName(words);
+	if (movesCwd.has(program)) return program;
+	if (program !== "git") return null;
+	let index = 1;
+	while ((words[index] ?? "").startsWith("-"))
+		index += gitOptionsWithValue.has(words[index] as string) ? 2 : 1;
+	const subcommand = words[index];
+	return subcommand && movesHead.has(subcommand) ? `git ${subcommand}` : null;
+}
+
+/**
+ * A gate command after a command on the same line that moves HEAD or the
+ * folder. The gate reads HEAD before the line runs, so it would check the
+ * wrong commit.
+ */
+export function gateOrderFinding(line: string, config: Config): Finding | null {
+	if (!config.review.enabled || config.review.gate.length === 0) return null;
+	let moved: string | null = null;
+	for (const raw of commandsOf(line)) {
+		const words = gateWords(raw, line, config);
+		if (words && moved) {
+			const gate =
+				config.review.gate.find((match) => containsWords(words, match)) ??
+				"gh api";
+			return { id: "review-gate", reason: githubReasons.order(moved, gate) };
+		}
+		moved ??= mover(raw);
+	}
+	return null;
 }
 
 export type GateTarget = { branch: string | null } | { reason: string };

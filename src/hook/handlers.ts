@@ -8,6 +8,7 @@ import { editFinding } from "../guards/edit";
 import { render } from "../guards/finding";
 import {
 	agentApprovalFinding,
+	gateOrderFinding,
 	gateTarget,
 	isGateCommand,
 	prBodyFinding,
@@ -74,9 +75,9 @@ async function commandBefore(
 		commandFinding(input.command, config, context) ??
 		agentApprovalFinding(input.command, config) ??
 		(isGateCommand(input.command, config)
-			? prBodyFinding(input.command, config, (path) =>
+			? (prBodyFinding(input.command, config, (path) =>
 					readText(resolve(input.cwd, path)),
-				)
+				) ?? gateOrderFinding(input.command, config))
 			: null);
 	if (finding) return { kind: "deny", reason: render(finding) };
 	if (!isGateCommand(input.command, config)) return { kind: "allow" };

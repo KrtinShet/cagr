@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { config } from "../test/config";
 import {
 	agentApprovalFinding,
+	gateOrderFinding,
 	gateTarget,
 	ghWords,
 	isGateCommand,
@@ -288,4 +289,38 @@ test("gateTarget reads the branch or pull request a gate command names", () => {
 	expect(target("gh pr create --head feat/b && gh pr ready")).toEqual({
 		reason: expect.stringContaining("more than one branch"),
 	});
+});
+
+test("a gate command after a command that moves HEAD or the folder is denied", () => {
+	const moves: [string, string][] = [
+		[
+			"git commit -am x && git push -u origin HEAD && gh pr create",
+			"git commit",
+		],
+		["git -C . merge main; gh pr ready", "git merge"],
+		["git switch feat/b && gh pr create", "git switch"],
+		["git checkout feat/b && gh pr ready", "git checkout"],
+		["git rebase main && gh pr create", "git rebase"],
+		["git reset --hard HEAD~1 && gh pr create", "git reset"],
+		["git am p.patch && gh pr create", "git am"],
+		["git cherry-pick abc && gh pr create", "git cherry-pick"],
+		["git pull && gh pr create", "git pull"],
+		["cd ../other && gh pr create", "cd"],
+		["pushd ../other && gh pr create", "pushd"],
+		["(cd ../other && /usr/bin/gh pr create)", "cd"],
+		["git commit -m x && gh api repos/o/r/pulls -f head=feat/x", "git commit"],
+	];
+	for (const [line, moved] of moves)
+		expect(gateOrderFinding(line, recommended)?.reason).toContain(
+			`runs \`${moved}\` before`,
+		);
+	for (const line of [
+		"git push -u origin HEAD && gh pr create",
+		"gh pr create && git commit -am x",
+		"git status && gh pr ready",
+		"git commit -am x",
+		"echo 'git commit && gh pr create'",
+	])
+		expect(gateOrderFinding(line, recommended)).toBeNull();
+	expect(gateOrderFinding("git commit && gh pr create", config())).toBeNull();
 });

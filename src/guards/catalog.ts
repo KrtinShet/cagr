@@ -84,7 +84,7 @@ export const guards: GuardInfo[] = [
 		id: "review-gate",
 		event: "command.before",
 		catches:
-			"A [review] gate command (by default `gh pr create` and `gh pr ready`, also spelled `gh pr new`, with flags before the subcommand, or through `gh api`) when the branch's commit has no review, or the review left an Important finding open. With --head or `gh pr ready <branch>` it checks that branch. A `gh pr ready` that names a number or URL, or a `gh api` call for another branch or one it cannot tell, is denied with a note to run the command from the pull request's branch. A review that could not run lets the command through and tells the human, unless earlier findings are still open.",
+			"A [review] gate command (by default `gh pr create` and `gh pr ready`, also spelled `gh pr new`, with flags before the subcommand, or through `gh api`) when the branch's commit has no review, or the review left an Important finding open. With --head or `gh pr ready <branch>` it checks that branch. A `gh pr ready` that names a number or URL, or a `gh api` call for another branch or one it cannot tell, is denied with a note to run the command from the pull request's branch. So is a gate command after `git commit`, `git switch`, `cd` or another command that moves HEAD or the folder on the same line. A review that could not run lets the command through and tells the human, unless earlier findings are still open.",
 		fix: 'Run `cagr review`, then fix each finding or answer it with `cagr review answer <id> --wrong|--intentional|--minor "<why>"`.',
 		config: "[review] enabled, gate, max_rounds",
 	},

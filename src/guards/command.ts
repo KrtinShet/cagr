@@ -3,7 +3,7 @@ import { programWords, simpleCommands, withoutHeredocBodies } from "../shell";
 import type { Finding } from "./finding";
 import { packageManagerFinding } from "./package-manager";
 
-const gitOptionsWithValue = new Set([
+export const gitOptionsWithValue = new Set([
 	"-C",
 	"-c",
 	"--git-dir",
