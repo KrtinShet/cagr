@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import {
+	claudeArgv,
 	claudeResult,
 	commandAgent,
 	parseJson,
@@ -39,9 +40,28 @@ test("auto picks the agent the author runs, then whatever is installed", () => {
 	);
 });
 
-test("a command reviewer gets the prompt on stdin and in a file, and runs as a reviewer", async () => {
+test("the claude reviewer gets read-only tools, no shell, and no hooks", () => {
+	const argv = claudeArgv({
+		prompt: "",
+		schema: {},
+		cwd: "/repo",
+		timeoutMs: 1000,
+		model: null,
+	});
+	const after = (flag: string) => argv[argv.indexOf(flag) + 1];
+	expect(after("--tools")).toBe("Read,Grep,Glob");
+	expect(after("--allowedTools")).toBe("Read,Grep,Glob");
+	expect(argv.join(" ")).not.toContain("Bash");
+	expect(after("--setting-sources")).toBe("user");
+	expect(JSON.parse(after("--settings") ?? "{}")).toEqual({
+		disableAllHooks: true,
+	});
+	expect(after("--permission-mode")).toBe("dontAsk");
+});
+
+test("a command reviewer gets the prompt on stdin and in a file, and only stdout is parsed", async () => {
 	const agent = commandAgent(
-		`cat {prompt_file} >/dev/null && printf '{"seen":"%s","reviewer":"%s"}' "$(cat)" "$GUARDWRIGHT_REVIEWER"`,
+		`cat {prompt_file} >/dev/null && printf '{"seen":"%s"}' "$(cat)" && echo 'warning: {not json}' >&2`,
 	);
 	const answer = await agent.ask({
 		prompt: "hello",
@@ -50,7 +70,7 @@ test("a command reviewer gets the prompt on stdin and in a file, and runs as a r
 		timeoutMs: 5000,
 		model: null,
 	});
-	expect(answer).toEqual({ seen: "hello", reviewer: "1" });
+	expect(answer).toEqual({ seen: "hello" });
 	const failing = commandAgent("echo nope >&2; exit 3");
 	await expect(
 		failing.ask({

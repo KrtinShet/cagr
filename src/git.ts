@@ -46,5 +46,5 @@ export async function git(args: string[], cwd: string): Promise<string> {
 	const result = await run(["git", ...args], cwd);
 	if (!result.ok)
 		throw new Error(`git ${args.join(" ")} failed: ${result.output.trim()}`);
-	return result.output.trim();
+	return result.stdout.trim();
 }

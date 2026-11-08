@@ -20,8 +20,6 @@ export async function runHook(
 	const started = performance.now();
 	let decision: Decision;
 	let root: string | null = null;
-	// A reviewer agent started by `guardwright review` is read-only and must not be held by the author's checks.
-	if (process.env.GUARDWRIGHT_REVIEWER) return "";
 	try {
 		const payload = stdin.trim() === "" ? {} : JSON.parse(stdin);
 		const input = parseInput(agent, event, payload, fallbackCwd);

@@ -19,47 +19,46 @@ export type ReviewAgent = {
 
 export class ReviewerError extends Error {}
 
-const readTools = [
-	"Read",
-	"Grep",
-	"Glob",
-	"Bash(git diff *)",
-	"Bash(git log *)",
-	"Bash(git show *)",
-	"Bash(git blame *)",
-	"Bash(git grep *)",
-	"Bash(git ls-files *)",
-];
+// Bash is left out: even `git grep -O` and `git diff --output` can run programs or write files.
+const readTools = "Read,Grep,Glob";
 
-// The reviewer's own guardwright hooks see this and stay out of its way.
-const reviewerEnv = { GUARDWRIGHT_REVIEWER: "1" };
+/** The `claude -p` call for one reviewer: read-only tools and no hooks. */
+export function claudeArgv(request: AgentRequest) {
+	return [
+		"claude",
+		"-p",
+		"--output-format",
+		"json",
+		"--json-schema",
+		JSON.stringify(request.schema),
+		"--strict-mcp-config",
+		"--disable-slash-commands",
+		// The repo's settings carry its hooks, which would hold the reviewer to the author's checks.
+		"--setting-sources",
+		"user",
+		"--settings",
+		JSON.stringify({ disableAllHooks: true }),
+		"--permission-mode",
+		"dontAsk",
+		"--tools",
+		readTools,
+		"--allowedTools",
+		readTools,
+		...(request.model ? ["--model", request.model] : []),
+	];
+}
 
 const claude: ReviewAgent = {
 	name: "claude",
 	async ask(request) {
-		const argv = [
-			"claude",
-			"-p",
-			"--output-format",
-			"json",
-			"--json-schema",
-			JSON.stringify(request.schema),
-			"--strict-mcp-config",
-			"--disable-slash-commands",
-			"--tools",
-			"Read,Grep,Glob,Bash",
-			...(request.model ? ["--model", request.model] : []),
-			"--allowedTools",
-			...readTools,
-		];
+		const argv = claudeArgv(request);
 		const result = await run(argv, request.cwd, {
 			stdin: request.prompt,
 			timeoutMs: request.timeoutMs,
-			env: reviewerEnv,
 		});
 		if (result.timedOut)
 			throw new ReviewerError(`claude ran past ${request.timeoutMs / 1000}s`);
-		const final = claudeResult(result.output);
+		const final = claudeResult(result.stdout);
 		if (!final)
 			throw new ReviewerError(
 				`claude printed no result (exit ${result.ok ? 0 : "non-zero"}): ${result.output.trim().slice(0, 300)}`,
@@ -109,6 +108,9 @@ const codex: ReviewAgent = {
 					"exec",
 					"--sandbox",
 					"read-only",
+					// The repo's own hooks would hold the reviewer to the author's checks.
+					"-c",
+					"features.hooks=false",
 					"--output-schema",
 					schemaFile,
 					"-o",
@@ -117,11 +119,7 @@ const codex: ReviewAgent = {
 					"-",
 				],
 				request.cwd,
-				{
-					stdin: request.prompt,
-					timeoutMs: request.timeoutMs,
-					env: reviewerEnv,
-				},
+				{ stdin: request.prompt, timeoutMs: request.timeoutMs },
 			);
 			if (result.timedOut)
 				throw new ReviewerError(`codex ran past ${request.timeoutMs / 1000}s`);
@@ -157,13 +155,12 @@ export function commandAgent(command: string): ReviewAgent {
 				const result = await runShell(line, request.cwd, {
 					stdin: request.prompt,
 					timeoutMs: request.timeoutMs,
-					env: reviewerEnv,
 				});
 				if (!result.ok)
 					throw new ReviewerError(
 						`\`${command}\` failed: ${result.output.trim().slice(-300)}`,
 					);
-				return parseJson(result.output, `\`${command}\``);
+				return parseJson(result.stdout, `\`${command}\``);
 			} finally {
 				rmSync(dir, { recursive: true, force: true });
 			}
