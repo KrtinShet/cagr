@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { config } from "../test/config";
 import {
 	agentApprovalFinding,
+	gateTarget,
 	ghWords,
 	isGateCommand,
 	missingSections,
@@ -229,4 +230,62 @@ test("a body file or body attached to its flag counts as a body", () => {
 			() => "## Testing",
 		)?.reason,
 	).toContain("lacks");
+});
+
+test("gateTarget reads the branch or pull request a gate command names", () => {
+	const target = (line: string, read: (path: string) => string | null = none) =>
+		gateTarget(line, recommended, "feat/x", read);
+	expect(target("gh pr create -t x")).toEqual({ branch: null });
+	expect(target("gh pr create -Hme:feat/b")).toEqual({ branch: "feat/b" });
+	expect(target("gh pr ready")).toEqual({ branch: null });
+	expect(target("gh pr ready -R o/r feat/b")).toEqual({ branch: "feat/b" });
+	for (const line of [
+		"gh pr ready 42",
+		"gh pr ready '#42'",
+		"gh pr ready https://github.com/o/r/pull/42",
+	])
+		expect(target(line)).toEqual({
+			reason: expect.stringContaining("with no argument"),
+		});
+	expect(target("gh api repos/o/r/pulls -f head=feat/x -f base=main")).toEqual({
+		branch: null,
+	});
+	expect(target("gh api repos/o/r/pulls -fhead=me:feat/x")).toEqual({
+		branch: null,
+	});
+	for (const line of [
+		"gh api repos/o/r/pulls -f head=feat/other -f base=main",
+		"gh api --field=head=feat/other repos/o/r/pulls",
+		`gh api graphql -f query='mutation { createPullRequest(input: {repositoryId: "R", baseRefName: "main", headRefName: "feat/other", title: "x"}) { clientMutationId } }'`,
+		`gh api graphql -f query='mutation($h: String!) { createPullRequest(input: {headRefName: $h}) { clientMutationId } }' -f h=feat/other`,
+	])
+		expect(target(line)).toEqual({
+			reason: expect.stringContaining("Check out feat/other"),
+		});
+	expect(
+		target("gh api -X POST repos/o/r/pulls --input body.json", () =>
+			JSON.stringify({ head: "feat/other" }),
+		),
+	).toEqual({ reason: expect.stringContaining("Check out feat/other") });
+	expect(
+		target("gh api -X POST repos/o/r/pulls --input body.json", () =>
+			JSON.stringify({ head: "feat/x" }),
+		),
+	).toEqual({ branch: null });
+	for (const line of [
+		"gh api -X POST repos/o/r/pulls --input -",
+		"gh api repos/o/r/pulls -f title=x",
+		`gh api graphql -f query='mutation { createPullRequest(input: $input) { clientMutationId } }'`,
+	])
+		expect(target(line)).toEqual({
+			reason: expect.stringContaining("cannot tell which branch"),
+		});
+	expect(
+		target(
+			`gh api graphql -f query='mutation { markPullRequestReadyForReview(input: {pullRequestId: "x"}) { clientMutationId } }'`,
+		),
+	).toEqual({ reason: expect.stringContaining("by its id") });
+	expect(target("gh pr create --head feat/b && gh pr ready")).toEqual({
+		reason: expect.stringContaining("more than one branch"),
+	});
 });

@@ -209,7 +209,7 @@ Like every git hook failure, these end with "A human can skip this once with CAG
 
 ## review-gate
 
-**Blocks** a `[review] gate` command (by default `gh pr create` and `gh pr ready`) when the branch's current commit has not passed a review. It also catches `gh pr new`, flags before the subcommand, and the same calls through `gh api`: the GraphQL mutations, and a POST to `repos/<owner>/<repo>/pulls` with its flags in any order and any spelling (`-f title=x`, `-ftitle=x`, `--raw-field`, `--input`, `-XPOST`, `--method=POST`). With `--head <branch>`, it checks that branch instead of the current one.
+**Blocks** a `[review] gate` command (by default `gh pr create` and `gh pr ready`) when the branch's current commit has not passed a review. It also catches `gh pr new`, flags before the subcommand, and the same calls through `gh api`: the GraphQL mutations, and a POST to `repos/<owner>/<repo>/pulls` with its flags in any order and any spelling (`-f title=x`, `-ftitle=x`, `--raw-field`, `--input`, `-XPOST`, `--method=POST`). With `--head <branch>`, or `gh pr ready <branch>`, it checks that branch instead of the current one.
 
 The gate denies the command when:
 
@@ -218,6 +218,9 @@ The gate denies the command when:
 - Important findings are open. It lists them (`- f1 src/deals.ts:42  title`), then says: "Fix each one, commit, and run `cagr review` again", or answer them with `cagr review answer`. After `max_rounds` rounds it adds: "Step back: if findings keep coming, the approach may be wrong. Rethink it, or answer the findings and let a person decide."
 - `HEAD` is detached. It says to `git switch <branch>` or pass `--head <branch>`.
 - `--head` names a branch that does not exist locally.
+- `gh pr ready` names a pull request by number or URL. cagr cannot tell which branch that is, so it says to check out the pull request's branch and run `gh pr ready` there with no argument. `markPullRequestReadyForReview` through `gh api` is denied the same way.
+- A `gh api` call opens a pull request from a branch other than the checked-out one (the `head` field, `headRefName`, or `head` in an `--input` file), or cagr cannot tell which branch it names. It says to check out that branch and use `gh pr create`.
+- The line opens or readies pull requests for more than one branch.
 
 The gate lets the command through when:
 

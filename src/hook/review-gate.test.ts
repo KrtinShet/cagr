@@ -123,3 +123,36 @@ test("gh pr new and flags before the subcommand are gated too", async () => {
 		);
 	}
 });
+
+test("gh pr ready checks the branch it names, and denies a number or another head", async () => {
+	const { repo, head, config, file, create } = await setup();
+	writeRecord(file, record([round({ head })], [], "feat/x"));
+	await repo.git("checkout", "-q", "-b", "feat/b");
+	await repo.commit("feat: b", { "src/b.ts": "1\n" });
+	await repo.git("checkout", "-q", "feat/x");
+	expect(await handle(create("gh pr ready"), config)).toEqual({
+		kind: "allow",
+	});
+	expect(await handle(create("gh pr ready feat/x"), config)).toEqual({
+		kind: "allow",
+	});
+	const other = await handle(create("gh pr ready feat/b"), config);
+	expect(other.kind === "deny" && other.reason).toContain(
+		"has not been reviewed",
+	);
+	const number = await handle(create("gh pr ready 42"), config);
+	expect(number.kind === "deny" && number.reason).toContain(
+		"run `gh pr ready` there with no argument",
+	);
+	const api = await handle(
+		create("gh api repos/o/r/pulls -f head=feat/b -f base=main -f title=x"),
+		config,
+	);
+	expect(api.kind === "deny" && api.reason).toContain("Check out feat/b");
+	expect(
+		await handle(
+			create("gh api repos/o/r/pulls -f head=feat/x -f base=main -f title=x"),
+			config,
+		),
+	).toEqual({ kind: "allow" });
+});

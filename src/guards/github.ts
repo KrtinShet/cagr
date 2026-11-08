@@ -79,6 +79,16 @@ export const githubReasons = {
 		"Agents do not resolve review threads here: a resolved thread counts as an answer to the finding. Fix the finding, or reply on the thread saying why it is wrong, and let a person resolve it.",
 	alias: () =>
 		"Agents do not set gh aliases for merging, approving, resolving threads or opening pull requests here. Run the gh command itself.",
+	readyByNumber: (target: string) =>
+		`\`gh pr ready ${target}\` names a pull request by number or URL, so cagr cannot tell which branch's review to check. Check out the pull request's branch and run \`gh pr ready\` there with no argument.`,
+	readyById: () =>
+		"This `gh api` call marks a pull request ready by its id, so cagr cannot tell which branch's review to check. Check out the pull request's branch and run `gh pr ready` there with no argument.",
+	otherHead: (head: string, current: string | null) =>
+		`This \`gh api\` call opens a pull request from ${head}, not from the checked-out branch${current ? ` ${current}` : ""}, so cagr cannot check its review. Check out ${head}, run \`cagr review\` there, and open the pull request with \`gh pr create\` with no --head.`,
+	unknownHead: () =>
+		"cagr cannot tell which branch this `gh api` call opens a pull request from, so it cannot check the review. Check out the branch and open the pull request with `gh pr create`.",
+	manyBranches: () =>
+		"This line opens or readies pull requests for more than one branch, and cagr checks one branch's review at a time. Run each gate command on its own, from its branch.",
 };
 
 const approves = (word: string) =>
@@ -132,39 +142,170 @@ function aliasIsGuarded(args: string[], config: Config) {
 	);
 }
 
-/** Whether the line runs one of the [review] gate commands, under any spelling gh accepts. */
-export function isGateCommand(line: string, config: Config) {
-	if (!config.review.enabled || config.review.gate.length === 0) return false;
+/** The words of `raw`, normalized as ghWords does, when it runs one of the [review] gate commands. */
+function gateWords(raw: string[], line: string, config: Config) {
+	const words = ghWords(raw) ?? [programName(raw), ...raw.slice(1)];
+	if (config.review.gate.some((match) => containsWords(words, match)))
+		return words;
+	if (words[0] !== "gh" || words[1] !== "api") return null;
 	const gates = (what: string) =>
 		config.review.gate.some((match) => match.includes(what));
-	return commandsOf(line).some((raw) => {
-		const words = ghWords(raw) ?? [programName(raw), ...raw.slice(1)];
-		if (config.review.gate.some((match) => containsWords(words, match)))
-			return true;
-		if (words[0] !== "gh" || words[1] !== "api") return false;
-		return (
-			(gates("pr create") &&
-				(createApi.test(line) || restCreate(raw.slice(1)))) ||
-			(gates("pr ready") && readyApi.test(line))
-		);
-	});
+	return (gates("pr create") &&
+		(createApi.test(line) || restCreate(raw.slice(1)))) ||
+		(gates("pr ready") && readyApi.test(line))
+		? words
+		: null;
+}
+
+const gateCommandsOf = (line: string, config: Config) =>
+	config.review.enabled && config.review.gate.length > 0
+		? commandsOf(line).flatMap((raw) => {
+				const words = gateWords(raw, line, config);
+				return words ? [{ raw, words }] : [];
+			})
+		: [];
+
+/** Whether the line runs one of the [review] gate commands, under any spelling gh accepts. */
+export function isGateCommand(line: string, config: Config) {
+	return gateCommandsOf(line, config).length > 0;
+}
+
+const withoutOwner = (branch: string) => branch.replace(/^[^:]+:/, "");
+
+/** The value of `gh pr create --head`, `-H` or `--head=`, if given. */
+function headFlag(words: string[]) {
+	for (const [index, word] of words.entries()) {
+		const value =
+			word === "--head" || word === "-H"
+				? words[index + 1]
+				: word.startsWith("--head=")
+					? word.slice("--head=".length)
+					: /^-H./.test(word)
+						? word.slice(2)
+						: undefined;
+		if (value) return withoutOwner(value);
+	}
+	return null;
 }
 
 /** The branch a `gh pr create` names with --head, without an `owner:` prefix. */
 export function prHeadBranch(line: string): string | null {
-	for (const words of ghCommandsOf(line)) {
-		if (words[1] !== "pr" || words[2] !== "create") continue;
-		for (const [index, word] of words.entries()) {
-			const value =
-				word === "--head" || word === "-H"
-					? words[index + 1]
-					: word.startsWith("--head=")
-						? word.slice("--head=".length)
-						: undefined;
-			if (value) return value.replace(/^[^:]+:/, "");
-		}
-	}
+	for (const words of ghCommandsOf(line))
+		if (words[1] === "pr" && words[2] === "create") return headFlag(words);
 	return null;
+}
+
+/** The first argument that is not a flag, skipping the values of -R and --repo. */
+function positional(args: string[]) {
+	for (let index = 0; index < args.length; index++) {
+		const word = args[index] as string;
+		if (ghValueFlags.has(word)) index++;
+		else if (!word.startsWith("-")) return word;
+	}
+	return undefined;
+}
+
+/** The `-f name=value` fields of a `gh api` call, in every spelling gh accepts. */
+function apiFields(args: string[]) {
+	const fields = new Map<string, string>();
+	for (let index = 0; index < args.length; index++) {
+		const word = args[index] as string;
+		const attached = word.match(/^(?:-i*[fF]|--(?:raw-)?field=)(.+)$/);
+		const pair = attached
+			? attached[1]
+			: /^(?:-i*[fF]|--(?:raw-)?field)$/.test(word)
+				? args[++index]
+				: undefined;
+		const split = pair?.indexOf("=") ?? -1;
+		if (pair && split > 0)
+			fields.set(pair.slice(0, split), pair.slice(split + 1));
+	}
+	return fields;
+}
+
+/** The `head` of a JSON body given with --input, when it is a file cagr can read. */
+function inputHead(args: string[], readFile: (path: string) => string | null) {
+	const index = args.findIndex(
+		(word) => word === "--input" || word.startsWith("--input="),
+	);
+	if (index === -1) return undefined;
+	const word = args[index] as string;
+	const path = word.includes("=")
+		? word.slice(word.indexOf("=") + 1)
+		: args[index + 1];
+	if (!path || path === "-") return undefined;
+	try {
+		const head = JSON.parse(readFile(path) ?? "").head;
+		return typeof head === "string" ? head : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+/** The branch a `gh api` call opens a pull request from, if cagr can tell. */
+function apiHead(
+	raw: string[],
+	line: string,
+	readFile: (path: string) => string | null,
+) {
+	const fields = apiFields(raw.slice(1));
+	if (!createApi.test(line))
+		return fields.get("head") ?? inputHead(raw.slice(1), readFile);
+	const literal = line.match(/headRefName\s*:\s*\\?"([^"\\]+)/);
+	if (literal) return literal[1];
+	const variable = line.match(/headRefName\s*:\s*\$(\w+)/)?.[1];
+	return variable ? fields.get(variable) : undefined;
+}
+
+export type GateTarget = { branch: string | null } | { reason: string };
+
+/** The branch one gate command acts on: null for the checked-out one. */
+function commandTarget(
+	gate: { raw: string[]; words: string[] },
+	line: string,
+	current: string | null,
+	readFile: (path: string) => string | null,
+): GateTarget {
+	const { raw, words } = gate;
+	if (words[1] === "pr" && words[2] === "create")
+		return { branch: headFlag(words) };
+	if (words[1] === "pr" && words[2] === "ready") {
+		const target = positional(words.slice(3));
+		if (target === undefined) return { branch: null };
+		if (/^#?\d+$|^https?:\/\/|\/pull\/\d/i.test(target))
+			return { reason: githubReasons.readyByNumber(target) };
+		return { branch: withoutOwner(target) };
+	}
+	if (words[1] !== "api") return { branch: null };
+	if (readyApi.test(line)) return { reason: githubReasons.readyById() };
+	const head = apiHead(raw, line, readFile);
+	if (head === undefined) return { reason: githubReasons.unknownHead() };
+	const branch = withoutOwner(head);
+	return branch === current
+		? { branch: null }
+		: { reason: githubReasons.otherHead(branch, current) };
+}
+
+/**
+ * The branch whose review the gate checks for this line: null for the
+ * checked-out branch, or a reason to deny when cagr cannot tell.
+ */
+export function gateTarget(
+	line: string,
+	config: Config,
+	current: string | null,
+	readFile: (path: string) => string | null,
+): GateTarget {
+	let named: string | null = null;
+	const branches = new Set<string | null>();
+	for (const gate of gateCommandsOf(line, config)) {
+		const target = commandTarget(gate, line, current, readFile);
+		if ("reason" in target) return target;
+		named ??= target.branch;
+		branches.add(target.branch ?? current);
+	}
+	if (branches.size > 1) return { reason: githubReasons.manyBranches() };
+	return { branch: named };
 }
 
 export function prTemplate(sections: string[]) {

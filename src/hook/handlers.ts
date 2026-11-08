@@ -8,9 +8,9 @@ import { editFinding } from "../guards/edit";
 import { render } from "../guards/finding";
 import {
 	agentApprovalFinding,
+	gateTarget,
 	isGateCommand,
 	prBodyFinding,
-	prHeadBranch,
 } from "../guards/github";
 import { insideRoot } from "../paths";
 import { gateResult } from "../review/gate";
@@ -91,7 +91,7 @@ function readText(path: string) {
 	}
 }
 
-/** Reads the branch's review record: two quick git calls (three with --head) and one file, to stay inside the command budget. */
+/** Reads the branch's review record: two quick git calls (three when the command names a branch) and one file, to stay inside the command budget. */
 async function reviewGate(
 	command: string,
 	cwd: string,
@@ -99,7 +99,15 @@ async function reviewGate(
 ): Promise<Decision> {
 	const git = await gitContext(cwd);
 	if (!git.commonDir) return { kind: "allow" };
-	const named = prHeadBranch(command);
+	const target = gateTarget(command, config, git.branch, (path) =>
+		readText(resolve(cwd, path)),
+	);
+	if ("reason" in target)
+		return {
+			kind: "deny",
+			reason: render({ id: "review-gate", reason: target.reason }),
+		};
+	const named = target.branch;
 	const branch = named ?? git.branch;
 	if (!branch)
 		return {
