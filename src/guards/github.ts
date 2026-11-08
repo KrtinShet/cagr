@@ -49,9 +49,26 @@ const reviewApi =
 const resolveApi = /resolveReviewThread/;
 const createApi = /createPullRequest\b/;
 const readyApi = /markPullRequestReadyForReview\b/;
-// gh api sends a POST when it is given fields or a body.
-const restCreate =
-	/repos\/[^/\s]+\/[^/\s]+\/pulls(?![/\w])[\s\S]*(?:\s-[fF]\s|\s--(?:raw-)?field\b|\s--input\b|-X\s*POST|--method[\s=]*POST)/i;
+const pullsEndpoint = /^\/?repos\/[^/]+\/[^/]+\/pulls\/?(?:\?.*)?$/;
+// Short flags may be attached to their value (`-ftitle=x`) or follow gh api's one boolean short flag, -i.
+const fieldFlag = /^(?:-i*[fF]|--(?:raw-)?field\b|--input\b)/;
+const methodFlag = /^(?:-i*X|--method=?)(.*)$/;
+
+/** The HTTP method a `gh api` call sends: -X wins, else POST when it has fields or a body. */
+function apiMethod(args: string[]) {
+	let method: string | null = null;
+	let fields = false;
+	for (const [index, word] of args.entries()) {
+		const flag = word.match(methodFlag);
+		if (flag) method = flag[1] || (args[index + 1] ?? "");
+		else if (fieldFlag.test(word)) fields = true;
+	}
+	return (method ?? (fields ? "POST" : "GET")).toUpperCase();
+}
+
+/** Whether the words of a `gh api` call POST to the REST pulls endpoint, with the flags in any order. */
+const restCreate = (args: string[]) =>
+	args.some((word) => pullsEndpoint.test(word)) && apiMethod(args) === "POST";
 
 export const githubReasons = {
 	merge: () =>
@@ -126,7 +143,8 @@ export function isGateCommand(line: string, config: Config) {
 			return true;
 		if (words[0] !== "gh" || words[1] !== "api") return false;
 		return (
-			(gates("pr create") && (createApi.test(line) || restCreate.test(line))) ||
+			(gates("pr create") &&
+				(createApi.test(line) || restCreate(raw.slice(1)))) ||
 			(gates("pr ready") && readyApi.test(line))
 		);
 	});

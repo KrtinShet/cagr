@@ -191,3 +191,22 @@ test("gh run by its full path or as gh.exe is guarded the same", () => {
 		),
 	).toBe(true);
 });
+
+test("REST pull request creation is gated whatever the flag order or spelling", () => {
+	for (const line of [
+		"gh api -f title=x -f head=feat/y -f base=main repos/o/r/pulls",
+		"gh api repos/o/r/pulls -ftitle=x -fhead=feat/y -fbase=main",
+		"gh api -XPOST /repos/o/r/pulls",
+		"gh api --method=post repos/o/r/pulls",
+		"gh api --raw-field=title=x repos/o/r/pulls",
+		"gh api -i -F title=x 'repos/o/r/pulls'",
+		"gh api --input=body.json repos/o/r/pulls",
+	])
+		expect(isGateCommand(line, recommended)).toBe(true);
+	for (const line of [
+		"gh api -X GET repos/o/r/pulls -f state=open",
+		"gh api repos/o/r/pulls/3 -f title=x -X PATCH",
+		"gh api repos/o/r/pulls --jq .[].number",
+	])
+		expect(isGateCommand(line, recommended)).toBe(false);
+});

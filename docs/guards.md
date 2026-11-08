@@ -209,7 +209,7 @@ Like every git hook failure, these end with "A human can skip this once with CAG
 
 ## review-gate
 
-**Blocks** a `[review] gate` command (by default `gh pr create` and `gh pr ready`) when the branch's current commit has not passed a review. It also catches `gh pr new`, flags before the subcommand, and the same calls through `gh api`. With `--head <branch>`, it checks that branch instead of the current one.
+**Blocks** a `[review] gate` command (by default `gh pr create` and `gh pr ready`) when the branch's current commit has not passed a review. It also catches `gh pr new`, flags before the subcommand, and the same calls through `gh api`: the GraphQL mutations, and a POST to `repos/<owner>/<repo>/pulls` with its flags in any order and any spelling (`-f title=x`, `-ftitle=x`, `--raw-field`, `--input`, `-XPOST`, `--method=POST`). With `--head <branch>`, it checks that branch instead of the current one.
 
 The gate denies the command when:
 
