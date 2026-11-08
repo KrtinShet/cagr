@@ -1,0 +1,53 @@
+# guardwright config. `guardwright doctor` checks it; `guardwright sync` applies it.
+extends = ["recommended"]
+
+[agents]
+enabled = ["claude", "codex"]
+# This repo runs its own source, so the hooks test the code being changed.
+command = "bun {root}/src/cli.ts"
+
+[git]
+protected_branch = "main"
+branch_name = "type/name"
+commit_message = "conventional"
+pre_push = "bun run verify"
+
+[[stack]]
+language = "typescript"
+package_manager = "bun"
+paths = ["**"]
+on_edit = ["bunx biome check --write --no-errors-on-unmatched {files}"]
+on_turn_end = ["bun run lint", "bun run check-types"]
+
+# Files agents may not edit, on top of the preset's .env* and lockfiles.
+# [[files.protected]]
+# glob = "migrations/**"
+# reason = "Migrations are generated. Run `bun run db:migrate` instead."
+
+# Commands agents may not run.
+# [[commands.blocked]]
+# match = "prisma db push"
+# reason = "Use `bun run db:migrate --name <change>`."
+
+# The preset gates `gh pr create` on a review by a reviewer agent and keeps merging with people.
+# REVIEW.md says what the reviewer should check. `guardwright review help` shows the commands.
+[review]
+effort = "standard"
+skip = ["schema/guardwright.schema.json", "bun.lock"]
+
+# Risk tiers by path: low needs no approval, medium one, high two. The change takes its highest file.
+[[risk.paths]]
+glob = "packaging/**"
+tier = "high"
+reason = "What users install and run."
+
+[[risk.paths]]
+glob = "src/hook/run-hook.ts"
+tier = "high"
+reason = "Every agent call goes through it, and it must fail open."
+
+# GitHub: `guardwright sync` writes the workflow, the PR template and CODEOWNERS.
+# [ci]
+# github = true
+# review = true          # needs the ANTHROPIC_API_KEY secret
+# nightly = ["src/**"]
