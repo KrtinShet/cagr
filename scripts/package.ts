@@ -21,6 +21,12 @@ const description =
 	"One config for every coding agent's guardrails: commands, files, git, and code rules.";
 const license = "MIT";
 const licenseFile = join(root, "LICENSE");
+const meta = {
+	homepage: "https://github.com/krtinshet/cagr#readme",
+	repository: { type: "git", url: "git+https://github.com/krtinshet/cagr.git" },
+	bugs: { url: "https://github.com/krtinshet/cagr/issues" },
+	author: "Krtin Shet",
+};
 
 const npmOs = (target: Target) =>
 	target.platform === "win32" ? "windows" : target.platform;
@@ -51,6 +57,7 @@ const wrapper = join(dist, "npm", "cagr");
 mkdirSync(join(wrapper, "bin"), { recursive: true });
 copyFileSync(join(root, "packaging/npm/cagr.js"), join(wrapper, "bin/cagr.js"));
 copyFileSync(licenseFile, join(wrapper, "LICENSE"));
+copyFileSync(join(root, "README.md"), join(wrapper, "README.md"));
 writeFileSync(
 	join(wrapper, "package.json"),
 	json({
@@ -58,6 +65,17 @@ writeFileSync(
 		version,
 		description,
 		license,
+		...meta,
+		keywords: [
+			"coding-agents",
+			"claude-code",
+			"codex",
+			"guardrails",
+			"hooks",
+			"ast-grep",
+			"code-review",
+			"git-hooks",
+		],
 		bin: { cagr: "bin/cagr.js" },
 		files: ["bin"],
 		optionalDependencies: Object.fromEntries(
@@ -79,6 +97,7 @@ for (const target of built) {
 			version,
 			description: `The cagr binary for ${npmOs(target)} ${target.arch}${target.libc ? ` ${target.libc}` : ""}.`,
 			license,
+			...meta,
 			os: [target.platform],
 			cpu: [target.arch],
 			...(target.platform === "linux"
