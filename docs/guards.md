@@ -34,7 +34,7 @@ Guards run at these events (see [Hooks and events](hooks-and-events.md)):
 | [pr-body](#pr-body)                   | command.before                   | `[review] pr_sections`                             | With `recommended`                           |
 | [agent-approval](#agent-approval)     | command.before                   | `[review] agents_may_merge`, `enabled`             | Partly. See below.                           |
 
-Command guards read the command the way a shell does. They split a line into simple commands at `;`, `&`, `|`, newlines, parentheses and backticks, so `&&`, `||` and pipes split too. Text in quotes and heredoc bodies is text, not a command. So `echo "npm install"` is fine. They are a guard against slips, not a sandbox: see [Limits](limits.md).
+Command guards read the command the way a shell does. They split a line into simple commands at `;`, `&`, `|`, newlines, parentheses and backticks, so `&&`, `||` and pipes split too. Text in quotes and heredoc bodies is text, not a command. So `echo "npm install"` is fine. A program run by its full path or as `.exe` (`/usr/bin/git`, `git.exe`, `/opt/homebrew/bin/gh`) is matched by its name. They are a guard against slips, not a sandbox: see [Limits](limits.md).
 
 ## package-manager
 

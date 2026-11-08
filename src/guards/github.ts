@@ -1,17 +1,18 @@
 import { realpathSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, join, resolve } from "node:path";
+import { join, resolve } from "node:path";
 import type { Config } from "../config/schema";
-import { programWords, simpleCommands, withoutHeredocBodies } from "../shell";
+import {
+	programName,
+	programWords,
+	simpleCommands,
+	withoutHeredocBodies,
+} from "../shell";
 import { containsWords, gitOptionsWithValue } from "./command";
 import type { Finding } from "./finding";
 
 const commandsOf = (line: string) =>
 	simpleCommands(withoutHeredocBodies(line)).map(programWords);
-
-/** The program's name without its directory or .exe, so `/opt/homebrew/bin/gh` is gh. */
-const programName = (words: string[]) =>
-	basename(words[0] ?? "").replace(/\.exe$/i, "");
 
 /** gh flags that come before the subcommand and take a value. */
 const ghValueFlags = new Set(["-R", "--repo", "--hostname"]);

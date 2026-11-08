@@ -1,5 +1,10 @@
 import type { Config } from "../config/schema";
-import { programWords, simpleCommands, withoutHeredocBodies } from "../shell";
+import {
+	programName,
+	programWords,
+	simpleCommands,
+	withoutHeredocBodies,
+} from "../shell";
 import type { Finding } from "./finding";
 import { packageManagerFinding } from "./package-manager";
 
@@ -62,7 +67,7 @@ export const commandReasons = {
 /** Whether the command needs the current branch or checkout to be judged. */
 export function needsGitContext(line: string) {
 	return simpleCommands(withoutHeredocBodies(line)).some(
-		(words) => programWords(words)[0] === "git",
+		(words) => programName(programWords(words)) === "git",
 	);
 }
 
@@ -74,7 +79,8 @@ export function commandFinding(
 	const commands = simpleCommands(withoutHeredocBodies(line));
 	// A `cd` or `git -C` points git elsewhere, and the guard cannot tell where.
 	const staysInMainCheckout =
-		context.inMainCheckout && !commands.some(([program]) => program === "cd");
+		context.inMainCheckout &&
+		!commands.some((words) => programName(programWords(words)) === "cd");
 	for (const words of commands) {
 		const finding = simpleCommandFinding(words, config, {
 			...context,
@@ -103,7 +109,7 @@ function simpleCommandFinding(
 	const program = programWords(words);
 	const manager = packageManagerFinding(program, config);
 	if (manager) return manager;
-	if (program[0] !== "git") return null;
+	if (programName(program) !== "git") return null;
 	const args = program.slice(1);
 	if (context.inMainCheckout && changesMainCheckout(args))
 		return { id: "worktree-only", reason: commandReasons.mainCheckout(config) };

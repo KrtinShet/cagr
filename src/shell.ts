@@ -1,3 +1,5 @@
+import { basename } from "node:path";
+
 const separators = new Set([";", "&", "|", "\n", "(", ")", "`"]);
 const wrappers = new Set(["sudo", "env", "command", "exec", "time", "nohup"]);
 const assignment = /^[A-Za-z_][A-Za-z0-9_]*=/;
@@ -101,3 +103,7 @@ export function withoutHeredocBodies(line: string): string {
 	}
 	return kept.join("\n");
 }
+
+/** The program's name without its directory or .exe, so `/usr/bin/git` and `git.exe` are git. */
+export const programName = (words: string[]) =>
+	basename(words[0] ?? "").replace(/\.exe$/i, "");

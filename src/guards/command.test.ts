@@ -233,3 +233,17 @@ test("needsGitContext only for git commands", () => {
 	expect(needsGitContext("cd a && git push")).toBe(true);
 	expect(needsGitContext("npm install && echo git")).toBe(false);
 });
+
+test("git and cd run by full path or as .exe are guarded the same", () => {
+	expect(onFeature("/usr/bin/git push --force origin feat/deals")).toBe(
+		reasons.forcePush,
+	);
+	expect(onFeature("git.exe commit -n -m x")).toBe(reasons.noVerify);
+	expect(onMain("/opt/homebrew/bin/git push origin main")).toBe(
+		reasons.pushMain,
+	);
+	expect(needsGitContext("C:/Git/bin/git.exe push")).toBe(true);
+	const inMain = reasonOn("main", true);
+	expect(inMain("/usr/bin/git commit -m x")).toBe(reasons.mainCheckout);
+	expect(inMain("/usr/bin/cd ../wt && git commit -m x")).toBeNull();
+});
