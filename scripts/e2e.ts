@@ -460,6 +460,100 @@ function doctor(project: string) {
 	);
 	doctor(project);
 	gitChecks(project);
+	reviewGate(project);
+}
+
+/** The review gate end to end, with a scripted reviewer in place of a model. */
+function reviewGate(project: string) {
+	title("TypeScript: review gate");
+	const reviewer = join(work, "fake-reviewer.sh");
+	// Finders get a schema with "findings"; verifiers confirm every candidate.
+	writeFileSync(
+		reviewer,
+		`if grep -q '"findings"' "$1"; then
+  echo '{"summary":"1 important.","findings":[{"severity":"important","category":"bug","file":"guardwright.toml","line":1,"title":"The reviewer is a script","detail":"","bug_class":""}],"fixed":[]}'
+else
+  echo '{"candidates":[{"id":"C1","real":true,"severity":"important","reason":"yes"}],"previous":[]}'
+fi
+`,
+	);
+	writeFileSync(
+		join(project, "guardwright.toml"),
+		`${readFileSync(join(project, "guardwright.toml"), "utf8")}\n[review]\nreviewer = "sh ${reviewer} {schema_file}"\n`,
+	);
+	sh("git commit -qam 'chore: use a scripted reviewer'", project);
+	const body =
+		"## Testing\nbun test\n## Risk\nlow\n## How to revert\ngit revert";
+	const create = `gh pr create -t "feat: start" --body "${body}"`;
+	hook(project, "claude", "PreToolUse", bash(create), "deny", "no review yet");
+	hook(
+		project,
+		"claude",
+		"PreToolUse",
+		bash("gh pr create --fill"),
+		"deny",
+		"--fill has no sections",
+	);
+	hook(
+		project,
+		"claude",
+		"PreToolUse",
+		bash("gh pr merge 1 --squash"),
+		"deny",
+		"agents do not merge",
+	);
+	const first = run(["guardwright", "review"], project);
+	expect(
+		"guardwright review finds an Important problem and exits 1",
+		first.code === 1 && first.out.includes("f1 guardwright.toml:1"),
+		first.out + first.err,
+	);
+	const denied = hook(
+		project,
+		"claude",
+		"PreToolUse",
+		bash(create),
+		"deny",
+		"f1 is open",
+	);
+	expect(
+		"the denial names f1 and how to answer it",
+		denied.includes("f1 guardwright.toml:1") &&
+			denied.includes("guardwright review answer f1"),
+		"",
+	);
+	const answer = run(
+		[
+			"guardwright",
+			"review",
+			"answer",
+			"f1",
+			"--intentional",
+			"the e2e run uses a script on purpose",
+		],
+		project,
+	);
+	expect(
+		"guardwright review answer f1",
+		answer.code === 0,
+		answer.out + answer.err,
+	);
+	hook(project, "claude", "PreToolUse", bash(create), "allow", "f1 answered");
+	sh("git commit -q --allow-empty -m 'chore: one more commit'", project);
+	hook(
+		project,
+		"claude",
+		"PreToolUse",
+		bash(create),
+		"deny",
+		"a commit after the review",
+	);
+	const status = run(["guardwright", "review", "status"], project);
+	expect(
+		"guardwright review status",
+		status.code === 0 && status.out.includes("before your latest commit"),
+		status.out + status.err,
+	);
 }
 
 // Python
