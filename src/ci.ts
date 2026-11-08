@@ -35,7 +35,7 @@ async function out(argv: string[], cwd: string) {
 	const result = await run(argv, cwd);
 	if (!result.ok)
 		throw new Error(`${argv.join(" ")} failed: ${result.output.trim()}`);
-	return result.output.trimEnd();
+	return result.stdout.trimEnd();
 }
 
 /**
@@ -54,9 +54,10 @@ export async function ci(
 	const git = await gitContext(options.cwd);
 	const cwd = git.toplevel ?? options.cwd;
 	const baseName =
-		options.base ??
-		env.GITHUB_BASE_REF ??
-		config.git.protected_branch ??
+		// Actions sets GITHUB_BASE_REF to "" outside pull requests, as on merge_group.
+		options.base ||
+		env.GITHUB_BASE_REF ||
+		config.git.protected_branch ||
 		"main";
 	const baseRef = await resolveBase(baseName, cwd);
 	const mergeBase = await out(["git", "merge-base", baseRef, "HEAD"], cwd);

@@ -50,6 +50,19 @@ test("a clean branch passes every check and reports its risk tier", async () => 
 	expect(result.tier).toBe("medium");
 });
 
+test("an empty GITHUB_BASE_REF, as on merge_group, falls back to the protected branch", async () => {
+	const { repo, config } = await branch(
+		stack({}),
+		{ "src/a.ts": "export const a = 1;\n" },
+		"feat: add a",
+	);
+	const result = await ci(config, {
+		cwd: repo.root,
+		env: { GITHUB_BASE_REF: "" },
+	});
+	expect(result.ok).toBe(true);
+});
+
 test("bad commit subjects, failing checks and edits that change files all fail", async () => {
 	const { repo, config } = await branch(
 		stack({

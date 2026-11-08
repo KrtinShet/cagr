@@ -131,13 +131,16 @@ export function workflowYaml(config: Config): string {
 	if (config.ci.review)
 		lines.push(
 			"  review:",
-			"    if: github.event_name == 'pull_request' && !github.event.pull_request.draft && github.event.action != 'edited'",
+			// The review job runs on every event, edited too: a job skipped by its `if` counts as a passing required check.
+			"    if: github.event_name == 'pull_request' && !github.event.pull_request.draft",
 			"    runs-on: ubuntu-latest",
 			"    permissions:",
 			"      contents: read",
 			"      pull-requests: write",
 			"    steps:",
+			// Without a ref, checkout gives the merge commit, which is not in the pull request.
 			...checkout,
+			`          ref: ${expr("github.event.pull_request.head.sha")}`,
 			...installClaude,
 			...installSteps(config),
 			"      - run: guardwright review --ci",

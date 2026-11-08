@@ -23,7 +23,7 @@ export const ghCli: Gh = async (args, stdin) => {
 		throw new Error(
 			`gh ${args.slice(0, 3).join(" ")} failed: ${result.output.trim().slice(0, 400)}`,
 		);
-	return result.output;
+	return result.stdout;
 };
 
 const marker = "guardwright-review";
@@ -82,26 +82,35 @@ export function pullRequestFromEvent(
 	};
 }
 
-type Comment = { id: number; body: string };
+type Comment = { id: number; body: string; login: string };
 
+/** The workflow posts as github-actions. REST names it "github-actions[bot]", GraphQL "github-actions". */
+export const isWorkflowBot = (login: string | null | undefined) =>
+	login?.replace(/\[bot\]$/, "") === "github-actions";
+
+// Only the workflow's own comment counts: anyone can post a comment that carries the marker.
 async function stateComment(gh: Gh, pr: PullRequest): Promise<Comment | null> {
 	const out = await gh([
 		"api",
 		"--paginate",
 		`repos/${pr.repo}/issues/${pr.number}/comments`,
 		"--jq",
-		".[] | {id, body}",
+		".[] | {id, body, login: .user.login}",
 	]);
 	const comments = out
 		.split("\n")
 		.filter(Boolean)
 		.map((line) => JSON.parse(line) as Comment);
-	return comments.findLast((comment) => stateLine.test(comment.body)) ?? null;
+	return (
+		comments.findLast(
+			(comment) => isWorkflowBot(comment.login) && stateLine.test(comment.body),
+		) ?? null
+	);
 }
 
 const resolvedQuery = `query($owner: String!, $name: String!, $number: Int!) {
   repository(owner: $owner, name: $name) { pullRequest(number: $number) {
-    reviewThreads(first: 100) { nodes { isResolved resolvedBy { login } comments(first: 1) { nodes { body } } } }
+    reviewThreads(first: 100) { nodes { isResolved resolvedBy { login } comments(first: 1) { nodes { body author { login } } } } }
   } }
 }`;
 
@@ -131,7 +140,9 @@ export async function resolvedFindings(
 						nodes: {
 							isResolved: boolean;
 							resolvedBy: { login: string } | null;
-							comments: { nodes: { body: string }[] };
+							comments: {
+								nodes: { body: string; author: { login: string } | null }[];
+							};
 						}[];
 					};
 				};
@@ -141,10 +152,10 @@ export async function resolvedFindings(
 	const resolved = new Map<string, string>();
 	for (const thread of data.data?.repository?.pullRequest?.reviewThreads
 		?.nodes ?? []) {
-		if (!thread.isResolved) continue;
-		const id = thread.comments.nodes[0]?.body.match(
-			/<!-- guardwright:(f\d+) -->/,
-		)?.[1];
+		const first = thread.comments.nodes[0];
+		// A thread counts only when the workflow started it, so a hand-made comment with the marker does not.
+		if (!thread.isResolved || !isWorkflowBot(first?.author?.login)) continue;
+		const id = first?.body.match(/<!-- guardwright:(f\d+) -->/)?.[1];
 		if (id) resolved.set(id, thread.resolvedBy?.login ?? "someone");
 	}
 	return resolved;
@@ -170,7 +181,7 @@ export async function postReview(
 	].join("\n\n---\n\n");
 	const payload = (comments: ReviewFinding[]) =>
 		JSON.stringify({
-			commit_id: outcome.round?.head ?? pr.head,
+			commit_id: pr.head,
 			event: "COMMENT",
 			body,
 			comments: comments.map((finding) => ({
@@ -189,7 +200,7 @@ export async function postReview(
 		await gh(
 			["api", "-X", "POST", endpoint, "--input", "-"],
 			JSON.stringify({
-				commit_id: outcome.round?.head ?? pr.head,
+				commit_id: pr.head,
 				event: "COMMENT",
 				body: all,
 			}),
@@ -243,6 +254,13 @@ export async function ciReview(
 			};
 		}
 	}
+	const checkedOut = (
+		await run(["git", "rev-parse", "HEAD"], cwd)
+	).stdout.trim();
+	if (checkedOut !== pr.head)
+		throw new ReviewInputError(
+			`The checkout is ${checkedOut.slice(0, 7)}, not the pull request's head ${pr.head.slice(0, 7)}, so the review would cover the wrong commit. Check out the head: in actions/checkout, set \`ref: \${{ github.event.pull_request.head.sha }}\`, or run \`guardwright sync\` to rewrite the workflow.`,
+		);
 	const outcome = await review(config, {
 		cwd,
 		base: pr.base,
@@ -250,10 +268,20 @@ export async function ciReview(
 		agent: options.agent,
 		progress: options.progress,
 	});
+	let posted = "";
 	if (!outcome.skipped)
-		await postReview(gh, pr, outcome, config.review.max_rounds);
+		await postReview(gh, pr, outcome, config.review.max_rounds).catch(
+			(error: Error) => {
+				posted = `\n\nThe review could not be posted to the pull request: ${error.message}`;
+			},
+		);
 	await saveState(gh, pr, existing, outcome.record);
-	const report = reviewReport(outcome, config.review.max_rounds);
-	// Fail open: a reviewer that could not run does not hold the pull request; the report says why.
-	return { ok: outcome.round?.error ? true : outcome.passed, report };
+	const report = `${reviewReport(outcome, config.review.max_rounds)}${posted}`;
+	// Fail open: a reviewer that could not run does not hold the pull request, but findings already open still do.
+	return {
+		ok: outcome.round?.error
+			? blocking(outcome.record).length === 0
+			: outcome.passed,
+		report,
+	};
 }

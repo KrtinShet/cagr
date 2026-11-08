@@ -5,7 +5,7 @@ import type { AgentName, Config, PackageManager } from "./config/schema";
 import { stackFiles, withFiles } from "./hook/stack-files";
 import { toPosix } from "./paths";
 import { run, runShell } from "./run";
-import { installGitHooks, sync } from "./sync";
+import { installGitHooks, keptNotes, sync } from "./sync";
 
 export type DetectedStack = {
 	dir: string;
@@ -444,7 +444,9 @@ export async function init(
 	writeFileSync(file, text);
 	const config = loadConfig(root);
 	if (!config) throw new Error(`Could not read back ${file}.`);
-	const written = [configFileName, ...sync(config).written];
+	const synced = sync(config);
+	const written = [configFileName, ...synced.written];
+	notes.push(...keptNotes(synced.kept));
 	const guide = join(root, config.review.guide);
 	if (config.review.enabled && !existsSync(guide)) {
 		writeFileSync(guide, starterReviewGuide);

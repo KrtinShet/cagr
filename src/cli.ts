@@ -23,7 +23,7 @@ import { ghCli } from "./review/github";
 import { AnswerError } from "./review/report";
 import { ReviewInputError } from "./review/review";
 import { loadRules, RuleError, testRules } from "./rules/rules";
-import { GitSetupError, installGitHooks, sync } from "./sync";
+import { GitSetupError, installGitHooks, keptNotes, sync } from "./sync";
 import { version } from "./version";
 
 const help = `guardwright ${version}: one config for every coding agent's guardrails.
@@ -187,6 +187,7 @@ async function main(argv: string[]): Promise<number> {
 		case "sync": {
 			const check = args.includes("--check");
 			const result = sync(requireConfig(), { check });
+			for (const note of keptNotes(result.kept)) console.log(note);
 			if (check) {
 				if (result.drifted.length === 0) {
 					console.log("Generated files are up to date.");
