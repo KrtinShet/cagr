@@ -70,7 +70,7 @@ Run `cagr doctor`. Under Timing it shows the median and max of each hook and eac
 
 ### `gh pr create` is denied though I ran `cagr review`
 
-The gate checks the current commit. If you committed after the review, run `cagr review` again: it reviews only the new commits. `cagr review status` shows the last reviewed commit and what is still open. If you open the pull request for another branch with `--head`, or run `gh pr ready <branch>`, the gate checks that branch. If the same line commits or changes folder before `gh pr create`, the gate denies it: run the commit first, then `gh pr create` on its own.
+The gate checks the current commit. If you committed after the review, run `cagr review` again: it reviews only the new commits. `cagr review status` shows the last reviewed commit and what is still open. If you open the pull request for another branch with `--head`, or run `gh pr ready <branch>`, the gate checks that branch. If the same line runs anything but `git add`, `git push`, `git status`, `git fetch`, `git diff` or `git log` before `gh pr create`, the gate denies it: run that first, then `gh pr create` on its own. One literal `cd <path> &&` at the start is fine, and the gate then checks the repo in that folder.
 
 ### The review fails with "Commit your changes first."
 
