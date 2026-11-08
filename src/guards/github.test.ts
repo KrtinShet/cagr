@@ -45,6 +45,10 @@ test("reading and commenting stay allowed", () => {
 
 test("the gate matches gh pr create and gh pr ready only when review is on", () => {
 	expect(isGateCommand("gh pr create --fill", recommended)).toBe(true);
+	expect(isGateCommand("gh pr create>/dev/null", recommended)).toBe(true);
+	expect(agentApprovalFinding("gh pr merge>/dev/null", recommended)?.id).toBe(
+		"agent-approval",
+	);
 	expect(
 		isGateCommand("git push -u origin x && gh pr ready", recommended),
 	).toBe(true);
@@ -243,6 +247,8 @@ test("gateTarget reads the branch or pull request a gate command names", () => {
 		"gh pr ready 2>&1",
 		"gh pr ready &>/dev/null",
 		"gh pr ready > out.txt",
+		`gh pr ready 2>"$LOG"`,
+		"gh pr ready>out",
 	])
 		expect(target(line)).toEqual({ branch: null });
 	expect(target("gh pr ready -R o/r feat/b")).toEqual({ branch: "feat/b" });

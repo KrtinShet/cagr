@@ -247,3 +247,29 @@ test("git and cd run by full path or as .exe are guarded the same", () => {
 	expect(inMain("/usr/bin/git commit -m x")).toBe(reasons.mainCheckout);
 	expect(inMain("/usr/bin/cd ../wt && git commit -m x")).toBeNull();
 });
+
+describe("redirections", () => {
+	test("an escaped > is an argument, so a flag after it is still seen", () => {
+		expect(onFeature("git commit -m \\> --no-verify")).toBe(reasons.noVerify);
+		expect(onFeature("git push -f>log")).toBe(reasons.forcePush);
+	});
+
+	test("a blocked entry with a redirection matches it, however it is spaced", () => {
+		const cfg = config({
+			commands: {
+				blocked: [
+					{ match: "> .env", reason: "env" },
+					{ match: "psql < prod.sql", reason: "prod" },
+				],
+			},
+		});
+		const reason = (line: string) =>
+			commandFinding(line, cfg, { branch: "feat/x", inMainCheckout: false })
+				?.reason ?? null;
+		expect(reason("echo A=1 > .env")).toBe("env");
+		expect(reason("echo A=1 >.env")).toBe("env");
+		expect(reason("psql < prod.sql")).toBe("prod");
+		expect(reason("psql -c 'select 1'")).toBeNull();
+		expect(reason("echo A=1 > .env.example")).toBeNull();
+	});
+});

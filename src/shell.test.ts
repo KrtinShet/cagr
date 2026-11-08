@@ -18,9 +18,16 @@ describe("simpleCommands", () => {
 			),
 		).toEqual([["git", "push"], ["tail", "-2"], ["cat"], ["bun", "x"], ["ls"]]);
 		expect(simpleCommands(">out echo hi >& log")).toEqual([["echo", "hi"]]);
-		expect(simpleCommands(`echo ">x" '2>&1'`)).toEqual([
-			["echo", ">x", "2>&1"],
+		expect(simpleCommands(`echo ">x" '2>&1' \\> 2\\>x`)).toEqual([
+			["echo", ">x", "2>&1", ">", "2>x"],
 		]);
+		expect(
+			simpleCommands(`gh pr ready 2>"$LOG" && gh pr create>/dev/null`),
+		).toEqual([
+			["gh", "pr", "ready"],
+			["gh", "pr", "create"],
+		]);
+		expect(simpleCommands("cat <<EOF")).toEqual([["cat"]]);
 	});
 
 	test("keeps quoted text as one word", () => {
