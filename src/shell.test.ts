@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { programWords, simpleCommands } from "./shell";
+import { commandsWithNesting, programWords, simpleCommands } from "./shell";
 
 describe("simpleCommands", () => {
 	test("splits on control operators", () => {
@@ -41,6 +41,23 @@ describe("programWords", () => {
 		expect(programWords(["CI=1", "sudo", "env", "A=b", "npm", "i"])).toEqual([
 			"npm",
 			"i",
+		]);
+	});
+});
+
+describe("commandsWithNesting", () => {
+	test("marks commands inside ( ), $( ) and backticks", () => {
+		expect(
+			commandsWithNesting(
+				"git add . && (cd /x) && echo $(git switch b) `pwd` && gh pr create",
+			).map(({ words, nested }) => [words[0], nested]),
+		).toEqual([
+			["git", false],
+			["cd", true],
+			["echo", false],
+			["git", true],
+			["pwd", true],
+			["gh", false],
 		]);
 	});
 });

@@ -9,18 +9,36 @@ const assignment = /^[A-Za-z_][A-Za-z0-9_]*=/;
  * quotes removed. Good enough to read intent, not a full shell parser.
  */
 export function simpleCommands(line: string): string[][] {
+	return split(line).commands;
+}
+
+/** Like simpleCommands, with whether each command runs in a subshell: `( )`, `$( )` or backticks. */
+export function commandsWithNesting(
+	line: string,
+): { words: string[]; nested: boolean }[] {
+	const splitter = split(line);
+	return splitter.commands.map((words, index) => ({
+		words,
+		nested: splitter.nested[index] ?? false,
+	}));
+}
+
+function split(line: string) {
 	const splitter = new Splitter();
 	for (let index = 0; index < line.length; index++)
 		index = splitter.read(line, index);
 	splitter.endCommand();
-	return splitter.commands;
+	return splitter;
 }
 
 class Splitter {
 	commands: string[][] = [];
+	nested: boolean[] = [];
 	private words: string[] = [];
 	private word = "";
 	private inWord = false;
+	private depth = 0;
+	private inBacktick = false;
 
 	read(line: string, index: number): number {
 		const char = line[index] as string;
@@ -35,17 +53,25 @@ class Splitter {
 		}
 		if (char === "$" && line[index + 1] === "(") {
 			this.endCommand();
+			this.depth++;
 			return index + 1;
 		}
-		if (separators.has(char)) this.endCommand();
-		else if (char === " " || char === "\t") this.endWord();
+		if (separators.has(char)) {
+			this.endCommand();
+			if (char === "(") this.depth++;
+			else if (char === ")") this.depth = Math.max(0, this.depth - 1);
+			else if (char === "`") this.inBacktick = !this.inBacktick;
+		} else if (char === " " || char === "\t") this.endWord();
 		else this.add(char);
 		return index;
 	}
 
 	endCommand() {
 		this.endWord();
-		if (this.words.length > 0) this.commands.push(this.words);
+		if (this.words.length > 0) {
+			this.commands.push(this.words);
+			this.nested.push(this.depth > 0 || this.inBacktick);
+		}
 		this.words = [];
 	}
 
