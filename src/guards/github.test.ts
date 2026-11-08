@@ -165,3 +165,29 @@ test("prHeadBranch reads --head, -H and --head=, without the owner", () => {
 	expect(prHeadBranch("gh pr create -t x")).toBeNull();
 	expect(prHeadBranch("gh pr ready 3")).toBeNull();
 });
+
+test("gh run by its full path or as gh.exe is guarded the same", () => {
+	for (const line of [
+		"/usr/bin/gh pr merge 3",
+		"./bin/gh pr review --approve",
+		"gh.exe pr merge 3",
+	])
+		expect(agentApprovalFinding(line, recommended)?.id).toBe("agent-approval");
+	for (const line of [
+		"/opt/homebrew/bin/gh pr create -t x",
+		"C:/tools/gh.exe pr ready",
+	])
+		expect(isGateCommand(line, recommended)).toBe(true);
+	expect(
+		prBodyFinding("/opt/homebrew/bin/gh pr create -t x", recommended, none)?.id,
+	).toBe("pr-body");
+	expect(
+		isGateCommand(
+			"/usr/local/bin/npm publish",
+			config({
+				extends: ["recommended"],
+				review: { gate: ["npm publish"] },
+			}),
+		),
+	).toBe(true);
+});

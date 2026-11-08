@@ -265,6 +265,8 @@ With no body, the message starts "This pull request has no body."
 - **Resolving a review thread** through `gh api`, whenever review is on. A resolved thread counts as an answer to a finding in CI.
 - **Aliases**, always: a `gh alias set` that names any of the commands above or a gate command, and `gh alias import`.
 
+These commands match however gh is called: by its full path (`/opt/homebrew/bin/gh`, `./bin/gh`) or as `gh.exe`. The same goes for review-gate and pr-body.
+
 **Messages:**
 
 ```

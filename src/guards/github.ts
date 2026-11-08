@@ -1,3 +1,4 @@
+import { basename } from "node:path";
 import type { Config } from "../config/schema";
 import { programWords, simpleCommands, withoutHeredocBodies } from "../shell";
 import { containsWords } from "./command";
@@ -5,6 +6,10 @@ import type { Finding } from "./finding";
 
 const commandsOf = (line: string) =>
 	simpleCommands(withoutHeredocBodies(line)).map(programWords);
+
+/** The program's name without its directory or .exe, so `/opt/homebrew/bin/gh` is gh. */
+const programName = (words: string[]) =>
+	basename(words[0] ?? "").replace(/\.exe$/i, "");
 
 /** gh flags that come before the subcommand and take a value. */
 const ghValueFlags = new Set(["-R", "--repo", "--hostname"]);
@@ -18,7 +23,7 @@ const ghAliases: Record<string, Record<string, string>> = {
  * aliases expanded, so `gh -R o/r pr new` reads as `gh pr create`.
  */
 export function ghWords(words: string[]): string[] | null {
-	if (words[0] !== "gh") return null;
+	if (programName(words) !== "gh") return null;
 	const out = ["gh"];
 	let index = 1;
 	while (out.length < 3 && index < words.length) {
@@ -116,7 +121,7 @@ export function isGateCommand(line: string, config: Config) {
 	const gates = (what: string) =>
 		config.review.gate.some((match) => match.includes(what));
 	return commandsOf(line).some((raw) => {
-		const words = ghWords(raw) ?? raw;
+		const words = ghWords(raw) ?? [programName(raw), ...raw.slice(1)];
 		if (config.review.gate.some((match) => containsWords(words, match)))
 			return true;
 		if (words[0] !== "gh" || words[1] !== "api") return false;
