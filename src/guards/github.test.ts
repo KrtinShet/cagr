@@ -356,3 +356,23 @@ test("with --input the head comes only from the input file", () => {
 		),
 	).toEqual({ reason: expect.stringContaining("cannot tell which branch") });
 });
+
+test("gh pr checkout, git branch -f and git update-ref count as moving HEAD", () => {
+	const moves: [string, string][] = [
+		["gh pr checkout 42 && gh pr ready", "gh pr checkout"],
+		[
+			"/usr/bin/gh -R o/r pr checkout 42 && gh pr create --fill",
+			"gh pr checkout",
+		],
+		["git branch -f feat/x feat/other && gh pr create", "git branch -f"],
+		["git branch --force feat/x main && gh pr ready", "git branch -f"],
+		["git update-ref refs/heads/feat/x abc && gh pr create", "git update-ref"],
+	];
+	for (const [line, moved] of moves)
+		expect(gateOrderFinding(line, recommended)?.reason).toContain(
+			`runs \`${moved}\` before`,
+		);
+	expect(
+		gateOrderFinding("git branch -v && gh pr create", recommended),
+	).toBeNull();
+});

@@ -279,6 +279,7 @@ const movesHead = new Set([
 	"cherry-pick",
 	"pull",
 	"revert",
+	"update-ref",
 ]);
 const movesCwd = new Set(["cd", "pushd", "popd"]);
 
@@ -286,11 +287,19 @@ const movesCwd = new Set(["cd", "pushd", "popd"]);
 function mover(words: string[]) {
 	const program = programName(words);
 	if (movesCwd.has(program)) return program;
+	const gh = ghWords(words);
+	if (gh?.[1] === "pr" && gh[2] === "checkout") return "gh pr checkout";
 	if (program !== "git") return null;
 	let index = 1;
 	while ((words[index] ?? "").startsWith("-"))
 		index += gitOptionsWithValue.has(words[index] as string) ? 2 : 1;
 	const subcommand = words[index];
+	if (subcommand === "branch")
+		return words
+			.slice(index + 1)
+			.some((word) => word === "--force" || /^-[a-zA-Z]*f/.test(word))
+			? "git branch -f"
+			: null;
 	return subcommand && movesHead.has(subcommand) ? `git ${subcommand}` : null;
 }
 

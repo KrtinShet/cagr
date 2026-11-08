@@ -221,7 +221,7 @@ The gate denies the command when:
 - `gh pr ready` names a pull request by number or URL. cagr cannot tell which branch that is, so it says to check out the pull request's branch and run `gh pr ready` there with no argument. `markPullRequestReadyForReview` through `gh api` is denied the same way.
 - A `gh api` call opens a pull request from a branch other than the checked-out one (the `head` field, `headRefName`, or, when `--input` is given, only the `head` in that file, since gh then sends the fields as query parameters), or cagr cannot tell which branch it names. It says to check out that branch and use `gh pr create`.
 - The line opens or readies pull requests for more than one branch.
-- The same line runs something that moves HEAD or the folder before the gate command: `git commit`, `merge`, `rebase`, `reset`, `switch`, `checkout`, `am`, `cherry-pick`, `pull` or `revert`, or `cd`, `pushd` or `popd`. The gate checks the commit the line starts at, so `git commit -am x && gh pr create` would open a pull request from a commit nobody reviewed. It says to run that command first, then the gate command on its own. A `git push` before the gate command is fine.
+- The same line runs something that moves HEAD or the folder before the gate command: `git commit`, `merge`, `rebase`, `reset`, `switch`, `checkout`, `am`, `cherry-pick`, `pull`, `revert`, `update-ref` or `branch -f`, `gh pr checkout`, or `cd`, `pushd` or `popd`. The gate checks the commit the line starts at, so `git commit -am x && gh pr create` would open a pull request from a commit nobody reviewed. It says to run that command first, then the gate command on its own. A `git push` before the gate command is fine.
 
 The gate lets the command through when:
 
