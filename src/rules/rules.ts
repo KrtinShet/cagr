@@ -160,7 +160,7 @@ function toRule(doc: unknown, file: string, problems: string[]): Rule | null {
 	).map((language) => language.toLowerCase());
 	if (
 		ruleLanguages.length === 0 ||
-		ruleLanguages.some((language) => !(language in languages))
+		ruleLanguages.some((language) => !Object.hasOwn(languages, language))
 	)
 		problems.push(
 			`${where}: "language" must be one of ${Object.keys(languages).join(", ")}, or a list of them.`,

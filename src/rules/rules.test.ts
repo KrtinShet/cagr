@@ -328,6 +328,9 @@ examples:
 				"language: [typescript, cobol]",
 			),
 			"b.yml": noPrint.replace("language: python", "language: []"),
+			"c.yml": noPrint
+				.replace("id: no-print", "id: c")
+				.replace("language: python", "language: constructor"),
 		});
 		expect(() => loadRules(config)).toThrow("or a list of them");
 	});

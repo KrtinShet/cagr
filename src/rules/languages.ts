@@ -52,6 +52,7 @@ export function setEmbeddedParsers(
 }
 
 export function parserForFile(language: string, file: string) {
+	if (!Object.hasOwn(languages, language)) return null;
 	return languages[language]?.extensions[extname(file).slice(1)] ?? null;
 }
 
