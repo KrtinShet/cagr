@@ -438,12 +438,35 @@ describe("example paths", () => {
 		expect(results.filter((r) => !r.ok)).toEqual([]);
 	});
 
+	test("an invalid example outside files, or in a parser without the kind, says why it did not run", async () => {
+		const { config } = await repo({
+			"a.yml": fetchRule.replace(
+				"apps/web/src/app/items/page.tsx",
+				"apps/web/src/lib/page.tsx",
+			),
+			"b.yml": jsxRule.replace(
+				'invalid: ["export default function Page() { return <div/>; }"]',
+				'invalid: [{ path: a.ts, code: "export default function Page() { return <div/>; }" }]',
+			),
+		});
+		const failed = (await testRules(loadRules(config))).filter((r) => !r.ok);
+		expect(failed.map((r) => [r.rule, r.skipped])).toEqual([
+			["no-fetch", "the path is not in files, so the rule does not run on it"],
+			[
+				"pages-render-views",
+				"the rule's kinds do not exist in the TypeScript parser, so it does not run on this file",
+			],
+		]);
+	});
+
 	test("a path that is not repo-relative is a rule file problem", async () => {
 		for (const bad of [
 			"./apps/web/src/app/x.ts",
 			"/apps/web/src/app/x.ts",
 			"../x.ts",
 			"apps/web/../web/src/app/x.ts",
+			"apps//web/src/app/x.ts",
+			"apps/web/src/app/",
 			"apps\\\\web\\\\x.ts",
 		]) {
 			const { config } = await repo({

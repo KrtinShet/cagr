@@ -231,7 +231,7 @@ function toExample(
 		path.startsWith("/") ||
 		path.includes("\\") ||
 		/^[A-Za-z]:/.test(path) ||
-		path.split("/").some((part) => part === "." || part === "..")
+		path.split("/").some((part) => part === "" || part === "." || part === "..")
 	)
 		return `path ${path} is not repo-relative, so files and ignores could never match it. Write it from the repo root with forward slashes, such as apps/web/src/a.ts.`;
 	if (
