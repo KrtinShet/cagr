@@ -12,7 +12,7 @@ search_enabled: true
 color_scheme: light
 aux_links:
   GitHub: https://github.com/krtinshet/cagr
-  npm: https://www.npmjs.com/package/@kslabs/cagr
+  npm: https://www.npmjs.com/package/@krtinshet/cagr
 aux_links_new_tab: true
 gh_edit_link: true
 gh_edit_repository: https://github.com/krtinshet/cagr

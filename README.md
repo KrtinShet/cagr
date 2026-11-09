@@ -29,7 +29,7 @@ The full docs are at [krtinshet.github.io/cagr](https://krtinshet.github.io/cagr
 
 ```sh
 curl -fsSL https://github.com/krtinshet/cagr/releases/latest/download/install.sh | sh
-# or: bun add -d @kslabs/cagr    /    npm i -D @kslabs/cagr
+# or: bun add -d @krtinshet/cagr    /    npm i -D @krtinshet/cagr
 
 cd your-repo
 cagr init      # detects your stacks, writes cagr.toml and the hook files
