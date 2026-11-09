@@ -589,6 +589,22 @@ describe("shared utils", () => {
 		);
 	});
 
+	test("own utils, constraints or transform that are not a mapping are problems, not crashes", async () => {
+		for (const bad of ["module-source", "3", "true", "[module-source]"]) {
+			const { config } = await repo({
+				"_utils.yml": sharedUtils,
+				"a.yml": `${serverImports}utils: ${bad}\nconstraints: ${bad}\n`,
+			});
+			expect(() => loadRules(config)).toThrow(RuleError);
+			expect(() => loadRules(config)).toThrow(
+				'"utils" must be a mapping of names to ast-grep rules',
+			);
+			expect(() => loadRules(config)).toThrow(
+				'"constraints" must be a mapping',
+			);
+		}
+	});
+
 	test("an unknown util name is reported when the rule runs", async () => {
 		const { config } = await repo({ "a.yml": serverImports });
 		await expect(testRules(loadRules(config))).rejects.toThrow(
