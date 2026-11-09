@@ -237,6 +237,10 @@ export const configSchema: Node = obj({
 				description:
 					"Let agents run `gh pr merge` and `gh pr review --approve`. Off: approval stays with a person.",
 			}),
+			status: bool({
+				description:
+					"Report to GitHub without a workflow: `cagr review` sets the commit status cagr/review, and the pre-push hook sets cagr/checks after its commands pass. Needs `gh`.",
+			}),
 		},
 		{ description: "The review gate and the reviewer agent." },
 	),
@@ -356,6 +360,7 @@ export type Config = {
 		skip: string[];
 		pr_sections: string[];
 		agents_may_merge: boolean;
+		status: boolean;
 	};
 	risk: { default: RiskTier; paths: RiskPath[] };
 	ci: {

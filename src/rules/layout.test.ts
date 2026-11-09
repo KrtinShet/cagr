@@ -187,14 +187,16 @@ describe("loading", () => {
 		);
 	});
 
-	test("[[layout]] in cagr.toml is no longer a config key", () => {
+	test("[[layout]] in cagr.toml is an error that says where the rules went", () => {
 		expect(() =>
 			resolveConfig(
 				{ layout: [{ id: "x", files: ["**"], name: "a" }] },
 				"/repo",
 				"cagr.toml",
 			),
-		).toThrow("layout");
+		).toThrow(
+			"[[layout]] moved out of the config, into rule files. Put each layout rule in a .cagr/rules/*.yml file",
+		);
 	});
 });
 
