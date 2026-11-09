@@ -593,7 +593,7 @@ describe("shared utils", () => {
 		for (const bad of ["module-source", "3", "true", "[module-source]"]) {
 			const { config } = await repo({
 				"_utils.yml": sharedUtils,
-				"a.yml": `${serverImports}utils: ${bad}\nconstraints: ${bad}\n`,
+				"a.yml": `${serverImports}utils: ${bad}\nconstraints: ${bad}\ntransform: ${bad}\n`,
 			});
 			expect(() => loadRules(config)).toThrow(RuleError);
 			expect(() => loadRules(config)).toThrow(

@@ -274,7 +274,9 @@ function toRule(doc: unknown, file: string, problems: string[]): Rule | null {
 				Array.isArray(raw[key]))
 		)
 			problems.push(
-				`${where}: "${key}" must be a mapping of names to ast-grep rules. To use a shared util, write matches: <name> in "rule".`,
+				key === "utils"
+					? `${where}: "utils" must be a mapping of names to ast-grep rules. To use a shared util, write matches: <name> in "rule".`
+					: `${where}: "${key}" must be a mapping keyed by metavariable name, as ast-grep expects.`,
 			);
 	for (const key of ["files", "ignores"])
 		if (raw[key] !== undefined && !isStringList(raw[key]))
