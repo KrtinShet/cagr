@@ -52,7 +52,7 @@ src/a.ts:1:1 no-console-log: console.log("x", 1) leaves debug output in app code
 | ------------------ | -------- | ------------------------------------------------------------------------------------------------------------------- |
 | `id`               | yes      | A unique name. It may not be a [built-in guard](guards.md) id, and two rules may not share one.                     |
 | `language`         | yes      | One of the [languages](#languages) below, or a list of them such as `[typescript, javascript]`. Case does not matter. |
-| `rule`             | yes      | The ast-grep rule: `pattern`, `kind`, `has`, `inside`, `all`, `any`, `not` and the rest.                            |
+| `rule`             | yes*     | The ast-grep rule: `pattern`, `kind`, `has`, `inside`, `all`, `any`, `not` and the rest.                            |
 | `message`          | yes      | What is wrong. `$VAR` becomes the text the metavariable matched, and `$$$VAR` the text of all the nodes it matched. |
 | `instead`          | yes      | What to use instead, so the agent can fix it.                                                                       |
 | `examples.invalid` | yes      | At least one code snippet the rule must fire on, or a `{ path, code }` mapping ([example paths](#example-paths)).   |
@@ -63,8 +63,11 @@ src/a.ts:1:1 no-console-log: console.log("x", 1) leaves debug output in app code
 | `constraints`      | no       | ast-grep constraints on metavariables.                                                                              |
 | `utils`            | no       | ast-grep utility rules, for this rule only. See [shared utils](#shared-utils) to share them.                        |
 | `transform`        | no       | ast-grep transforms.                                                                                                |
+| `imports`          | no       | An [import boundary](#import-boundaries): `forbid` and `allow` globs. Takes the place of `rule`.                     |
 | `url`              | no       | Accepted, for your own reference.                                                                                   |
 | `metadata`         | no       | Accepted, for your own reference.                                                                                   |
+
+\* A rule has `rule` or `imports`, not both.
 
 Globs in `files` and `ignores` are relative to the repo root and work like the [config globs](configuration.md#globs). Any other key is an error that lists the allowed keys.
 
@@ -117,32 +120,35 @@ Any code rule can then say `matches: module-source`. A rule gets only the shared
 
 ### Import boundaries
 
-To keep one part of the code from importing another, match the import's source string with a `regex` and scope the rule to the importing files with `files`. This rule keeps shared components from reaching into features, the app router or the server:
+To keep one part of the code from importing another, give the rule an `imports:` block instead of `rule:`. cagr finds every module source in the file (`import ... from`, `export ... from`, `import()` and `require()` with a plain string) and resolves it to a repo path before it checks the globs:
+
+- A relative source (`./x`, `../server/db`) resolves from the importing file.
+- An alias (`@/server/db`) resolves through `compilerOptions.paths` in the nearest `tsconfig.json` or `jsconfig.json` above the file, following relative `extends`. `baseUrl` works too.
+- When the module exists, the path names its file: `apps/web/src/server/db.ts`, or `.../store/index.ts` for a folder. Otherwise it is the path without an extension.
+- A package name (`swr`, `swr/mutation`) stays as written.
 
 ```yaml
 id: components-stay-shared
-language: typescript
 files: ["apps/web/src/components/**"]
-message: Shared components may not import from $SRC.
+message: Shared components may not import $TARGET.
 instead: Pass the data in as props, or move the code into src/sections/<feature>/.
-rule:
-  kind: string
-  regex: "^['\"]@/(sections|app|api|server|layouts|store)/"
-  pattern: $SRC
-  inside:
-    any:
-      - kind: import_statement
-      - kind: export_statement
+imports:
+  forbid:
+    - "apps/web/src/{sections,server}/**"
+    - "swr"
+    - "swr/**"
+  allow: ["apps/web/src/server/types.ts"]
 examples:
   invalid:
-    - import { DealCard } from "@/sections/deals/deal-card";
-    - export { db } from '@/server/db';
+    - { path: apps/web/src/components/card.tsx, code: 'import { db } from "../server/db";' }
+    - { path: apps/web/src/components/card.tsx, code: 'import { Deal } from "@/sections/deals/deal";' }
   valid:
-    - import { Button } from "@/components/button";
-    - const label = "@/sections/x";
+    - { path: apps/web/src/components/card.tsx, code: 'import type { Row } from "@/server/types";' }
 ```
 
-The string node includes its quotes, so the regex starts with `['"]`. `inside` keeps it to import and re-export sources, so a plain string with the same text does not fire. Use one rule per boundary, each with its own `files`. For rules about file names and folders, use [layout rules](#layout-rules).
+The source fires when it matches a `forbid` glob and no `allow` glob. Forbid a folder with `folder/**`, and a module with its path and an extension glob, such as `src/utils/fetcher.*`. `$TARGET` in the message is the resolved path, and `$SRC` is the source as written, with its quotes. `language` defaults to `[typescript, javascript]`; `tsx` is allowed too. `constraints`, `utils` and `transform` do not go with `imports`.
+
+Give the examples paths, so the sources resolve from the right folder; `cagr rules test` reads the repo's own tsconfig. TypeScript's `import x = require("y")` and sources built from template expressions are not checked. For rules about file names and folders, use [layout rules](#layout-rules).
 
 ## Layout rules
 
