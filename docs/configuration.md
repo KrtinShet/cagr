@@ -262,6 +262,7 @@ Edits to a file that already exists are not denied, so old files can still be fi
 | `skip`             | list of globs                     | `[]`                              | Files the reviewer does not review.                                                                                                |
 | `pr_sections`      | list of strings                   | `[]`                              | Headings a pull request body must have. `gh pr create` without them is denied.                                                     |
 | `agents_may_merge` | boolean                           | `true`                            | Let agents run `gh pr merge` and `gh pr review --approve`. When `false`, approval stays with a person.                             |
+| `status`           | boolean                           | `false`                           | Send the commit statuses `cagr/review` (from `cagr review`) and `cagr/checks` (from the pre-push hook) to GitHub through `gh`, so branch protection can require them without a workflow. See [Commit statuses](ci.md#commit-statuses-without-a-workflow). |
 
 See [Review](review.md).
 
