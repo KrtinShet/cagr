@@ -74,13 +74,15 @@ export type RuleSet = { code: Rule[]; layout: LayoutRule[] };
 
 /**
  * Loads every rule file, or throws one error that lists every problem. A
- * document with a top-level `layout:` block is a layout rule; any other is a
- * code rule.
+ * document with a top-level `layout:` block is a layout rule, one with only
+ * `utils:` holds utility rules any code rule may use, and any other is a code
+ * rule.
  */
 export function loadRuleSet(config: Config): RuleSet {
 	const problems: string[] = [];
 	const code: Rule[] = [];
 	const layout: LayoutRule[] = [];
+	const shared = new Map<string, { rule: unknown; source: string }>();
 	for (const file of ruleFiles(config)) {
 		let parsed: unknown;
 		try {
@@ -91,6 +93,10 @@ export function loadRuleSet(config: Config): RuleSet {
 		}
 		const docs = Array.isArray(parsed) ? parsed : [parsed];
 		for (const doc of docs) {
+			if (isUtilsOnly(doc)) {
+				addShared(doc.utils, file, shared, problems);
+				continue;
+			}
 			if (typeof doc === "object" && doc !== null && "layout" in doc) {
 				const rule = toLayoutRule(
 					doc as Record<string, unknown>,
@@ -104,6 +110,7 @@ export function loadRuleSet(config: Config): RuleSet {
 			if (rule) code.push(rule);
 		}
 	}
+	for (const rule of code) withShared(rule, shared);
 	const seen = new Map<string, string>();
 	for (const rule of [...code, ...layout]) {
 		if (guardIds.includes(rule.id))
@@ -132,6 +139,76 @@ export function loadRules(config: Config): Rule[] {
 /** The layout rules, or throws one error that lists every problem in the rule files. */
 export function loadLayoutRules(config: Config): LayoutRule[] {
 	return loadRuleSet(config).layout;
+}
+
+const isUtilsOnly = (doc: unknown): doc is { utils: unknown } =>
+	typeof doc === "object" &&
+	doc !== null &&
+	!Array.isArray(doc) &&
+	Object.keys(doc).length === 1 &&
+	"utils" in doc;
+
+function addShared(
+	utils: unknown,
+	file: string,
+	shared: Map<string, { rule: unknown; source: string }>,
+	problems: string[],
+) {
+	if (typeof utils !== "object" || utils === null || Array.isArray(utils)) {
+		problems.push(
+			`${file}: "utils" must map each utility name to an ast-grep rule.`,
+		);
+		return;
+	}
+	for (const [name, rule] of Object.entries(utils)) {
+		const other = shared.get(name);
+		if (other)
+			problems.push(
+				`${file}: shared util "${name}" is also defined in ${other.source}. Give each shared util its own name.`,
+			);
+		else if (typeof rule !== "object" || rule === null)
+			problems.push(
+				`${file}: shared util "${name}" must be an ast-grep rule, such as kind: string.`,
+			);
+		else shared.set(name, { rule, source: file });
+	}
+}
+
+/** Names a matcher refers to with `matches:`, anywhere inside it. */
+function referencedUtils(value: unknown, found = new Set<string>()) {
+	if (Array.isArray(value))
+		for (const entry of value) referencedUtils(entry, found);
+	else if (typeof value === "object" && value !== null)
+		for (const [key, entry] of Object.entries(value)) {
+			if (key === "matches" && typeof entry === "string") found.add(entry);
+			else referencedUtils(entry, found);
+		}
+	return found;
+}
+
+/**
+ * Adds the shared utils a rule uses, and the ones those use, to its own. Only
+ * the used ones: a shared util with JSX kinds would otherwise stop every
+ * TypeScript rule from compiling for .ts files. A rule's own util of the same
+ * name wins.
+ */
+function withShared(
+	rule: Rule,
+	shared: Map<string, { rule: unknown; source: string }>,
+) {
+	if (shared.size === 0) return;
+	const own = (rule.matcher.utils ?? {}) as Record<string, unknown>;
+	const added: Record<string, unknown> = {};
+	const pending = [...referencedUtils(rule.matcher)];
+	while (pending.length > 0) {
+		const name = pending.pop() as string;
+		if (name in own || name in added) continue;
+		const util = shared.get(name);
+		if (!util) continue;
+		added[name] = util.rule;
+		pending.push(...referencedUtils(util.rule));
+	}
+	if (Object.keys(added).length > 0) rule.matcher.utils = { ...added, ...own };
 }
 
 function toRule(doc: unknown, file: string, problems: string[]): Rule | null {

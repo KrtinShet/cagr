@@ -23,7 +23,7 @@ Put rule files in `.cagr/rules/`. cagr reads every `*.yml` and `*.yaml` file in 
 dirs = [".cagr/rules", "tools/rules"]
 ```
 
-A file can hold one rule, or several separated by `---`, and can mix both kinds. A rule with a top-level `layout:` block is a layout rule; any other is a code rule. Rules are not set in `cagr.toml`, which only wires cagr up.
+A file can hold one rule, or several separated by `---`, and can mix both kinds. A rule with a top-level `layout:` block is a layout rule, a document with only `utils:` holds [shared utils](#shared-utils), and any other is a code rule. Rules are not set in `cagr.toml`, which only wires cagr up.
 
 ## A code rule
 
@@ -61,7 +61,7 @@ src/a.ts:1:1 no-console-log: console.log("x", 1) leaves debug output in app code
 | `ignores`          | no       | Globs. The rule skips files that match one.                                                                         |
 | `note`             | no       | More context, shown by `cagr explain`.                                                                              |
 | `constraints`      | no       | ast-grep constraints on metavariables.                                                                              |
-| `utils`            | no       | ast-grep utility rules.                                                                                             |
+| `utils`            | no       | ast-grep utility rules, for this rule only. See [shared utils](#shared-utils) to share them.                        |
 | `transform`        | no       | ast-grep transforms.                                                                                                |
 | `url`              | no       | Accepted, for your own reference.                                                                                   |
 | `metadata`         | no       | Accepted, for your own reference.                                                                                   |
@@ -93,6 +93,27 @@ examples:
 ```
 
 An invalid example at a path the rule skips fails, so a too-wide `ignores` gets caught. A path whose extension none of the rule's languages read is a rule file problem.
+
+### Shared utils
+
+ast-grep `utils` belong to one rule. To use a helper in several rules, put it in a document that has only `utils:`, in any rule file, such as `.cagr/rules/_utils.yml`:
+
+```yaml
+utils:
+  module-source:
+    any:
+      - inside: { kind: import_statement }
+      - inside: { kind: export_statement }
+      - matches: dynamic-import-argument
+  dynamic-import-argument:
+    inside:
+      kind: arguments
+      inside:
+        kind: call_expression
+        has: { field: function, regex: "^(require|import)$" }
+```
+
+Any code rule can then say `matches: module-source`. A rule gets only the shared utils it uses, and the ones those use, so a shared util with JSX kinds does not stop a `typescript` rule from checking `.ts` files. A rule's own util wins over a shared one with the same name. Two shared utils with the same name are a rule file problem. A name no util defines is reported when the rule runs.
 
 ### Import boundaries
 
