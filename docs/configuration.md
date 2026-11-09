@@ -52,7 +52,7 @@ After you change the config, run `cagr sync` to rewrite the generated files. See
 How a preset merges with your config:
 
 - Tables merge key by key, at every depth.
-- Lists of tables (`[[stack]]`, `files.protected`, `commands.blocked`, `risk.paths`) add your entries to the preset's.
+- Lists of tables (`[[stack]]`, `[[layout]]`, `files.protected`, `commands.blocked`, `risk.paths`) add your entries to the preset's.
 - Any other value, including a plain list, replaces the preset's.
 
 So you cannot remove a preset's protected file by leaving it out. To change what `recommended` does, set the single values you want to differ, such as `block_force_push = false`.
@@ -205,6 +205,46 @@ See [blocked-command](guards.md#blocked-command) for how matching works.
 | `dirs` | list of strings | `[".cagr/rules"]` | Folders holding ast-grep rule files (`*.yml`). |
 
 See [Code rules](code-rules.md).
+
+## `[[layout]]`
+
+Layout rules say what a file may be called and where it may live. cagr checks them on the file's path only, so they are quick enough to run before an edit.
+
+```toml
+[[layout]]
+id = "kebab-case-sections"
+files = ["apps/web/src/sections/**/*.{ts,tsx}"]
+name = '^[a-z0-9]+(-[a-z0-9]+)*$'
+message = "Feature files use kebab-case names."
+instead = "Rename the file to kebab-case, such as deal-card.tsx."
+
+[[layout]]
+id = "views-in-view-folder"
+files = ["apps/web/src/sections/**/view.{ts,tsx}", "apps/web/src/sections/**/*-view.{ts,tsx}"]
+allowed = ["apps/web/src/sections/*/view/*-view.tsx"]
+message = "Screens live in their feature's view folder."
+instead = "Move it to apps/web/src/sections/<feature>/view/<name>-view.tsx."
+```
+
+| Key       | Type          | Default  | Meaning                                                                                                                       |
+| --------- | ------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `id`      | string        | required | A unique name. It may not be a [built-in guard](guards.md) id or a [code rule](code-rules.md) id.                             |
+| `files`   | list of globs | required | The files the rule covers.                                                                                                    |
+| `ignores` | list of globs | `[]`     | Files the rule skips.                                                                                                         |
+| `name`    | string        | none     | A regular expression the file name must match, without its extensions: `user-card` for `user-card.test.tsx`.                  |
+| `allowed` | list of globs | `[]`     | The only places a covered file may live.                                                                                      |
+| `message` | string        | required | What is wrong. Shown to the agent.                                                                                            |
+| `instead` | string        | required | What to do instead, so the agent can fix it.                                                                                  |
+
+A rule needs `name`, `allowed` or both. When the agent is about to create a file that breaks one, `file.before_edit` denies it with the rule's message, what failed and what to do instead:
+
+```
+Do not create apps/web/src/sections/deals/DealCard.tsx: Feature files use kebab-case names. (the name "DealCard" does not match /^[a-z0-9]+(-[a-z0-9]+)*$/.) Instead: Rename the file to kebab-case, such as deal-card.tsx. (cagr: kebab-case-sections)
+```
+
+When a path breaks more than one rule, the message lists every fix. Only files made with the agent's edit tools are checked before they exist; a file made by a shell command (`mv`, `touch`, a generator) is caught by `cagr check` and `cagr ci`.
+
+Edits to a file that already exists are not denied, so old files can still be fixed. They are reported after the edit, at the end of the turn, by `cagr check` and as the Layout check in `cagr ci`. `cagr explain <id>` prints a layout rule.
 
 ## `[review]`
 

@@ -165,3 +165,76 @@ describe("rules test", () => {
 		]);
 	});
 });
+
+// superagent's ARCH003 as a code rule: the import source is a string, so match
+// its text with a regex, and scope the rule to the importing files with `files`.
+const componentImports = `id: components-stay-shared
+language: typescript
+files: ["apps/web/src/components/**"]
+message: Shared components may not import from $SRC.
+instead: Pass the data in as props, or move the code into src/sections/<feature>/.
+rule:
+  kind: string
+  regex: "^['\\"]@/(sections|app|api|server|layouts|store)/"
+  pattern: $SRC
+  inside:
+    any:
+      - kind: import_statement
+      - kind: export_statement
+examples:
+  invalid:
+    - import { DealCard } from "@/sections/deals/deal-card";
+    - export { db } from '@/server/db';
+  valid:
+    - import { Button } from "@/components/button";
+    - import { formatDate } from "@/utils/date";
+    - const label = "@/sections/x";
+`;
+
+describe("import boundaries", () => {
+	test("examples behave", async () => {
+		const { config } = await repo({ "a.yml": componentImports });
+		const results = await testRules(loadRules(config));
+		expect(results.filter((r) => !r.ok)).toEqual([]);
+	});
+
+	test("fires in components only", async () => {
+		const { root, config } = await repo({ "a.yml": componentImports });
+		const text =
+			'import { DealCard } from "@/sections/deals/deal-card";\nexport const A = () => <DealCard />;\n';
+		for (const dir of ["components/ui", "sections/deals"]) {
+			await mkdir(join(root, "apps/web/src", dir), { recursive: true });
+			await writeFile(join(root, "apps/web/src", dir, "a.tsx"), text);
+		}
+		const findings = await findInFiles(
+			loadRules(config),
+			["components/ui/a.tsx", "sections/deals/a.tsx"].map((p) =>
+				join(root, "apps/web/src", p),
+			),
+			root,
+		);
+		expect(findings.map(formatFinding)).toEqual([
+			'apps/web/src/components/ui/a.tsx:1:26 components-stay-shared: Shared components may not import from "@/sections/deals/deal-card". Instead: Pass the data in as props, or move the code into src/sections/<feature>/.',
+		]);
+	});
+
+	test("a code rule may not reuse a layout rule's id", async () => {
+		const { root } = await repo({ "a.yml": componentImports });
+		const config = resolveConfig(
+			{
+				layout: [
+					{
+						id: "components-stay-shared",
+						files: ["**"],
+						name: "^[a-z]+$",
+						message: "m",
+						instead: "i",
+					},
+				],
+			},
+			root,
+			"test.toml",
+		);
+		expect(() => loadRules(config)).toThrow("is also a [[layout]] rule");
+	});
+});

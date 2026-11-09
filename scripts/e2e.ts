@@ -202,7 +202,19 @@ function initAndDoctor(project: string) {
 
 function doctor(project: string) {
 	const result = run(["cagr", "doctor"], project);
-	expect("cagr doctor", result.code === 0, result.out + result.err);
+	// CI runners have no reviewer agent installed; that line is expected to fail there.
+	const noReviewer = !Bun.which("claude") && !Bun.which("codex");
+	const fails = (result.out + result.err)
+		.split("\n")
+		.filter((line) => /^\s*FAIL/.test(line))
+		.filter(
+			(line) => !(noReviewer && line.includes("no reviewer agent found")),
+		);
+	expect(
+		"cagr doctor",
+		result.code === 0 || (fails.length === 0 && result.code === 1),
+		result.out + result.err,
+	);
 }
 
 // TypeScript
@@ -640,7 +652,7 @@ fi
 		project,
 		"claude",
 		"PostToolUse",
-		write(project, lib, "def double(n: int) -> int:\n    return n * 3\n"),
+		write(project, lib, "def double(n: int) -> int:\n    return n * 2 + 1\n"),
 		"allow",
 		"clean, but the test now fails",
 	);
