@@ -180,6 +180,24 @@ export async function githubLines(config: Config, gh: Gh): Promise<Line[]> {
 						},
 			);
 	}
+	if (config.review.status) {
+		const wanted = [
+			"cagr/review",
+			...(config.git.pre_push.length > 0 ? ["cagr/checks"] : []),
+		];
+		for (const name of wanted)
+			lines.push(
+				protection.checks.includes(name)
+					? {
+							ok: true,
+							text: `The \`${name}\` commit status is a required check.`,
+						}
+					: {
+							ok: false,
+							text: `[review] status sends \`${name}\`, but it is not a required check, so a branch can merge without it. Add ${name} under required status checks (it is listed once cagr has sent it). ${fix}`,
+						},
+			);
+	}
 	lines.push(
 		protection.mergeQueue
 			? {

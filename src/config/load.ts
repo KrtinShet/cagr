@@ -221,6 +221,7 @@ function applyDefaults(raw: RawConfig, root: string, source: string): Config {
 			pr_sections: (review.pr_sections as string[] | undefined) ?? [],
 			agents_may_merge:
 				(review.agents_may_merge as boolean | undefined) ?? true,
+			status: (review.status as boolean | undefined) ?? false,
 		},
 		risk: {
 			default: (risk.default as RiskTier | undefined) ?? "medium",
