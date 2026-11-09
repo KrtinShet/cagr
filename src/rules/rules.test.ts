@@ -503,3 +503,112 @@ describe("example paths", () => {
 		expect(message).toContain('"examples.valid" has "lang"');
 	});
 });
+
+const sharedUtils = `# Shared: any rule may use these by name.
+utils:
+  module-source:
+    any:
+      - inside: { kind: import_statement }
+      - inside: { kind: export_statement }
+      - matches: dynamic-import-argument
+  dynamic-import-argument:
+    inside:
+      kind: arguments
+      inside:
+        kind: call_expression
+        has: { field: function, regex: "^(require|import)$" }
+  in-jsx:
+    inside: { kind: jsx_element, stopBy: end }
+`;
+
+const serverImports = `id: no-server
+language: typescript
+message: UI may not import $SRC.
+instead: Call it over HTTP.
+rule:
+  kind: string
+  pattern: $SRC
+  regex: "^['\\"]@/server"
+  matches: module-source
+examples:
+  invalid:
+    - import { db } from "@/server/db";
+    - const db = await import("@/server/db");
+  valid:
+    - const path = "@/server/db";
+`;
+
+describe("shared utils", () => {
+	test("a utils-only document is shared, transitively, and is not a rule", async () => {
+		const { root, config } = await repo({
+			"_utils.yml": sharedUtils,
+			"a.yml": serverImports,
+		});
+		const rules = loadRules(config);
+		expect(rules.map((r) => r.id)).toEqual(["no-server"]);
+		expect(Object.keys(rules[0]?.matcher.utils ?? {}).sort()).toEqual([
+			"dynamic-import-argument",
+			"module-source",
+		]);
+		expect((await testRules(rules)).filter((r) => !r.ok)).toEqual([]);
+		// in-jsx has a JSX kind; it is not used, so .ts files are still checked.
+		await writeFile(join(root, "a.ts"), 'import { db } from "@/server/db";\n');
+		expect(
+			(await findInFiles(rules, [join(root, "a.ts")], root)).map((f) => f.path),
+		).toEqual(["a.ts"]);
+	});
+
+	test("a rule's own util wins over a shared one of the same name", async () => {
+		const { config } = await repo({
+			"_utils.yml": sharedUtils,
+			"a.yml":
+				`${serverImports}utils:\n  module-source:\n    inside: { kind: import_statement }\n`
+					.replace('    - const db = await import("@/server/db");\n', "")
+					.replace(
+						'    - const path = "@/server/db";',
+						'    - const path = "@/server/db";\n    - const db = await import("@/server/db");',
+					),
+		});
+		const rules = loadRules(config);
+		expect(rules[0]?.matcher.utils).toEqual({
+			"module-source": { inside: { kind: "import_statement" } },
+		});
+		expect((await testRules(rules)).filter((r) => !r.ok)).toEqual([]);
+	});
+
+	test("two shared utils with one name, or a util that is not a rule, are problems", async () => {
+		const { config } = await repo({
+			"_utils.yml": sharedUtils,
+			"more.yml": "utils:\n  module-source: { kind: string }\n  bad: 3\n",
+		});
+		expect(() => loadRules(config)).toThrow(
+			'shared util "module-source" is also defined in',
+		);
+		expect(() => loadRules(config)).toThrow(
+			'shared util "bad" must be an ast-grep rule',
+		);
+	});
+
+	test("own utils, constraints or transform that are not a mapping are problems, not crashes", async () => {
+		for (const bad of ["module-source", "3", "true", "[module-source]"]) {
+			const { config } = await repo({
+				"_utils.yml": sharedUtils,
+				"a.yml": `${serverImports}utils: ${bad}\nconstraints: ${bad}\ntransform: ${bad}\n`,
+			});
+			expect(() => loadRules(config)).toThrow(RuleError);
+			expect(() => loadRules(config)).toThrow(
+				'"utils" must be a mapping of names to ast-grep rules',
+			);
+			expect(() => loadRules(config)).toThrow(
+				'"constraints" must be a mapping',
+			);
+		}
+	});
+
+	test("an unknown util name is reported when the rule runs", async () => {
+		const { config } = await repo({ "a.yml": serverImports });
+		await expect(testRules(loadRules(config))).rejects.toThrow(
+			"(no-server): the rule does not work for typescript",
+		);
+	});
+});
