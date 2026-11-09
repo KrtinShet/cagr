@@ -33,6 +33,10 @@
 				"command": {
 					"type": "string",
 					"description": "How the generated hook files call cagr. \"{root}\" becomes the repo root for each agent."
+				},
+				"nested_docs": {
+					"type": "boolean",
+					"description": "Write a CLAUDE.md that imports AGENTS.md next to every AGENTS.md that has no CLAUDE.md."
 				}
 			},
 			"description": "Agent adapters."
