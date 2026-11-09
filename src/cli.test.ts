@@ -24,16 +24,20 @@ test("an option a command does not take is an error that lists the ones it does"
 	expect(checkOptions("hook", ["--anything"])).toBeNull();
 });
 
-test("explain and check know layout rules", async () => {
+test("explain, check and rules test know layout rules", async () => {
 	const dir = mkdtempSync(join(tmpdir(), "gw-cli-"));
+	await Bun.write(join(dir, "cagr.toml"), "");
 	await Bun.write(
-		join(dir, "cagr.toml"),
-		`[[layout]]
-id = "kebab-files"
-files = ["src/**"]
-name = '^[a-z0-9]+(-[a-z0-9]+)*$'
-message = "Files use kebab-case names."
-instead = "Rename it, such as user-card.ts."
+		join(dir, ".cagr/rules/layout.yml"),
+		`id: kebab-files
+message: Files use kebab-case names.
+instead: Rename it, such as user-card.ts.
+layout:
+  files: ["src/**"]
+  name: "^[a-z0-9]+(-[a-z0-9]+)*$"
+examples:
+  invalid: [src/UserCard.ts]
+  valid: [src/user-card.ts]
 `,
 	);
 	await Bun.write(join(dir, "src/UserCard.ts"), "export {};\n");
@@ -41,11 +45,39 @@ instead = "Rename it, such as user-card.ts."
 		cwd: dir,
 	});
 	expect(explain.stdout.toString()).toContain("kebab-files (layout rule from");
+	const rulesTest = Bun.spawnSync(["bun", cli, "rules", "test"], { cwd: dir });
+	expect(rulesTest.exitCode).toBe(0);
+	expect(rulesTest.stdout.toString()).toContain(
+		"1 rules, 2 examples, 0 failed.",
+	);
 	const check = Bun.spawnSync(["bun", cli, "check", "src/UserCard.ts"], {
 		cwd: dir,
 	});
 	expect(check.exitCode).toBe(1);
 	expect(check.stdout.toString() + check.stderr.toString()).toContain(
 		"src/UserCard.ts kebab-files: Files use kebab-case names.",
+	);
+});
+
+test("rules test fails a layout example that does not fire", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "gw-cli-"));
+	await Bun.write(join(dir, "cagr.toml"), "");
+	await Bun.write(
+		join(dir, ".cagr/rules/layout.yml"),
+		`id: kebab-files
+message: Files use kebab-case names.
+instead: Rename it, such as user-card.ts.
+layout:
+  files: ["src/**"]
+  name: "^[a-z0-9]+(-[a-z0-9]+)*$"
+examples:
+  invalid: [lib/UserCard.ts]
+  valid: [src/user-card.ts]
+`,
+	);
+	const result = Bun.spawnSync(["bun", cli, "rules", "test"], { cwd: dir });
+	expect(result.exitCode).toBe(1);
+	expect(result.stdout.toString()).toContain(
+		"FAIL kebab-files: invalid example did not fire:\n  lib/UserCard.ts",
 	);
 });

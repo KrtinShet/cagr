@@ -139,17 +139,21 @@ test("a file the branch adds in the wrong place fails the Layout check", async (
 	const { repo, config } = await branch(
 		{
 			...stack({}),
-			layout: [
-				{
-					id: "kebab-files",
-					files: ["src/**"],
-					name: "^[a-z0-9]+(-[a-z0-9]+)*$",
-					message: "Files use kebab-case names.",
-					instead: "Rename it, such as user-card.ts.",
-				},
-			],
 		},
-		{ "src/UserCard.ts": "export const a = 1;\n", "src/ok-name.ts": "" },
+		{
+			".cagr/rules/layout.yml": `id: kebab-files
+message: Files use kebab-case names.
+instead: Rename it, such as user-card.ts.
+layout:
+  files: ["src/**"]
+  name: "^[a-z0-9]+(-[a-z0-9]+)*$"
+examples:
+  invalid: [src/UserCard.ts]
+  valid: [src/user-card.ts]
+`,
+			"src/UserCard.ts": "export const a = 1;\n",
+			"src/ok-name.ts": "",
+		},
 		"feat: add a",
 	);
 	const result = await ci(config, { cwd: repo.root, base: "main", env: {} });

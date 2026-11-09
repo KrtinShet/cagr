@@ -185,45 +185,11 @@ export const configSchema: Node = obj({
 	),
 	rules: obj(
 		{
-			dirs: strings("Folders holding ast-grep rule files (*.yml)."),
+			dirs: strings(
+				"Folders holding rule files (*.yml): code rules and layout rules.",
+			),
 		},
 		{ description: "Custom code rules." },
-	),
-	layout: arr(
-		obj(
-			{
-				id: str({
-					minLength: 1,
-					description:
-						"A unique name, shown in each finding. `cagr explain <id>` prints the rule.",
-				}),
-				files: strings(
-					"Globs, relative to the repo root, of the files this rule checks.",
-				),
-				ignores: strings("Globs of files this rule skips."),
-				name: str({
-					minLength: 1,
-					description:
-						"A regular expression the file name must match, without its extensions: `user-card` for user-card.test.tsx.",
-				}),
-				allowed: strings(
-					"Globs where the files may live. A matching file outside all of them is a finding.",
-				),
-				message: str({
-					minLength: 1,
-					description: "What is wrong. Shown to the agent.",
-				}),
-				instead: str({
-					minLength: 1,
-					description: "What to do instead, so the agent can fix it.",
-				}),
-			},
-			{ required: ["id", "files", "message", "instead"] },
-		),
-		{
-			description:
-				"Layout rules: file names and where files may live. Checked when a file is created, after each edit, at turn end, and in `cagr check` and `cagr ci`.",
-		},
 	),
 	review: obj(
 		{
@@ -345,15 +311,6 @@ export type Stack = {
 };
 export type ProtectedFile = { glob: string; except: string[]; reason: string };
 export type BlockedCommand = { match: string; reason: string };
-export type LayoutRule = {
-	id: string;
-	files: string[];
-	ignores: string[];
-	name: RegExp | null;
-	allowed: string[];
-	message: string;
-	instead: string;
-};
 export type RiskPath = {
 	glob: string;
 	tier: RiskTier;
@@ -383,7 +340,6 @@ export type Config = {
 	files: { protected: ProtectedFile[] };
 	commands: { blocked: BlockedCommand[] };
 	rules: { dirs: string[] };
-	layout: LayoutRule[];
 	review: {
 		enabled: boolean;
 		gate: string[];

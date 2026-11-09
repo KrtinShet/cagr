@@ -1,11 +1,11 @@
 import { statSync } from "node:fs";
 import { join } from "node:path";
 import type { Config } from "./config/schema";
-import { formatLayout, layoutFindings } from "./rules/layout";
+import { formatLayout, type LayoutRule, layoutFindings } from "./rules/layout";
 import {
 	findInFiles,
 	formatFinding,
-	loadRules,
+	loadRuleSet,
 	RuleError,
 } from "./rules/rules";
 
@@ -57,10 +57,12 @@ export async function checkAll(
 				: `cagr check --all lists files with \`git ls-files\`, which failed: ${paths.error || "no message"}. Fix that, or name the files: cagr check <files...>`,
 		};
 	const sections: string[] = [];
+	let layoutRules: LayoutRule[] = [];
 	try {
-		const rules = loadRules(config);
+		const rules = loadRuleSet(config);
+		layoutRules = rules.layout;
 		const findings = await findInFiles(
-			rules,
+			rules.code,
 			paths.map((path) => join(config.root, path)),
 			config.root,
 		);
@@ -70,7 +72,8 @@ export async function checkAll(
 		if (!(error instanceof RuleError)) throw error;
 		sections.push(`## Rules\n${error.message}`);
 	}
-	const layout = layoutFindings(config.layout, paths);
+	// A broken rule file is reported under Rules, and no layout rule runs.
+	const layout = layoutFindings(layoutRules, paths);
 	if (layout.length > 0)
 		sections.push(`## Layout\n${layout.map(formatLayout).join("\n")}`);
 	if (sections.length > 0) return { ok: false, report: sections.join("\n\n") };

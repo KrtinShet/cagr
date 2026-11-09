@@ -7,8 +7,8 @@ import { branchFinding, commitMessageFinding } from "./guards/names";
 import { stackFiles, tidy, withFiles } from "./hook/stack-files";
 import { resolveBase } from "./review/review";
 import { classify, riskReport } from "./risk";
-import { layoutFindings } from "./rules/layout";
-import { findInFiles, loadRules, RuleError } from "./rules/rules";
+import { type LayoutRule, layoutFindings } from "./rules/layout";
+import { findInFiles, loadRuleSet, RuleError } from "./rules/rules";
 import { run, runShell } from "./run";
 import { SyncError, sync } from "./sync";
 
@@ -152,12 +152,11 @@ export async function ci(
 	}
 	checks.push(check("Checks", endProblems));
 
+	let layoutRules: LayoutRule[] = [];
 	try {
-		const findings = await findInFiles(
-			loadRules(config),
-			absolute,
-			config.root,
-		);
+		const rules = loadRuleSet(config);
+		layoutRules = rules.layout;
+		const findings = await findInFiles(rules.code, absolute, config.root);
 		checks.push(
 			check(
 				"Code rules",
@@ -177,9 +176,9 @@ export async function ci(
 		checks.push(check("Code rules", [error.message]));
 	}
 
-	if (config.layout.length > 0) {
+	if (layoutRules.length > 0) {
 		const findings = layoutFindings(
-			config.layout,
+			layoutRules,
 			changed.filter((path) => existsSync(join(cwd, path))),
 		);
 		const line = (finding: (typeof findings)[number]) =>

@@ -17,10 +17,11 @@ import {
 import { insideRoot } from "../paths";
 import { gateResult } from "../review/gate";
 import { readRecord, recordPath } from "../review/store";
-import { formatLayout, layoutFindings } from "../rules/layout";
+import { formatLayout, type LayoutRule, layoutFindings } from "../rules/layout";
 import {
 	findInFiles,
 	formatFinding,
+	loadLayoutRules,
 	loadRules,
 	RuleError,
 } from "../rules/rules";
@@ -169,6 +170,7 @@ async function fileBeforeEdit(
 	const mainCheckout = config.git.worktree_only
 		? (await gitContext(input.cwd)).mainCheckout
 		: null;
+	let layout: LayoutRule[] | undefined;
 	for (const file of input.files) {
 		const finding = editFinding(file, config, { mainCheckout });
 		if (finding) return { kind: "deny", reason: render(finding) };
@@ -176,7 +178,8 @@ async function fileBeforeEdit(
 		const path = insideRoot(config.root, file);
 		if (path === null || existsSync(file)) continue;
 		// Every broken rule in one message, so a rename does not run into the next one.
-		const [first, ...rest] = layoutFindings(config.layout, [path]);
+		layout ??= layoutRules(config);
+		const [first, ...rest] = layoutFindings(layout, [path]);
 		if (first)
 			return {
 				kind: "deny",
@@ -194,16 +197,27 @@ async function fileBeforeEdit(
 	return { kind: "allow" };
 }
 
+/** The layout rules, or none when a rule file is broken: the Rules check reports that. */
+function layoutRules(config: Config): LayoutRule[] {
+	try {
+		return loadLayoutRules(config);
+	} catch (error) {
+		if (error instanceof RuleError) return [];
+		throw error;
+	}
+}
+
 /** Layout findings for `files` (absolute), or null when there are no layout rules. */
 export function layoutCheck(
 	config: Config,
 	files: string[],
 ): CheckResult | null {
-	if (config.layout.length === 0) return null;
+	const rules = layoutRules(config);
+	if (rules.length === 0) return null;
 	const paths = files
 		.map((file) => insideRoot(config.root, file))
 		.filter((path) => path !== null);
-	const findings = layoutFindings(config.layout, paths);
+	const findings = layoutFindings(rules, paths);
 	return {
 		name: "Layout",
 		ok: findings.length === 0,

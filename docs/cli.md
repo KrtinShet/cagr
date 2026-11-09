@@ -133,7 +133,7 @@ With `--all`, it runs the code rules and layout rules over every file git tracks
 cagr explain <id>
 ```
 
-For a built-in guard: the event it runs on, what it catches, the fix and the config. For a code rule: its message, what to do instead, its note, and its examples. For a layout rule: its message, what to do instead, its files, and the name or places it allows. An unknown id lists every known id and exits 1. It works without a config for guards. See [Guards](guards.md).
+For a built-in guard: the event it runs on, what it catches, the fix and the config. For a code rule: its message, what to do instead, its note, and its examples. For a layout rule: its message, what to do instead, its note, its files, the name or places it allows, and its example paths. An unknown id lists every known id and exits 1. It works without a config for guards. See [Guards](guards.md).
 
 ## rules test
 
@@ -141,7 +141,7 @@ For a built-in guard: the event it runs on, what it catches, the fix and the con
 cagr rules test
 ```
 
-Runs every code rule against its examples. Prints each failure and a total ("2 rules, 4 examples, 0 failed."). Exits 1 if any example failed. See [Code rules](code-rules.md#cagr-rules-test).
+Runs every code rule and layout rule against its examples. Prints each failure and a total ("2 rules, 4 examples, 0 failed."). Exits 1 if any example failed. See [Code rules](code-rules.md#cagr-rules-test).
 
 ## schema
 
