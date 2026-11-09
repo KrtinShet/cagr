@@ -6,7 +6,7 @@
 	"type": "module",
 	"scripts": {
 		"cagr": "bun src/cli.ts",
-		"test": "bun test src",
+		"test": "bun test src scripts",
 		"lint": "biome check .",
 		"format": "biome check --write .",
 		"check-types": "tsc --noEmit",

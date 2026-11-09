@@ -4,6 +4,8 @@ on:
   pull_request:
   push:
     branches: [main]
+  # The release workflow starts it on the release pull request, which its own token cannot trigger.
+  workflow_dispatch:
 
 permissions:
   contents: read
