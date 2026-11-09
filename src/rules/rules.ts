@@ -3,6 +3,15 @@ import { join } from "node:path";
 import type { Config } from "../config/schema";
 import { guardIds } from "../guards/catalog";
 import { insideRoot, matchesGlob } from "../paths";
+import {
+	crosses,
+	type ImportBoundary,
+	ImportConfigError,
+	importLanguages,
+	importMatcher,
+	resolveImport,
+	unquote,
+} from "./imports";
 import { languages, loadParsers, parserForFile } from "./languages";
 import { type LayoutRule, toLayoutRule } from "./layout";
 
@@ -21,6 +30,8 @@ export type Rule = {
 		utils?: unknown;
 		transform?: unknown;
 	};
+	/** For an `imports:` rule: the modules its files may not import. `matcher` then finds import sources. */
+	imports: ImportBoundary | null;
 	examples: { invalid: CodeExample[]; valid: CodeExample[] };
 	source: string;
 };
@@ -52,6 +63,7 @@ const allowedKeys = new Set([
 	"files",
 	"ignores",
 	"examples",
+	"imports",
 	"url",
 	"metadata",
 ]);
@@ -231,12 +243,16 @@ function toRule(doc: unknown, file: string, problems: string[]): Rule | null {
 			problems.push(
 				`${where}: "${key}" is required${key === "instead" ? ": say what to use instead, so the agent can fix it" : ""}.`,
 			);
+	const imports =
+		raw.imports === undefined ? null : toImports(raw, where, problems);
 	const ruleLanguages = (
-		typeof raw.language === "string"
-			? [raw.language]
-			: isStringList(raw.language)
-				? raw.language
-				: []
+		raw.language === undefined && raw.imports !== undefined
+			? importLanguages.filter((language) => language !== "tsx")
+			: typeof raw.language === "string"
+				? [raw.language]
+				: isStringList(raw.language)
+					? raw.language
+					: []
 	).map((language) => language.toLowerCase());
 	if (
 		ruleLanguages.length === 0 ||
@@ -245,9 +261,14 @@ function toRule(doc: unknown, file: string, problems: string[]): Rule | null {
 		problems.push(
 			`${where}: "language" must be one of ${Object.keys(languages).join(", ")}, or a list of them.`,
 		);
-	if (typeof raw.rule !== "object" || raw.rule === null)
+	if (raw.imports !== undefined) {
+		if (ruleLanguages.some((language) => !importLanguages.includes(language)))
+			problems.push(
+				`${where}: an "imports" rule checks ${importLanguages.join(", ")} only. Remove the other languages.`,
+			);
+	} else if (typeof raw.rule !== "object" || raw.rule === null)
 		problems.push(
-			`${where}: "rule" is required (an ast-grep rule, such as pattern: ...).`,
+			`${where}: "rule" is required (an ast-grep rule, such as pattern: ...), or "imports" for an import boundary.`,
 		);
 	const rawExamples = (raw.examples ?? {}) as Record<string, unknown>;
 	const examples = { invalid: [] as CodeExample[], valid: [] as CodeExample[] };
@@ -290,14 +311,57 @@ function toRule(doc: unknown, file: string, problems: string[]): Rule | null {
 		note: typeof raw.note === "string" ? raw.note : null,
 		files: (raw.files as string[] | undefined) ?? [],
 		ignores: (raw.ignores as string[] | undefined) ?? [],
-		matcher: {
-			rule: raw.rule,
-			...(raw.constraints ? { constraints: raw.constraints } : {}),
-			...(raw.utils ? { utils: raw.utils } : {}),
-			...(raw.transform ? { transform: raw.transform } : {}),
-		},
+		imports,
+		matcher: imports
+			? importMatcher
+			: {
+					rule: raw.rule,
+					...(raw.constraints ? { constraints: raw.constraints } : {}),
+					...(raw.utils ? { utils: raw.utils } : {}),
+					...(raw.transform ? { transform: raw.transform } : {}),
+				},
 		examples,
 		source: file,
+	};
+}
+
+const matcherKeys = ["rule", "constraints", "utils", "transform"];
+
+/** An `imports:` block, or null with the problems added. */
+function toImports(
+	raw: Record<string, unknown>,
+	where: string,
+	problems: string[],
+): ImportBoundary | null {
+	const before = problems.length;
+	for (const key of matcherKeys)
+		if (raw[key] !== undefined)
+			problems.push(
+				`${where}: "${key}" does not go with "imports": cagr finds the import sources itself. Remove "${key}", or move it to its own rule.`,
+			);
+	const block = raw.imports;
+	if (typeof block !== "object" || block === null || Array.isArray(block)) {
+		problems.push(
+			`${where}: "imports" must be a mapping with forbid (globs of modules the files may not import) and optional allow.`,
+		);
+		return null;
+	}
+	const entries = block as Record<string, unknown>;
+	for (const key of Object.keys(entries))
+		if (key !== "forbid" && key !== "allow")
+			problems.push(
+				`${where}: "imports.${key}" is not an imports key. Allowed: forbid, allow.`,
+			);
+	if (!isStringList(entries.forbid) || entries.forbid.length === 0)
+		problems.push(
+			`${where}: "imports.forbid" is required: globs of repo paths (or package names) the files may not import, such as "src/server/**".`,
+		);
+	if (entries.allow !== undefined && !isStringList(entries.allow))
+		problems.push(`${where}: "imports.allow" must be a list of globs.`);
+	if (problems.length > before) return null;
+	return {
+		forbid: entries.forbid as string[],
+		allow: (entries.allow as string[] | undefined) ?? [],
 	};
 }
 
@@ -415,18 +479,53 @@ function napiReason(error: unknown) {
 		.map((line) => line.replace(/[.:]$/, ""))
 		.join(": ");
 }
-type Match = { line: number; column: number; message: string };
+type Match = {
+	line: number;
+	column: number;
+	message: string;
+	/** In place of the rule's own instead, when the rule could not run. */
+	instead?: string;
+	/** Set when this is not a match but a note that the rule could not check the file. */
+	unchecked?: true;
+};
+
+/** Where the code being matched lives: the repo root, and the file's repo-relative path when there is one. */
+type At = { root: string; path: string | null };
 
 function matches(
 	napi: Napi,
 	rule: Rule,
 	parser: string,
 	source: string,
+	at: At,
 ): Match[] {
-	const root = napi.parse(parser as never, source).root();
-	return root.findAll(rule.matcher as never).map((node) => {
+	const tree = napi.parse(parser as never, source).root();
+	const found: Match[] = [];
+	for (const node of tree.findAll(rule.matcher as never)) {
+		let message = rule.message;
+		if (rule.imports) {
+			const text = node.getMatch("SRC")?.text() ?? "";
+			let target: string;
+			try {
+				target = resolveImport(at.root, at.path, unquote(text));
+			} catch (error) {
+				if (!(error instanceof ImportConfigError)) throw error;
+				// Once per file: the other imports in it would say the same.
+				const start = node.range().start;
+				found.push({
+					line: start.line + 1,
+					column: start.column + 1,
+					message: `Could not check ${text}: ${error.reason}`,
+					instead: error.fix,
+					unchecked: true,
+				});
+				return found;
+			}
+			if (!crosses(rule.imports, target)) continue;
+			message = message.replace(/\$TARGET\b/g, target);
+		}
 		const start = node.range().start;
-		const message = rule.message.replace(
+		message = message.replace(
 			/(\$\$\$|\$)([A-Z_][A-Z0-9_]*)/g,
 			(text, sigil, name) => {
 				if (sigil === "$") return node.getMatch(name)?.text() ?? text;
@@ -437,8 +536,9 @@ function matches(
 				return source.slice(first.range().start.index, last.range().end.index);
 			},
 		);
-		return { line: start.line + 1, column: start.column + 1, message };
-	});
+		found.push({ line: start.line + 1, column: start.column + 1, message });
+	}
+	return found;
 }
 
 function appliesTo(rule: Rule, path: string) {
@@ -483,14 +583,14 @@ export async function findInFiles(
 			source = readFileSync(file, "utf8");
 			sources.set(file, source);
 		}
-		for (const match of matches(napi, rule, parser, source))
+		for (const match of matches(napi, rule, parser, source, { root, path }))
 			findings.push({
 				rule: rule.id,
 				path,
 				line: match.line,
 				column: match.column,
 				message: match.message,
-				instead: rule.instead,
+				instead: match.instead ?? rule.instead,
 			});
 	}
 	return findings;
@@ -513,7 +613,10 @@ export type ExampleResult = {
 };
 
 /** Every invalid example must fire and every valid one must not. */
-export async function testRules(rules: Rule[]): Promise<ExampleResult[]> {
+export async function testRules(
+	rules: Rule[],
+	root = process.cwd(),
+): Promise<ExampleResult[]> {
 	const napi = await loadParsers(rules.flatMap(candidateParsers));
 	compile(napi, new Map(rules.map((rule) => [rule, new Set(rule.languages)])));
 	const results: ExampleResult[] = [];
@@ -535,18 +638,24 @@ export async function testRules(rules: Rule[]): Promise<ExampleResult[]> {
 								? "the path matches ignores, so the rule does not run on it"
 								: "the path is not in files, so the rule does not run on it"
 							: null;
-				const count =
+				const found =
 					parser && skipped === null
-						? matches(napi, rule, parser, code).length
-						: 0;
+						? matches(napi, rule, parser, code, { root, path })
+						: [];
+				const unchecked = found.find((match) => match.unchecked);
+				const count = unchecked ? 0 : found.length;
+				const reason = unchecked
+					? `it could not be checked: ${unchecked.message} ${unchecked.instead ?? ""}`.trim()
+					: skipped;
 				results.push({
 					rule: rule.id,
 					kind,
 					example: code,
 					...(path ? { path } : {}),
-					...(skipped ? { skipped } : {}),
+					...(reason ? { skipped: reason } : {}),
 					matches: count,
-					ok: kind === "invalid" ? count > 0 : count === 0,
+					// An example the rule could not check proves nothing either way.
+					ok: unchecked ? false : kind === "invalid" ? count > 0 : count === 0,
 				});
 			}
 	}

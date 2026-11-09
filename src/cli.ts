@@ -310,6 +310,11 @@ async function main(argv: string[]): Promise<number> {
 					`Message: ${rule.message}`,
 					`Instead: ${rule.instead}`,
 					...(rule.note ? [`Note: ${rule.note}`] : []),
+					...(rule.imports
+						? [
+								`Imports: may not import ${rule.imports.forbid.join(", ")}${rule.imports.allow.length > 0 ? `, except ${rule.imports.allow.join(", ")}` : ""}`,
+							]
+						: []),
 					"",
 					"Fires on:",
 					...rule.examples.invalid.map(showExample),
@@ -321,11 +326,15 @@ async function main(argv: string[]): Promise<number> {
 		}
 		case "rules": {
 			if (args[0] !== "test") throw new UsageError("Usage: cagr rules test");
-			const { code, layout } = loadRuleSet(requireConfig());
-			const results = [...(await testRules(code)), ...testLayoutRules(layout)];
+			const config = requireConfig();
+			const { code, layout } = loadRuleSet(config);
+			const results = [
+				...(await testRules(code, config.root)),
+				...testLayoutRules(layout),
+			];
 			for (const result of results.filter((entry) => !entry.ok))
 				console.log(
-					`FAIL ${result.rule}: ${result.kind} example${result.path ? ` at ${result.path}` : ""} ${result.kind === "invalid" ? `did not fire${result.skipped ? ` (${result.skipped})` : ""}` : `fired ${result.matches} time${result.matches === 1 ? "" : "s"}`}:\n  ${result.example.trim().replace(/\n/g, "\n  ")}`,
+					`FAIL ${result.rule}: ${result.kind} example${result.path ? ` at ${result.path}` : ""} ${result.kind === "invalid" ? `did not fire${result.skipped ? ` (${result.skipped})` : ""}` : result.skipped ? `was not checked (${result.skipped})` : `fired ${result.matches} time${result.matches === 1 ? "" : "s"}`}:\n  ${result.example.trim().replace(/\n/g, "\n  ")}`,
 				);
 			const failed = results.filter((entry) => !entry.ok).length;
 			console.log(
