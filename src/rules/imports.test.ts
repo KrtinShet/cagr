@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, realpath, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { resolveConfig } from "../config/load";
-import { crosses, resolveImport } from "./imports";
+import { crosses, parseJsonc, resolveImport } from "./imports";
 import {
 	findInFiles,
 	formatFinding,
@@ -78,6 +78,49 @@ describe("resolveImport", () => {
 		expect(resolveImport(root, "src/a.js", "react")).toBe("react");
 	});
 
+	test("tsconfig text: BOM, comments after a trailing comma, commas and slashes in strings", () => {
+		expect(
+			parseJsonc(
+				'\uFEFF{ "a": ",}", "b": "//x", "c": [1, /* y */ 2, // z\n], }',
+			),
+		).toEqual({ a: ",}", b: "//x", c: [1, 2] });
+	});
+
+	test("a tsconfig that cannot be read is a rule problem, not a silent skip", async () => {
+		for (const text of ["{ nope", "null", "[]"]) {
+			const { root } = await repo({ "tsconfig.json": text });
+			expect(() => resolveImport(root, "src/a.ts", "@/x")).toThrow(RuleError);
+			expect(() => resolveImport(root, "src/a.ts", "@/x")).toThrow(
+				"Import rules cannot read",
+			);
+		}
+	});
+
+	test("a catch-all * alias keeps package names when nothing local exists", async () => {
+		const { root } = await repo({
+			"tsconfig.json":
+				'{ "compilerOptions": { "paths": { "*": ["./types/*"] } } }',
+			"types/legacy/index.d.ts": "",
+		});
+		expect(resolveImport(root, "src/a.ts", "swr/mutation")).toBe(
+			"swr/mutation",
+		);
+		expect(resolveImport(root, "src/a.ts", "legacy")).toBe(
+			"types/legacy/index.d.ts",
+		);
+	});
+
+	test("paths from a config outside the repo stay outside it", async () => {
+		const { root } = await repo({
+			"shared/tsconfig.json":
+				'{ "compilerOptions": { "paths": { "@/*": ["./src/*"] } } }',
+			"repo/tsconfig.json": '{ "extends": "../shared/tsconfig.json" }',
+		});
+		expect(resolveImport(join(root, "repo"), "a.ts", "@/server/db")).toBe(
+			"../shared/src/server/db",
+		);
+	});
+
 	test("forbid with allow exceptions", () => {
 		const boundary = {
 			forbid: ["apps/web/src/sections/**", "swr", "swr/**"],
@@ -91,6 +134,15 @@ describe("resolveImport", () => {
 		);
 		expect(crosses(boundary, "swr/mutation")).toBe(true);
 		expect(crosses(boundary, "swr-like")).toBe(false);
+		// The whole target, not its last segment.
+		expect(crosses(boundary, "@acme/swr")).toBe(false);
+		expect(crosses(boundary, "apps/web/src/lib/swr")).toBe(false);
+		expect(
+			crosses(
+				{ forbid: ["apps/**"], allow: ["types.ts"] },
+				"apps/web/src/server/types.ts",
+			),
+		).toBe(true);
 	});
 });
 

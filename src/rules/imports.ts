@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
-import { dirname, join, normalize, posix } from "node:path";
-import { matchesGlob, toPosix } from "../paths";
+import { dirname, join, normalize, posix, relative } from "node:path";
+import { toPosix } from "../paths";
+import { RuleError } from "./rule-error";
 
 /** An `imports:` block: the modules a rule's files may not import, by resolved path. */
 export type ImportBoundary = { forbid: string[]; allow: string[] };
@@ -61,26 +62,47 @@ type PathsConfig = {
 // Absolute directory to the nearest config's paths, for one process.
 const configCache = new Map<string, PathsConfig | null>();
 
-/** JSON with comments and trailing commas, as tsconfig allows. */
-function parseJsonc(text: string): unknown {
+/** Calls `each` for every character outside a JSON string, and copies strings through. */
+function outsideStrings(
+	text: string,
+	each: (text: string, i: number) => { emit: string; next: number },
+) {
 	let out = "";
-	for (let i = 0; i < text.length; i++) {
-		const char = text[i];
-		if (char === '"') {
-			const start = i;
-			for (i++; i < text.length && text[i] !== '"'; i++)
-				if (text[i] === "\\") i++;
-			out += text.slice(start, i + 1);
-		} else if (char === "/" && text[i + 1] === "/") {
-			while (i < text.length && text[i] !== "\n") i++;
-			out += "\n";
-		} else if (char === "/" && text[i + 1] === "*") {
-			i = text.indexOf("*/", i + 2);
-			if (i === -1) break;
-			i++;
-		} else out += char;
+	for (let i = 0; i < text.length; ) {
+		if (text[i] === '"') {
+			let end = i + 1;
+			while (end < text.length && text[end] !== '"')
+				end += text[end] === "\\" ? 2 : 1;
+			out += text.slice(i, end + 1);
+			i = end + 1;
+			continue;
+		}
+		const step = each(text, i);
+		out += step.emit;
+		i = step.next;
 	}
-	return JSON.parse(out.replace(/,(\s*[}\]])/g, "$1"));
+	return out;
+}
+
+/** JSON with comments, trailing commas and a byte order mark, as tsconfig allows. */
+export function parseJsonc(text: string): unknown {
+	const noComments = outsideStrings(text.replace(/^\uFEFF/, ""), (t, i) => {
+		if (t.startsWith("//", i)) {
+			const end = t.indexOf("\n", i);
+			return { emit: "\n", next: end === -1 ? t.length : end };
+		}
+		if (t.startsWith("/*", i)) {
+			const end = t.indexOf("*/", i + 2);
+			return { emit: " ", next: end === -1 ? t.length : end + 2 };
+		}
+		return { emit: t[i] as string, next: i + 1 };
+	});
+	const noTrailingCommas = outsideStrings(noComments, (t, i) => {
+		if (t[i] === "," && /^\s*[}\]]/.test(t.slice(i + 1)))
+			return { emit: "", next: i + 1 };
+		return { emit: t[i] as string, next: i + 1 };
+	});
+	return JSON.parse(noTrailingCommas);
 }
 
 type CompilerOptions = {
@@ -95,12 +117,23 @@ function readOptions(
 ): { paths?: [Record<string, string[]>, string]; baseUrl?: string } {
 	if (seen.has(file) || !existsSync(file)) return {};
 	seen.add(file);
-	let raw: { extends?: unknown; compilerOptions?: CompilerOptions };
+	let parsed: unknown;
 	try {
-		raw = parseJsonc(readFileSync(file, "utf8")) as typeof raw;
-	} catch {
-		return {};
+		parsed = parseJsonc(readFileSync(file, "utf8"));
+	} catch (error) {
+		// Without its paths, alias imports would pass every boundary unchecked.
+		throw new RuleError(
+			`Import rules cannot read ${file}: ${(error as Error).message}. Fix the file so its paths can be resolved.`,
+		);
 	}
+	if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed))
+		throw new RuleError(
+			`Import rules cannot read ${file}: it is not a JSON object. Fix the file so its paths can be resolved.`,
+		);
+	const raw = parsed as {
+		extends?: unknown;
+		compilerOptions?: CompilerOptions;
+	};
 	const dir = dirname(file);
 	const parents = (
 		Array.isArray(raw.extends) ? raw.extends : [raw.extends]
@@ -116,7 +149,10 @@ function readOptions(
 			...readOptions(path.endsWith(".json") ? path : `${path}.json`, seen),
 		};
 	}
-	const own = raw.compilerOptions ?? {};
+	const own =
+		typeof raw.compilerOptions === "object" && raw.compilerOptions !== null
+			? raw.compilerOptions
+			: {};
 	if (own.paths && typeof own.paths === "object")
 		options.paths = [own.paths, dir];
 	if (typeof own.baseUrl === "string") options.baseUrl = join(dir, own.baseUrl);
@@ -150,11 +186,9 @@ function pathsConfig(root: string, dir: string): PathsConfig | null {
 	return result;
 }
 
+/** Repo-relative, or starting with ../ when the directory is outside the repo. */
 function relativeTo(root: string, absolute: string) {
-	const rel = toPosix(absolute.slice(normalize(root).length)).replace(
-		/^\/+/,
-		"",
-	);
+	const rel = toPosix(relative(root, absolute));
 	return rel === "" ? "." : rel;
 }
 
@@ -201,12 +235,17 @@ export function resolveImport(
 		return probe(root, posix.normalize(posix.join(fromDir, specifier)));
 	const config = pathsConfig(root, join(root, fromDir));
 	if (config) {
-		let best: { prefix: number; targets: string[]; rest: string } | null = null;
+		let best: {
+			prefix: number;
+			targets: string[];
+			rest: string;
+			catchAll: boolean;
+		} | null = null;
 		for (const [pattern, targets] of config.paths) {
 			const star = pattern.indexOf("*");
 			if (star === -1) {
 				if (pattern === specifier && (!best || pattern.length > best.prefix))
-					best = { prefix: pattern.length, targets, rest: "" };
+					best = { prefix: pattern.length, targets, rest: "", catchAll: false };
 				continue;
 			}
 			const prefix = pattern.slice(0, star);
@@ -220,6 +259,7 @@ export function resolveImport(
 				best = {
 					prefix: prefix.length,
 					targets,
+					catchAll: pattern === "*",
 					rest: specifier.slice(
 						prefix.length,
 						specifier.length - suffix.length,
@@ -237,7 +277,9 @@ export function resolveImport(
 				.find(
 					(path, i) => path !== candidates[i] || existsSync(join(root, path)),
 				);
-			return found ?? (candidates[0] as string);
+			// A catch-all "*" (often for local type shims) falls back to the package, as TypeScript does.
+			if (found) return found;
+			return best.catchAll ? specifier : (candidates[0] as string);
 		}
 		if (config.baseUrl !== null) {
 			const candidate = posix.normalize(posix.join(config.baseUrl, specifier));
@@ -252,9 +294,21 @@ export function resolveImport(
 /** True when `target` is one of the boundary's forbidden modules. */
 export function crosses(boundary: ImportBoundary, target: string) {
 	return (
-		boundary.forbid.some((glob) => matchesGlob(glob, target)) &&
-		!boundary.allow.some((glob) => matchesGlob(glob, target))
+		boundary.forbid.some((glob) => matchesTarget(glob, target)) &&
+		!boundary.allow.some((glob) => matchesTarget(glob, target))
 	);
+}
+
+const globs = new Map<string, Bun.Glob>();
+
+/** The whole target against the whole glob: "swr" is the swr package, not any path ending in swr. */
+function matchesTarget(pattern: string, target: string) {
+	let glob = globs.get(pattern);
+	if (!glob) {
+		glob = new Bun.Glob(pattern);
+		globs.set(pattern, glob);
+	}
+	return glob.match(target);
 }
 
 /** The text of a source node without its quotes. */

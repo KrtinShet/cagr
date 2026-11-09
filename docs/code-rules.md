@@ -146,9 +146,9 @@ examples:
     - { path: apps/web/src/components/card.tsx, code: 'import type { Row } from "@/server/types";' }
 ```
 
-The source fires when it matches a `forbid` glob and no `allow` glob. Forbid a folder with `folder/**`, and a module with its path and an extension glob, such as `src/utils/fetcher.*`. `$TARGET` in the message is the resolved path, and `$SRC` is the source as written, with its quotes. `language` defaults to `[typescript, javascript]`; `tsx` is allowed too. `constraints`, `utils` and `transform` do not go with `imports`.
+The source fires when it matches a `forbid` glob and no `allow` glob. Each glob is matched against the whole target, so `swr` is the `swr` package, not `@acme/swr` or a file named `swr`. Forbid a folder with `folder/**`, and a module with its path and an extension glob, such as `src/utils/fetcher.*`. `$TARGET` in the message is the resolved path, and `$SRC` is the source as written, with its quotes. `language` defaults to `[typescript, javascript]`; `tsx` is allowed too. `constraints`, `utils` and `transform` do not go with `imports`.
 
-Give the examples paths, so the sources resolve from the right folder; `cagr rules test` reads the repo's own tsconfig. TypeScript's `import x = require("y")` and sources built from template expressions are not checked. For rules about file names and folders, use [layout rules](#layout-rules).
+A tsconfig that cannot be read is a rule file problem, since its aliases would otherwise go unchecked. A catch-all `"*"` alias falls back to the package name when nothing local matches, as TypeScript does. Give the examples paths, so the sources resolve from the right folder; `cagr rules test` reads the repo's own tsconfig. TypeScript's `import x = require("y")` and sources built from template expressions are not checked. For rules about file names and folders, use [layout rules](#layout-rules).
 
 ## Layout rules
 

@@ -13,6 +13,7 @@ import {
 } from "./imports";
 import { languages, loadParsers, parserForFile } from "./languages";
 import { type LayoutRule, toLayoutRule } from "./layout";
+import { RuleError } from "./rule-error";
 
 export type Rule = {
 	id: string;
@@ -47,7 +48,7 @@ export type RuleFinding = {
 	instead: string;
 };
 
-export class RuleError extends Error {}
+export { RuleError } from "./rule-error";
 
 const allowedKeys = new Set([
 	"id",
