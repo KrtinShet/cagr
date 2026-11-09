@@ -104,7 +104,7 @@ Codex reads `AGENTS.md` and Claude Code reads `CLAUDE.md`. A monorepo often keep
 @AGENTS.md
 ```
 
-A `CLAUDE.md` you wrote stays as it is. Sync deletes a `CLAUDE.md` it wrote when the `AGENTS.md` beside it is gone, or when you turn `nested_docs` off. `cagr sync --check`, `cagr doctor` and `cagr ci` report a missing or leftover one as out of date.
+A `CLAUDE.md` you wrote stays as it is, and so does a shim once you add a line to it or replace it with a symlink. The option needs git to find the `AGENTS.md` files; if `git ls-files` fails, sync says so and stops. Sync deletes a `CLAUDE.md` it wrote when the `AGENTS.md` beside it is gone, or when you turn `nested_docs` off. `cagr sync --check`, `cagr doctor` and `cagr ci` report a missing or leftover one as out of date.
 
 ## `[git]`
 

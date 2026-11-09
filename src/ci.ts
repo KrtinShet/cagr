@@ -9,7 +9,7 @@ import { resolveBase } from "./review/review";
 import { classify, riskReport } from "./risk";
 import { findInFiles, loadRules, RuleError } from "./rules/rules";
 import { run, runShell } from "./run";
-import { sync } from "./sync";
+import { SyncError, sync } from "./sync";
 
 export type Annotation = { file?: string; line?: number; message: string };
 export type CiCheck = {
@@ -74,15 +74,16 @@ export async function ci(
 		.filter((file) => existsSync(file));
 	const checks: CiCheck[] = [];
 
-	const drift = sync(config, { check: true }).drifted;
-	checks.push(
-		check(
-			"Generated files",
-			drift.map(
-				(file) => `${file} is out of date. Run \`cagr sync\` and commit.`,
-			),
-		),
-	);
+	let drift: string[];
+	try {
+		drift = sync(config, { check: true }).drifted.map(
+			(file) => `${file} is out of date. Run \`cagr sync\` and commit.`,
+		);
+	} catch (error) {
+		if (!(error instanceof SyncError)) throw error;
+		drift = [error.message];
+	}
+	checks.push(check("Generated files", drift));
 
 	const branch = env.GITHUB_HEAD_REF || git.branch;
 	const branchProblem = branch ? branchFinding(branch, config) : null;

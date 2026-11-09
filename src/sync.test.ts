@@ -5,6 +5,7 @@ import {
 	readFile,
 	rm,
 	stat,
+	symlink,
 	writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -240,6 +241,38 @@ describe("nested agent docs", () => {
 		expect(await stat(join(root, "apps/api/CLAUDE.md")).then(() => true)).toBe(
 			true,
 		);
+	});
+
+	test("an edited shim or a symlink is the user's", async () => {
+		const { root, config: on, make } = await monorepo();
+		sync(on);
+		const shim = join(root, "apps/web/CLAUDE.md");
+		const edited = `${await readFile(shim, "utf8")}- Run tests with bun test\n`;
+		await writeFile(shim, edited);
+		expect(sync(on, { check: true }).drifted).toEqual([]);
+		expect(sync(make(false)).removed).toEqual([]);
+		expect(await readFile(shim, "utf8")).toBe(edited);
+		await rm(shim);
+		await symlink(join(root, "nowhere.md"), shim);
+		expect(sync(on).written).not.toContain("apps/web/CLAUDE.md");
+		expect(await stat(join(root, "nowhere.md")).catch(() => null)).toBeNull();
+	});
+
+	test("a git failure is reported when on and ignored when off", async () => {
+		const root = await mkdtemp(join(tmpdir(), "gw-nogit-"));
+		const at = (on: boolean) =>
+			resolveConfig(
+				{ agents: { enabled: [], nested_docs: on } },
+				root,
+				join(root, "cagr.toml"),
+			);
+		expect(() => sync(at(true), { check: true })).toThrow(
+			"[agents] nested_docs needs git",
+		);
+		expect(sync(at(false), { check: true }).drifted).toEqual([
+			".githooks/commit-msg",
+			".githooks/pre-push",
+		]);
 	});
 
 	test("is off by default", async () => {
