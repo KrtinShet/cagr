@@ -319,6 +319,29 @@ describe("hooks", () => {
 		).toEqual({ kind: "allow" });
 	});
 
+	test("a code rule that does not compile is reported after an edit, with layout still run", async () => {
+		const badKind = codeRule.replace(
+			"  pattern: console.log($$$A)",
+			"  kind: no_such_kind",
+		);
+		const { dir, config, input } = await setup(
+			`${featureRules}---\n${badKind}`,
+		);
+		await writeFile(join(dir, "DealCard.ts"), "export {};\n");
+		const after = await handle(
+			input("file.after_edit", "src/features/deals/DealCard.ts"),
+			config,
+		);
+		expect(after.kind).toBe("block");
+		const reason = "reason" in after ? after.reason : "";
+		expect(reason).toContain(
+			"(no-console-log): the rule does not work for typescript",
+		);
+		expect(reason).toContain(
+			"kebab-files: Feature files use kebab-case names.",
+		);
+	});
+
 	test("a broken rule file does not block creating a file", async () => {
 		const { config, input } = await setup(`${featureRules}---\nid: [\n`);
 		expect(

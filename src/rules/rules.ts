@@ -8,7 +8,8 @@ import { type LayoutRule, toLayoutRule } from "./layout";
 
 export type Rule = {
 	id: string;
-	language: string;
+	/** One or more keys of `languages`, in the order the rule file gives them. */
+	languages: string[];
 	message: string;
 	instead: string;
 	note: string | null;
@@ -150,12 +151,19 @@ function toRule(doc: unknown, file: string, problems: string[]): Rule | null {
 			problems.push(
 				`${where}: "${key}" is required${key === "instead" ? ": say what to use instead, so the agent can fix it" : ""}.`,
 			);
+	const ruleLanguages = (
+		typeof raw.language === "string"
+			? [raw.language]
+			: isStringList(raw.language)
+				? raw.language
+				: []
+	).map((language) => language.toLowerCase());
 	if (
-		typeof raw.language !== "string" ||
-		!(raw.language.toLowerCase() in languages)
+		ruleLanguages.length === 0 ||
+		ruleLanguages.some((language) => !(language in languages))
 	)
 		problems.push(
-			`${where}: "language" must be one of ${Object.keys(languages).join(", ")}.`,
+			`${where}: "language" must be one of ${Object.keys(languages).join(", ")}, or a list of them.`,
 		);
 	if (typeof raw.rule !== "object" || raw.rule === null)
 		problems.push(
@@ -176,7 +184,7 @@ function toRule(doc: unknown, file: string, problems: string[]): Rule | null {
 	if (problems.length > before) return null;
 	return {
 		id: raw.id as string,
-		language: (raw.language as string).toLowerCase(),
+		languages: [...new Set(ruleLanguages)],
 		message: raw.message as string,
 		instead: raw.instead as string,
 		note: typeof raw.note === "string" ? raw.note : null,
@@ -200,6 +208,88 @@ const isStringList = (value: unknown): value is string[] =>
 	Array.isArray(value) && value.every((entry) => typeof entry === "string");
 
 type Napi = Awaited<ReturnType<typeof loadParsers>>;
+
+/** The parser a rule reads `file` with: the first of its languages that reads the extension. */
+export function ruleParserForFile(rule: Rule, file: string) {
+	for (const language of rule.languages) {
+		const parser = parserForFile(language, file);
+		if (parser) return parser;
+	}
+	return null;
+}
+
+/** Every parser a rule's languages use, each language's own parser first. */
+function candidateParsers(rule: Rule) {
+	const parsers = new Set<string>();
+	for (const language of rule.languages) {
+		const entry = languages[language];
+		if (!entry) continue;
+		parsers.add(entry.parser);
+		for (const parser of Object.values(entry.extensions)) parsers.add(parser);
+	}
+	return [...parsers];
+}
+
+const compiled = new WeakMap<Rule, { parsers: string[]; problems: string[] }>();
+
+/**
+ * The parsers a rule's matcher compiles for. A kind that only one grammar has
+ * (JSX kinds under `typescript`, which reads .ts without JSX) drops the parsers
+ * that lack it, so the rule checks only the files where the kind can exist. A
+ * language with no parser left is a problem with the rule file.
+ */
+function compile(napi: Napi, rules: Rule[]) {
+	const problems: string[] = [];
+	for (const rule of rules) {
+		const known = compiled.get(rule);
+		if (known) {
+			problems.push(...known.problems);
+			continue;
+		}
+		const ok: string[] = [];
+		const ruleProblems: string[] = [];
+		const errors = new Map<string, string>();
+		for (const parser of candidateParsers(rule))
+			try {
+				napi
+					.parse(parser as never, "")
+					.root()
+					.findAll(rule.matcher as never);
+				ok.push(parser);
+			} catch (error) {
+				errors.set(parser, napiReason(error));
+			}
+		for (const language of rule.languages) {
+			const entry = languages[language];
+			if (!entry) continue;
+			const parsers = new Set([
+				entry.parser,
+				...Object.values(entry.extensions),
+			]);
+			if ([...parsers].some((parser) => ok.includes(parser))) continue;
+			ruleProblems.push(
+				`${rule.source} (${rule.id}): the rule does not work for ${language}: ${errors.get(entry.parser) ?? "no parser"}.${rule.languages.length > 1 ? ` Drop ${language} from "language", or split the rule.` : ""}`,
+			);
+		}
+		compiled.set(rule, { parsers: ok, problems: ruleProblems });
+		problems.push(...ruleProblems);
+	}
+	if (problems.length > 0)
+		throw new RuleError(
+			`Rule files have problems:\n${problems.map((p) => `  - ${p}`).join("\n")}`,
+		);
+}
+
+/** ast-grep's error without its first line and arrows, on one line. */
+function napiReason(error: unknown) {
+	const lines = String((error as Error)?.message ?? error)
+		.split("\n")
+		.map((line) => line.replace(/^\s*\|->/, "").trim())
+		.filter(Boolean);
+	return (lines.length > 1 ? lines.slice(1) : lines)
+		.map((line) => line.replace(/[.:]$/, ""))
+		.join(": ");
+}
 type Match = { line: number; column: number; message: string };
 
 function matches(
@@ -246,16 +336,18 @@ export async function findInFiles(
 		const path = insideRoot(root, file);
 		if (path === null || !existsSync(file)) continue;
 		for (const rule of rules) {
-			const parser = parserForFile(rule.language, file);
+			const parser = ruleParserForFile(rule, file);
 			if (parser && appliesTo(rule, path))
 				work.push({ rule, path, file, parser });
 		}
 	}
 	if (work.length === 0) return [];
 	const napi = await loadParsers(work.map((item) => item.parser));
+	compile(napi, [...new Set(work.map((item) => item.rule))]);
 	const sources = new Map<string, string>();
 	const findings: RuleFinding[] = [];
 	for (const { rule, path, file, parser } of work) {
+		if (!compiled.get(rule)?.parsers.includes(parser)) continue;
 		let source = sources.get(file);
 		if (source === undefined) {
 			source = readFileSync(file, "utf8");
@@ -288,12 +380,12 @@ export type ExampleResult = {
 
 /** Every invalid example must fire and every valid one must not. */
 export async function testRules(rules: Rule[]): Promise<ExampleResult[]> {
-	const napi = await loadParsers(
-		rules.map((rule) => languages[rule.language]?.parser ?? ""),
-	);
+	const napi = await loadParsers(rules.flatMap(candidateParsers));
+	compile(napi, rules);
 	const results: ExampleResult[] = [];
 	for (const rule of rules) {
-		const parser = languages[rule.language]?.parser as string;
+		// Examples are read as the first language, with the first parser the rule works in.
+		const parser = compiled.get(rule)?.parsers[0] as string;
 		for (const kind of ["invalid", "valid"] as const)
 			for (const example of rule.examples[kind]) {
 				const count = matches(napi, rule, parser, example).length;

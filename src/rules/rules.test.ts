@@ -218,3 +218,117 @@ describe("import boundaries", () => {
 		]);
 	});
 });
+
+// superagent's ARCH008: JSX kinds exist in the TSX grammar, not in the plain TypeScript one.
+const jsxRule = `id: pages-render-views
+language: typescript
+message: <$TAG> does not belong in a page.
+instead: Render a *View screen.
+rule:
+  any: [{ kind: jsx_opening_element }, { kind: jsx_self_closing_element }]
+  has:
+    field: name
+    pattern: $TAG
+    not: { regex: "View$" }
+examples:
+  invalid: ["export default function Page() { return <div/>; }"]
+  valid: ["export default function Page() { return <HomeView/>; }"]
+`;
+
+describe("languages", () => {
+	test("JSX kinds under typescript check .tsx files, and skip .ts files", async () => {
+		const { root, config } = await repo({ "a.yml": jsxRule });
+		const results = await testRules(loadRules(config));
+		expect(results.filter((r) => !r.ok)).toEqual([]);
+		await writeFile(join(root, "page.tsx"), "export const P = () => <div/>;\n");
+		await writeFile(join(root, "page.ts"), "export const p = 1;\n");
+		const findings = await findInFiles(
+			loadRules(config),
+			[join(root, "page.tsx"), join(root, "page.ts")],
+			root,
+		);
+		expect(findings.map((f) => [f.path, f.message])).toEqual([
+			["page.tsx", "<div> does not belong in a page."],
+		]);
+	});
+
+	test("a kind no parser of the language has is a rule file problem, not a crash", async () => {
+		const { config } = await repo({
+			"a.yml": jsxRule.replace("jsx_opening_element", "jsx_openin_element"),
+		});
+		const rules = loadRules(config);
+		await expect(testRules(rules)).rejects.toThrow(RuleError);
+		await expect(testRules(rules)).rejects.toThrow(
+			"(pages-render-views): the rule does not work for typescript: Rule contains invalid kind matcher: Invalid Kind: Kind `jsx_openin_element` is invalid",
+		);
+	});
+
+	test("a bad regex is a rule file problem in findInFiles too", async () => {
+		const { root, config } = await repo({
+			"a.yml": noConsole.replace(
+				"pattern: console.log($$$ARGS)",
+				'regex: "(["',
+			),
+		});
+		await writeFile(join(root, "a.ts"), "console.log(1);\n");
+		await expect(
+			findInFiles(loadRules(config), [join(root, "a.ts")], root),
+		).rejects.toThrow("Rule files have problems:");
+	});
+
+	test("a list of languages checks every language's files", async () => {
+		const { root, config } = await repo({
+			"a.yml": noConsole.replace(
+				"language: typescript",
+				"language: [typescript, JavaScript]",
+			),
+		});
+		const rules = loadRules(config);
+		expect(rules[0]?.languages).toEqual(["typescript", "javascript"]);
+		for (const name of ["a.ts", "b.tsx", "c.js", "d.jsx", "e.mjs", "f.py"])
+			await writeFile(join(root, name), "console.log(1);\n");
+		const findings = await findInFiles(
+			rules,
+			["a.ts", "b.tsx", "c.js", "d.jsx", "e.mjs", "f.py"].map((n) =>
+				join(root, n),
+			),
+			root,
+		);
+		expect(findings.map((f) => f.path)).toEqual([
+			"a.ts",
+			"b.tsx",
+			"c.js",
+			"d.jsx",
+			"e.mjs",
+		]);
+	});
+
+	test("a language in the list the rule's kinds do not exist in is a problem", async () => {
+		const { config } = await repo({
+			"a.yml": `id: typed
+language: [typescript, javascript]
+message: a type annotation.
+instead: Remove it.
+rule:
+  kind: type_annotation
+examples:
+  invalid: ["const a: number = 1;"]
+  valid: ["const a = 1;"]
+`,
+		});
+		await expect(testRules(loadRules(config))).rejects.toThrow(
+			'the rule does not work for javascript: Rule contains invalid kind matcher: Invalid Kind: Kind `type_annotation` is invalid. Drop javascript from "language", or split the rule.',
+		);
+	});
+
+	test("language must name known languages", async () => {
+		const { config } = await repo({
+			"a.yml": noConsole.replace(
+				"language: typescript",
+				"language: [typescript, cobol]",
+			),
+			"b.yml": noPrint.replace("language: python", "language: []"),
+		});
+		expect(() => loadRules(config)).toThrow("or a list of them");
+	});
+});

@@ -87,7 +87,7 @@ Answer them with `cagr review answer <id> --wrong "<why>"`. `cagr review stats` 
 ### Code rules do not fire
 
 - Run `cagr rules test`. If an invalid example does not fire, fix the `rule`.
-- Check the `language`: a `typescript` rule does not check `.js` files. Use a `javascript` rule for those.
+- Check the `language`: a `typescript` rule does not check `.js` files. Use `language: [typescript, javascript]` to check both.
 - Check `files` and `ignores`.
 - Run `cagr check <file>` on a file that should match.
 
