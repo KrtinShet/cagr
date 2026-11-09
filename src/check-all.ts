@@ -23,10 +23,15 @@ function isFile(path: string) {
  * Returns git's error when it cannot list them.
  */
 export function repoFiles(root: string): string[] | { error: string } {
-	const listed = Bun.spawnSync(
-		["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
-		{ cwd: root, stdout: "pipe", stderr: "pipe" },
-	);
+	let listed: ReturnType<typeof Bun.spawnSync>;
+	try {
+		listed = Bun.spawnSync(
+			["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+			{ cwd: root, env: process.env, stdout: "pipe", stderr: "pipe" },
+		);
+	} catch (error) {
+		return { error: `git could not start (${(error as Error).message})` };
+	}
 	if (listed.exitCode !== 0) return { error: listed.stderr.toString().trim() };
 	const paths = listed.stdout
 		.toString()

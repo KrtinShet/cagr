@@ -102,6 +102,21 @@ test("--all names git's error when git fails inside a repo", async () => {
 	expect(result.report).not.toContain("git init");
 });
 
+test("--all says so when git cannot start", async () => {
+	const root = mkdtempSync(join(tmpdir(), "gw-all-"));
+	const path = process.env.PATH;
+	process.env.PATH = join(root, "nothing-here");
+	try {
+		const result = await checkAll(
+			resolveConfig({}, root, join(root, "cagr.toml")),
+		);
+		expect(result.ok).toBe(false);
+		expect(result.report).toContain("git could not start");
+	} finally {
+		process.env.PATH = path;
+	}
+});
+
 test("--all reports a broken rule file and still runs the layout rules", async () => {
 	const { root, commit } = await tempRepo();
 	await commit("chore: add", {
