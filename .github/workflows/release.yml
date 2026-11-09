@@ -11,11 +11,8 @@ on:
     branches: [main]
     tags: ["v[0-9]+.[0-9]+.[0-9]+"]
 
-permissions:
-  contents: write # the tag, the GitHub release and the release branch
-  id-token: write # npm trusted publishing, so no npm token is stored
-  pull-requests: write # the release pull request
-  actions: write # start the tests on the release pull request
+# Each job asks for only what it needs.
+permissions: {}
 
 # One release at a time, and never cancel one halfway through publishing.
 concurrency:
@@ -25,6 +22,9 @@ concurrency:
 jobs:
   release:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write # the tag and the GitHub release
+      id-token: write # npm trusted publishing, so no npm token is stored
     steps:
       - uses: actions/checkout@v4
         with:
@@ -39,7 +39,10 @@ jobs:
           version="$(bun -e 'console.log((await import("./src/version.ts")).version)')"
           tag="v$version"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
-          if [ "$GITHUB_REF_TYPE" = tag ]; then
+          if ! printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "src/version.ts says $version. Only plain x.y.z versions are released, so nothing is published."
+            echo "release=false" >> "$GITHUB_OUTPUT"
+          elif [ "$GITHUB_REF_TYPE" = tag ]; then
             if [ "$tag" != "$GITHUB_REF_NAME" ]; then
               echo "The tag is $GITHUB_REF_NAME but src/version.ts says $version. Bump both, then tag again." >&2
               exit 1
@@ -49,8 +52,12 @@ jobs:
               exit 1
             fi
             echo "release=true" >> "$GITHUB_OUTPUT"
+          elif [ "$(git rev-parse -q --verify "refs/tags/$tag^{commit}")" = "$GITHUB_SHA" ]; then
+            # This commit is the release itself: a rerun, so finish whatever did not get published.
+            echo "$tag is this commit. Publishing again; parts already published are skipped."
+            echo "release=true" >> "$GITHUB_OUTPUT"
           elif git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
-            echo "$tag is already released. Nothing to publish."
+            echo "$tag was released from an earlier commit. Nothing to publish."
             echo "release=false" >> "$GITHUB_OUTPUT"
           else
             echo "$tag has no tag yet, so this commit releases it."
@@ -100,6 +107,10 @@ jobs:
     needs: release
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write # the release branch
+      pull-requests: write # the release pull request
+      actions: write # start the tests on the release pull request
     steps:
       - uses: actions/checkout@v4
         with:
@@ -148,7 +159,9 @@ jobs:
           git commit -qam "chore(release): v$next"
           # The branch belongs to this workflow, so it is rewritten on every push to main.
           git push --force origin "$BRANCH"
-          number="$(gh pr list --head "$BRANCH" --state open --json number -q '.[0].number')"
+          # Only this repo's own branch: a fork can open a pull request from a branch of the same name.
+          number="$(gh pr list --head "$BRANCH" --state open --json number,isCrossRepository \
+            -q '[.[] | select(.isCrossRepository | not)][0].number // empty')"
           if [ -n "$number" ]; then
             gh pr edit "$number" --title "chore(release): v$next" --body-file body.md
           else

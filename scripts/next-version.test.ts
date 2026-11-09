@@ -79,6 +79,9 @@ function repo(version: string) {
 		if (result.exitCode !== 0) throw new Error(result.stderr.toString());
 	};
 	run("init", "-q", "-b", "main");
+	// The user's global signing setup must not reach these throwaway commits and tags.
+	run("config", "commit.gpgsign", "false");
+	run("config", "tag.gpgsign", "false");
 	run("add", "-A");
 	run("commit", "-qm", "chore: start");
 	const commit = (message: string) =>
