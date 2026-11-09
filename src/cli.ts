@@ -58,6 +58,14 @@ Usage: cagr <command>
                                Called by the pre-push hook when [review] status is on: sets the
                                cagr/review and cagr/checks commit statuses once GitHub has <sha>.
 
+Files:
+  cagr.toml                    Short settings: agents, git, stacks. \`cagr init\` writes it.
+  .cagr/guards.toml            Protected files and blocked commands. \`cagr init\` writes it.
+  .cagr/risk.toml              Risk tiers by path. \`cagr init\` writes it.
+  .cagr/**/*.toml              Read with cagr.toml as part of the config.
+  .cagr/rules/**/*.yml         Code and layout rules. \`cagr rules test\` checks them.
+  .cagr/review.md              The review guide every \`cagr review\` reads.
+
 Events: ${agentEvents.join(", ")}. Agents: ${agentNames.join(", ")}.`;
 
 class UsageError extends Error {}

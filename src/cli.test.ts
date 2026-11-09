@@ -3,6 +3,7 @@ import { existsSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { checkOptions } from "./cli";
+import { starterFragments } from "./init";
 
 const cli = join(import.meta.dir, "cli.ts");
 
@@ -12,6 +13,18 @@ test("--help on a command prints help and does not run it", () => {
 	expect(result.exitCode).toBe(0);
 	expect(result.stdout.toString()).toContain("Usage: cagr <command>");
 	expect(existsSync(join(dir, "cagr.toml"))).toBe(false);
+});
+
+test("help names every .cagr file init writes, and the rules and review guide", () => {
+	const result = Bun.spawnSync(["bun", cli, "help"]);
+	const text = result.stdout.toString();
+	for (const path of [
+		"cagr.toml",
+		...Object.keys(starterFragments),
+		".cagr/rules/",
+		".cagr/review.md",
+	])
+		expect(text).toContain(path);
 });
 
 test("an option a command does not take is an error that lists the ones it does", () => {
