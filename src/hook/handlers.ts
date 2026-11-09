@@ -175,13 +175,19 @@ async function fileBeforeEdit(
 		// Only a new file: an existing one in the wrong place is reported after the edit, not frozen.
 		const path = insideRoot(config.root, file);
 		if (path === null || existsSync(file)) continue;
-		const layout = layoutFindings(config.layout, [path])[0];
-		if (layout)
+		// Every broken rule in one message, so a rename does not run into the next one.
+		const [first, ...rest] = layoutFindings(config.layout, [path]);
+		if (first)
 			return {
 				kind: "deny",
 				reason: render({
-					id: layout.rule,
-					reason: `Do not create ${path}: ${layout.message} (${layout.detail}.) Instead: ${layout.instead}`,
+					id: first.rule,
+					reason: [first, ...rest]
+						.map(
+							(layout, i) =>
+								`${i === 0 ? `Do not create ${path}: ` : `Also (${layout.rule}): `}${layout.message} (${layout.detail}.) Instead: ${layout.instead}`,
+						)
+						.join(" "),
 				}),
 			};
 	}

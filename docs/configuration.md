@@ -230,6 +230,8 @@ A rule needs `name`, `allowed` or both. When the agent is about to create a file
 Do not create apps/web/src/sections/deals/DealCard.tsx: Feature files use kebab-case names. (the name "DealCard" does not match /^[a-z0-9]+(-[a-z0-9]+)*$/.) Instead: Rename the file to kebab-case, such as deal-card.tsx. (cagr: kebab-case-sections)
 ```
 
+When a path breaks more than one rule, the message lists every fix. Only files made with the agent's edit tools are checked before they exist; a file made by a shell command (`mv`, `touch`, a generator) is caught by `cagr check` and `cagr ci`.
+
 Edits to a file that already exists are not denied, so old files can still be fixed. They are reported after the edit, at the end of the turn, by `cagr check` and as the Layout check in `cagr ci`. `cagr explain <id>` prints a layout rule.
 
 ## `[review]`

@@ -149,6 +149,20 @@ describe("hooks", () => {
 		});
 	});
 
+	test("a new path that breaks two rules gets both fixes at once", async () => {
+		const { config, input } = await setup();
+		const decision = await handle(
+			input("file.before_edit", "apps/web/src/sections/deals/Deals-view.tsx"),
+			config,
+		);
+		expect(decision.kind).toBe("deny");
+		const reason = "reason" in decision ? decision.reason : "";
+		expect(reason).toContain("Feature files use kebab-case names.");
+		expect(reason).toContain(
+			"Also (arch002): Screens live in their feature's view folder.",
+		);
+	});
+
 	test("editing an existing file is allowed before, reported after", async () => {
 		const { dir, config, input } = await setup();
 		await writeFile(join(dir, "DealCard.tsx"), "export {};\n");
