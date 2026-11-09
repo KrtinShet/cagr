@@ -16,20 +16,22 @@ examples:
   invalid: ["console.log(1)"]
   valid: ["log(1)"]
 `;
-const layout = [
-	{
-		id: "kebab-files",
-		files: ["src/**"],
-		name: "^[a-z0-9]+(-[a-z0-9]+)*$",
-		message: "Files use kebab-case names.",
-		instead: "Rename it.",
-	},
-];
+const layout = `id: kebab-files
+message: Files use kebab-case names.
+instead: Rename it.
+layout:
+  files: ["src/**"]
+  name: "^[a-z0-9]+(-[a-z0-9]+)*$"
+examples:
+  invalid: [src/UserCard.ts]
+  valid: [src/user-card.ts]
+`;
 
 async function repo() {
 	const repo = await tempRepo();
 	await repo.commit("chore: add files", {
 		".cagr/rules/r.yml": rule,
+		".cagr/rules/layout.yml": layout,
 		".gitignore": "dist/\n",
 		"src/old.ts": "console.log(1);\n",
 		"src/OldName.ts": "export {};\n",
@@ -43,7 +45,7 @@ async function repo() {
 
 test("--all reports old problems in every file git knows, not ignored ones", async () => {
 	const { root } = await repo();
-	const config = resolveConfig({ layout }, root, join(root, "cagr.toml"));
+	const config = resolveConfig({}, root, join(root, "cagr.toml"));
 	const result = await checkAll(config);
 	expect(result.ok).toBe(false);
 	expect(result.report).toBe(
@@ -60,11 +62,14 @@ test("--all reports old problems in every file git knows, not ignored ones", asy
 
 test("--all passes a clean repo and counts its files", async () => {
 	const { root, commit } = await tempRepo();
-	await commit("chore: add", { "src/a.ts": "export {};\n" });
-	const config = resolveConfig({ layout }, root, join(root, "cagr.toml"));
+	await commit("chore: add", {
+		"src/a.ts": "export {};\n",
+		".cagr/rules/layout.yml": layout,
+	});
+	const config = resolveConfig({}, root, join(root, "cagr.toml"));
 	expect(await checkAll(config)).toEqual({
 		ok: true,
-		report: "No problems in 2 files.",
+		report: "No problems in 3 files.",
 	});
 });
 
@@ -79,15 +84,18 @@ test("--all outside a git repo says how to fix it", async () => {
 
 test("--all skips folders git lists: nested repos and symlinks to folders", async () => {
 	const { root, git, commit } = await tempRepo();
-	await commit("chore: add", { "src/a.ts": "export {};\n" });
+	await commit("chore: add", {
+		"src/a.ts": "export {};\n",
+		".cagr/rules/layout.yml": layout,
+	});
 	// An untracked nested repo is listed as `src/Three.js/`; a symlink to a folder as itself.
 	const nested = await tempRepo();
 	await git("clone", "-q", nested.root, "src/Three.js");
 	symlinkSync(join(root, "src"), join(root, "src/LinkDir.js"));
-	const config = resolveConfig({ layout }, root, join(root, "cagr.toml"));
+	const config = resolveConfig({}, root, join(root, "cagr.toml"));
 	expect(await checkAll(config)).toEqual({
 		ok: true,
-		report: "No problems in 2 files.",
+		report: "No problems in 3 files.",
 	});
 });
 
@@ -117,17 +125,18 @@ test("--all says so when git cannot start", async () => {
 	}
 });
 
-test("--all reports a broken rule file and still runs the layout rules", async () => {
+test("--all reports a broken rule file under Rules", async () => {
 	const { root, commit } = await tempRepo();
 	await commit("chore: add", {
 		".cagr/rules/bad.yml": "id: [\n",
+		".cagr/rules/layout.yml": layout,
 		"src/BadName.ts": "export {};\n",
 	});
-	const config = resolveConfig({ layout }, root, join(root, "cagr.toml"));
+	const config = resolveConfig({}, root, join(root, "cagr.toml"));
 	const result = await checkAll(config);
 	expect(result.ok).toBe(false);
-	expect(result.report).toContain("## Rules\n");
-	expect(result.report).toContain("## Layout\nsrc/BadName.ts kebab-files");
+	expect(result.report).toContain("## Rules\nRule files have problems");
+	expect(result.report).toContain("bad.yml: not valid YAML");
 });
 
 test("cagr check --all exits 1 on a finding and rejects file names", async () => {

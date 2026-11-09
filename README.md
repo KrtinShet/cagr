@@ -89,6 +89,20 @@ examples:
   valid: ['logger.info("hi")']
 ```
 
+Layout rules go in the same folder. A `layout:` block in place of `rule:` checks file names and folders, with example paths:
+
+```yaml
+id: kebab-files
+message: Files use kebab-case names.
+instead: Rename it, such as user-card.ts.
+layout:
+  files: ["src/**/*.ts"]
+  name: "^[a-z0-9]+(-[a-z0-9]+)*$"
+examples:
+  invalid: [src/UserCard.ts]
+  valid: [src/user-card.ts]
+```
+
 `cagr rules test` fails when an invalid example does not fire or a valid one does. Languages: TypeScript, TSX, JavaScript, Python, Go, Rust, HTML, CSS. Biome `.grit` rules stay in Biome.
 
 ## Review

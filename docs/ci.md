@@ -63,7 +63,7 @@ The `review` and `nightly` jobs run Claude Code, which needs an Anthropic API ke
 | Edit checks       | The `on_edit` commands on the changed files, each with a 5 minute limit. If they change any tracked file, this fails, since the branch was not formatted or fixed before commit.                 |
 | Checks            | The `on_turn_end` commands, each with a 30 minute limit. A command with `{files}` gets the changed files of its stack and is skipped if there are none. A command without `{files}` always runs. |
 | Code rules        | The [code rules](code-rules.md) on the changed files.                                                                                                                                            |
-| Layout            | The [layout rules](configuration.md#layout) on the changed files, when there are any.                                                                                                            |
+| Layout            | The [layout rules](code-rules.md#layout-rules) on the changed files, when there are any.                                                                                                            |
 | Risk              | The tier, approvals and owners of the change. Never fails.                                                                                                                                       |
 | Pull request body | When the run is for a pull request and `review.pr_sections` is set: the body must have every heading. "The description lacks "## Risk". Edit it and fill them in."                               |
 

@@ -24,8 +24,8 @@ import { ghCli } from "./review/github";
 import { AnswerError } from "./review/report";
 import { ReviewInputError } from "./review/review";
 import { postStatusAfterPush } from "./review/status";
-import { explainLayout } from "./rules/layout";
-import { loadRules, RuleError, testRules } from "./rules/rules";
+import { explainLayout, testLayoutRules } from "./rules/layout";
+import { loadRuleSet, RuleError, testRules } from "./rules/rules";
 import {
 	GitSetupError,
 	installGitHooks,
@@ -274,16 +274,18 @@ async function main(argv: string[]): Promise<number> {
 				return 0;
 			}
 			const config = loadConfig(process.cwd());
-			const layout = config?.layout.find((entry) => entry.id === id);
-			if (config && layout) {
-				console.log(explainLayout(layout, config));
+			const { code: rules, layout } = config
+				? loadRuleSet(config)
+				: { code: [], layout: [] };
+			const layoutRule = layout.find((entry) => entry.id === id);
+			if (layoutRule) {
+				console.log(explainLayout(layoutRule));
 				return 0;
 			}
-			const rules = config ? loadRules(config) : [];
 			const rule = rules.find((entry) => entry.id === id);
 			if (!rule) {
 				console.error(
-					`No guard or rule "${id ?? ""}". Known: ${[...guards.map((g) => g.id), ...rules.map((r) => r.id), ...(config?.layout ?? []).map((l) => l.id)].join(", ")}.`,
+					`No guard or rule "${id ?? ""}". Known: ${[...guards.map((g) => g.id), ...rules.map((r) => r.id), ...layout.map((l) => l.id)].join(", ")}.`,
 				);
 				return 1;
 			}
@@ -305,15 +307,15 @@ async function main(argv: string[]): Promise<number> {
 		}
 		case "rules": {
 			if (args[0] !== "test") throw new UsageError("Usage: cagr rules test");
-			const rules = loadRules(requireConfig());
-			const results = await testRules(rules);
+			const { code, layout } = loadRuleSet(requireConfig());
+			const results = [...(await testRules(code)), ...testLayoutRules(layout)];
 			for (const result of results.filter((entry) => !entry.ok))
 				console.log(
 					`FAIL ${result.rule}: ${result.kind} example ${result.kind === "invalid" ? "did not fire" : `fired ${result.matches} time${result.matches === 1 ? "" : "s"}`}:\n  ${result.example.trim().replace(/\n/g, "\n  ")}`,
 				);
 			const failed = results.filter((entry) => !entry.ok).length;
 			console.log(
-				`${rules.length} rules, ${results.length} examples, ${failed} failed.`,
+				`${code.length + layout.length} rules, ${results.length} examples, ${failed} failed.`,
 			);
 			return failed === 0 ? 0 : 1;
 		}

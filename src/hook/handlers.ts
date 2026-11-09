@@ -17,12 +17,14 @@ import {
 import { insideRoot } from "../paths";
 import { gateResult } from "../review/gate";
 import { readRecord, recordPath } from "../review/store";
-import { formatLayout, layoutFindings } from "../rules/layout";
+import { formatLayout, type LayoutRule, layoutFindings } from "../rules/layout";
 import {
 	findInFiles,
 	formatFinding,
-	loadRules,
+	loadLayoutRules,
+	loadRuleSet,
 	RuleError,
+	type RuleSet,
 } from "../rules/rules";
 import { run, runShell } from "../run";
 import { type CheckResult, needsCheck, stopDecision } from "../stop-decision";
@@ -169,6 +171,7 @@ async function fileBeforeEdit(
 	const mainCheckout = config.git.worktree_only
 		? (await gitContext(input.cwd)).mainCheckout
 		: null;
+	let layout: LayoutRule[] | undefined;
 	for (const file of input.files) {
 		const finding = editFinding(file, config, { mainCheckout });
 		if (finding) return { kind: "deny", reason: render(finding) };
@@ -176,7 +179,8 @@ async function fileBeforeEdit(
 		const path = insideRoot(config.root, file);
 		if (path === null || existsSync(file)) continue;
 		// Every broken rule in one message, so a rename does not run into the next one.
-		const [first, ...rest] = layoutFindings(config.layout, [path]);
+		layout ??= layoutRules(config);
+		const [first, ...rest] = layoutFindings(layout, [path]);
 		if (first)
 			return {
 				kind: "deny",
@@ -194,16 +198,27 @@ async function fileBeforeEdit(
 	return { kind: "allow" };
 }
 
+/** The layout rules, or none when a rule file is broken: the Rules check reports that. */
+function layoutRules(config: Config): LayoutRule[] {
+	try {
+		return loadLayoutRules(config);
+	} catch (error) {
+		if (error instanceof RuleError) return [];
+		throw error;
+	}
+}
+
 /** Layout findings for `files` (absolute), or null when there are no layout rules. */
-export function layoutCheck(
+function layoutCheck(
 	config: Config,
+	rules: LayoutRule[],
 	files: string[],
 ): CheckResult | null {
-	if (config.layout.length === 0) return null;
+	if (rules.length === 0) return null;
 	const paths = files
 		.map((file) => insideRoot(config.root, file))
 		.filter((path) => path !== null);
-	const findings = layoutFindings(config.layout, paths);
+	const findings = layoutFindings(rules, paths);
 	return {
 		name: "Layout",
 		ok: findings.length === 0,
@@ -250,40 +265,54 @@ export async function editChecks(
 				problems.push(`## ${command}\n${tidy(result.output, 2000)}`);
 		}
 	}
-	const rules = await ruleCheck(config, existing, "file.after_edit", timings);
+	const { rules, layout } = await ruleChecks(
+		config,
+		existing,
+		"file.after_edit",
+		timings,
+	);
 	if (rules && !rules.ok) problems.push(`## Rules\n${rules.output}`);
-	const layout = layoutCheck(config, existing);
 	if (layout && !layout.ok) problems.push(`## Layout\n${layout.output}`);
 	recordTimings(config.root, timings);
 	return problems;
 }
 
-async function ruleCheck(
+/** The code rules and layout rules for `files`, from one read of the rule files. */
+async function ruleChecks(
 	config: Config,
 	files: string[],
 	event: string,
 	timings: { event: string; check: string; ms: number }[],
-): Promise<CheckResult | null> {
+): Promise<{ rules: CheckResult | null; layout: CheckResult | null }> {
 	const started = performance.now();
+	let set: RuleSet;
 	try {
-		const rules = loadRules(config);
-		if (rules.length === 0) return null;
-		const findings = await findInFiles(rules, files, config.root);
-		timings.push({
-			event,
-			check: "rules",
-			ms: Math.round(performance.now() - started),
-		});
-		return {
+		set = loadRuleSet(config);
+	} catch (error) {
+		// A broken rule file: Rules says so, and no layout rule runs.
+		if (error instanceof RuleError)
+			return {
+				rules: { name: "Rules", ok: false, output: error.message },
+				layout: null,
+			};
+		throw error;
+	}
+	const layout = layoutCheck(config, set.layout, files);
+	if (set.code.length === 0) return { rules: null, layout };
+	const findings = await findInFiles(set.code, files, config.root);
+	timings.push({
+		event,
+		check: "rules",
+		ms: Math.round(performance.now() - started),
+	});
+	return {
+		rules: {
 			name: "Rules",
 			ok: findings.length === 0,
 			output: tidy(findings.map(formatFinding).join("\n")),
-		};
-	} catch (error) {
-		if (error instanceof RuleError)
-			return { name: "Rules", ok: false, output: error.message };
-		throw error;
-	}
+		},
+		layout,
+	};
 }
 
 async function turnEnd(input: HookInput, config: Config): Promise<Decision> {
@@ -321,9 +350,13 @@ async function turnEnd(input: HookInput, config: Config): Promise<Decision> {
 			};
 		});
 	const results = await Promise.all(checks);
-	const rules = await ruleCheck(config, existing, "turn.end", timings);
+	const { rules, layout } = await ruleChecks(
+		config,
+		existing,
+		"turn.end",
+		timings,
+	);
 	if (rules) results.push(rules);
-	const layout = layoutCheck(config, existing);
 	if (layout) results.push(layout);
 	recordTimings(config.root, timings);
 	const decision = stopDecision(state, results);

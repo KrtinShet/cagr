@@ -292,67 +292,10 @@
 					"items": {
 						"type": "string"
 					},
-					"description": "Folders holding ast-grep rule files (*.yml)."
+					"description": "Folders holding rule files (*.yml): code rules and layout rules."
 				}
 			},
 			"description": "Custom code rules."
-		},
-		"layout": {
-			"type": "array",
-			"items": {
-				"type": "object",
-				"additionalProperties": false,
-				"properties": {
-					"id": {
-						"type": "string",
-						"minLength": 1,
-						"description": "A unique name, shown in each finding. `cagr explain <id>` prints the rule."
-					},
-					"files": {
-						"type": "array",
-						"items": {
-							"type": "string"
-						},
-						"description": "Globs, relative to the repo root, of the files this rule checks."
-					},
-					"ignores": {
-						"type": "array",
-						"items": {
-							"type": "string"
-						},
-						"description": "Globs of files this rule skips."
-					},
-					"name": {
-						"type": "string",
-						"minLength": 1,
-						"description": "A regular expression the file name must match, without its extensions: `user-card` for user-card.test.tsx."
-					},
-					"allowed": {
-						"type": "array",
-						"items": {
-							"type": "string"
-						},
-						"description": "Globs where the files may live. A matching file outside all of them is a finding."
-					},
-					"message": {
-						"type": "string",
-						"minLength": 1,
-						"description": "What is wrong. Shown to the agent."
-					},
-					"instead": {
-						"type": "string",
-						"minLength": 1,
-						"description": "What to do instead, so the agent can fix it."
-					}
-				},
-				"required": [
-					"id",
-					"files",
-					"message",
-					"instead"
-				]
-			},
-			"description": "Layout rules: file names and where files may live. Checked when a file is created, after each edit, at turn end, and in `cagr check` and `cagr ci`."
 		},
 		"review": {
 			"type": "object",

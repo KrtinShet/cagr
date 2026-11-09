@@ -4,6 +4,7 @@ import type { Config } from "../config/schema";
 import { guardIds } from "../guards/catalog";
 import { insideRoot, matchesGlob } from "../paths";
 import { languages, loadParsers, parserForFile } from "./languages";
+import { type LayoutRule, toLayoutRule } from "./layout";
 
 export type Rule = {
 	id: string;
@@ -64,10 +65,18 @@ export function ruleFiles(config: Config): string[] {
 	return files.sort();
 }
 
-/** Loads every rule file, or throws one error that lists every problem. */
-export function loadRules(config: Config): Rule[] {
+/** Both kinds of rule, from the same files. */
+export type RuleSet = { code: Rule[]; layout: LayoutRule[] };
+
+/**
+ * Loads every rule file, or throws one error that lists every problem. A
+ * document with a top-level `layout:` block is a layout rule; any other is a
+ * code rule.
+ */
+export function loadRuleSet(config: Config): RuleSet {
 	const problems: string[] = [];
-	const rules: Rule[] = [];
+	const code: Rule[] = [];
+	const layout: LayoutRule[] = [];
 	for (const file of ruleFiles(config)) {
 		let parsed: unknown;
 		try {
@@ -78,24 +87,29 @@ export function loadRules(config: Config): Rule[] {
 		}
 		const docs = Array.isArray(parsed) ? parsed : [parsed];
 		for (const doc of docs) {
+			if (typeof doc === "object" && doc !== null && "layout" in doc) {
+				const rule = toLayoutRule(
+					doc as Record<string, unknown>,
+					file,
+					problems,
+				);
+				if (rule) layout.push(rule);
+				continue;
+			}
 			const rule = toRule(doc, file, problems);
-			if (rule) rules.push(rule);
+			if (rule) code.push(rule);
 		}
 	}
 	const seen = new Map<string, string>();
-	for (const rule of rules) {
+	for (const rule of [...code, ...layout]) {
 		if (guardIds.includes(rule.id))
 			problems.push(
 				`${rule.source}: id "${rule.id}" is a built-in guard. Pick another id.`,
 			);
-		if (config.layout.some((layout) => layout.id === rule.id))
-			problems.push(
-				`${rule.source}: id "${rule.id}" is also a [[layout]] rule in ${config.source}. Pick another id.`,
-			);
 		const other = seen.get(rule.id);
 		if (other)
 			problems.push(
-				`${rule.source}: id "${rule.id}" is also used in ${other}.`,
+				`${rule.source}: id "${rule.id}" is also used in ${other}. Give each rule its own id.`,
 			);
 		seen.set(rule.id, rule.source);
 	}
@@ -103,12 +117,24 @@ export function loadRules(config: Config): Rule[] {
 		throw new RuleError(
 			`Rule files have problems:\n${problems.map((p) => `  - ${p}`).join("\n")}`,
 		);
-	return rules;
+	return { code, layout };
+}
+
+/** The code (ast-grep) rules, or throws one error that lists every problem in the rule files. */
+export function loadRules(config: Config): Rule[] {
+	return loadRuleSet(config).code;
+}
+
+/** The layout rules, or throws one error that lists every problem in the rule files. */
+export function loadLayoutRules(config: Config): LayoutRule[] {
+	return loadRuleSet(config).layout;
 }
 
 function toRule(doc: unknown, file: string, problems: string[]): Rule | null {
 	if (typeof doc !== "object" || doc === null) {
-		problems.push(`${file}: expected a rule (a YAML mapping).`);
+		problems.push(
+			`${file}: expected a rule (a YAML mapping), with "rule" for a code rule or "layout" for a layout rule.`,
+		);
 		return null;
 	}
 	const raw = doc as Record<string, unknown>;

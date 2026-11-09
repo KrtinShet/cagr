@@ -217,24 +217,4 @@ describe("import boundaries", () => {
 			'apps/web/src/components/ui/a.tsx:1:26 components-stay-shared: Shared components may not import from "@/sections/deals/deal-card". Instead: Pass the data in as props, or move the code into src/sections/<feature>/.',
 		]);
 	});
-
-	test("a code rule may not reuse a layout rule's id", async () => {
-		const { root } = await repo({ "a.yml": componentImports });
-		const config = resolveConfig(
-			{
-				layout: [
-					{
-						id: "components-stay-shared",
-						files: ["**"],
-						name: "^[a-z]+$",
-						message: "m",
-						instead: "i",
-					},
-				],
-			},
-			root,
-			"test.toml",
-		);
-		expect(() => loadRules(config)).toThrow("is also a [[layout]] rule");
-	});
 });

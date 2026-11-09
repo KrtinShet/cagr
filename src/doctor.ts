@@ -6,7 +6,7 @@ import { gitHookNames } from "./git-hooks";
 import { readTimings } from "./hook/timings";
 import { pickAgent } from "./review/agent";
 import type { Gh } from "./review/github";
-import { loadRules } from "./rules/rules";
+import { loadRuleSet } from "./rules/rules";
 import { run } from "./run";
 import { isGitRepo, notGitRepo, sync } from "./sync";
 
@@ -74,19 +74,19 @@ export async function doctor(
 	const sections: [string, Line[]][] = [];
 	const configLines: Line[] = [{ ok: true, text: `Config: ${config.source}` }];
 	try {
-		const rules = loadRules(config);
+		const rules = loadRuleSet(config);
 		configLines.push({
 			ok: true,
-			text: `${rules.length} code rule${rules.length === 1 ? "" : "s"} loaded.`,
+			text: `${rules.code.length} code rule${rules.code.length === 1 ? "" : "s"} loaded.`,
 		});
+		if (rules.layout.length > 0)
+			configLines.push({
+				ok: true,
+				text: `${rules.layout.length} layout rule${rules.layout.length === 1 ? "" : "s"} loaded.`,
+			});
 	} catch (error) {
 		configLines.push({ ok: false, text: (error as Error).message });
 	}
-	if (config.layout.length > 0)
-		configLines.push({
-			ok: true,
-			text: `${config.layout.length} layout rule${config.layout.length === 1 ? "" : "s"}.`,
-		});
 	sections.push(["Config", configLines]);
 
 	const wiring: Line[] = [];
