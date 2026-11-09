@@ -55,8 +55,8 @@ src/a.ts:1:1 no-console-log: console.log("x", 1) leaves debug output in app code
 | `rule`             | yes      | The ast-grep rule: `pattern`, `kind`, `has`, `inside`, `all`, `any`, `not` and the rest.                            |
 | `message`          | yes      | What is wrong. `$VAR` becomes the text the metavariable matched, and `$$$VAR` the text of all the nodes it matched. |
 | `instead`          | yes      | What to use instead, so the agent can fix it.                                                                       |
-| `examples.invalid` | yes      | At least one code snippet the rule must fire on.                                                                    |
-| `examples.valid`   | yes      | At least one code snippet the rule must not fire on.                                                                |
+| `examples.invalid` | yes      | At least one code snippet the rule must fire on, or a `{ path, code }` mapping ([example paths](#example-paths)).   |
+| `examples.valid`   | yes      | At least one code snippet the rule must not fire on, or a `{ path, code }` mapping.                                  |
 | `files`            | no       | Globs. When set, the rule only checks files that match one.                                                         |
 | `ignores`          | no       | Globs. The rule skips files that match one.                                                                         |
 | `note`             | no       | More context, shown by `cagr explain`.                                                                              |
@@ -69,6 +69,30 @@ src/a.ts:1:1 no-console-log: console.log("x", 1) leaves debug output in app code
 Globs in `files` and `ignores` are relative to the repo root and work like the [config globs](configuration.md#globs). Any other key is an error that lists the allowed keys.
 
 A rule needs `instead` and examples on purpose. `instead` makes the block message useful. Examples make the rule testable, so a rule that silently stops matching gets caught.
+
+### Example paths
+
+A bare snippet is tested as if no `files` or `ignores` applied. To test a rule's scope, give the example a repo-relative path. cagr then runs the rule on the code as it would on a file at that path: `files` and `ignores` apply, and the path's extension picks the parser.
+
+```yaml
+id: no-fetch-in-app
+language: typescript
+files: ["apps/web/src/app/**"]
+ignores: ["apps/web/src/app/**/route.*"]
+message: $FN(...) is a transport call.
+instead: Move it into src/api/<resource>.ts. Route handlers may call fetch.
+rule:
+  kind: call_expression
+  has: { field: function, pattern: $FN, regex: "^fetch$" }
+examples:
+  invalid:
+    - { path: apps/web/src/app/items/page.tsx, code: "fetch('/api/items');" }
+  valid:
+    - { path: apps/web/src/app/items/route.ts, code: "fetch('/api/items');" }
+    - prefetch('/api/items');
+```
+
+An invalid example at a path the rule skips fails, so a too-wide `ignores` gets caught. A path whose extension none of the rule's languages read is a rule file problem.
 
 ### Import boundaries
 
@@ -188,7 +212,7 @@ Rule files have problems:
 
 ## `cagr rules test`
 
-Runs every rule against its own examples. Each `invalid` example must fire and each `valid` example must not. For a layout rule the examples are paths, checked against `files`, `ignores`, `name` and `allowed`.
+Runs every rule against its own examples. Each `invalid` example must fire and each `valid` example must not. A code example with a `path` is checked against `files` and `ignores` too. For a layout rule the examples are paths, checked against `files`, `ignores`, `name` and `allowed`.
 
 ```
 $ cagr rules test

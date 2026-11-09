@@ -368,3 +368,96 @@ console.log(JSON.stringify(findings.map((f) => f.path)));
 	expect(result.stderr.toString()).toBe("");
 	expect(result.stdout.toString().trim()).toBe('["a.ts"]');
 });
+
+// superagent's ARCH006: route handlers may call fetch, other app files may not.
+const fetchRule = `id: no-fetch
+language: [typescript, javascript]
+files: ["apps/web/src/app/**"]
+ignores: ["apps/web/src/app/**/route.*"]
+message: $FN(...) is a transport call.
+instead: Move it into src/api.
+rule:
+  kind: call_expression
+  has: { field: function, pattern: $FN, regex: "^fetch$" }
+examples:
+  invalid:
+    - { path: apps/web/src/app/items/page.tsx, code: "fetch('/x');" }
+    - { path: apps/web/src/app/items/page.js, code: "fetch('/x');" }
+    - fetch('/x');
+  valid:
+    - { path: apps/web/src/app/items/route.ts, code: "fetch('/x');" }
+    - { path: apps/web/src/lib/x.ts, code: "fetch('/x');" }
+    - prefetch('/x');
+`;
+
+describe("example paths", () => {
+	test("files and ignores apply to an example's path", async () => {
+		const { config } = await repo({ "a.yml": fetchRule });
+		const rules = loadRules(config);
+		expect(rules[0]?.examples.valid[0]).toEqual({
+			path: "apps/web/src/app/items/route.ts",
+			code: "fetch('/x');",
+		});
+		const results = await testRules(rules);
+		expect(results.filter((r) => !r.ok)).toEqual([]);
+		expect(results.map((r) => r.path ?? null)).toEqual([
+			"apps/web/src/app/items/page.tsx",
+			"apps/web/src/app/items/page.js",
+			null,
+			"apps/web/src/app/items/route.ts",
+			"apps/web/src/lib/x.ts",
+			null,
+		]);
+	});
+
+	test("an invalid example at an ignored path fails", async () => {
+		const { config } = await repo({
+			"a.yml": fetchRule.replace(
+				"apps/web/src/app/items/page.tsx",
+				"apps/web/src/app/items/route.tsx",
+			),
+		});
+		const failed = (await testRules(loadRules(config))).filter((r) => !r.ok);
+		expect(failed.map((r) => [r.kind, r.path])).toEqual([
+			["invalid", "apps/web/src/app/items/route.tsx"],
+		]);
+	});
+
+	test("the path picks the parser: JSX kinds do not run on a .ts path", async () => {
+		const { config } = await repo({
+			"a.yml": jsxRule.replace(
+				'valid: ["export default function Page() { return <HomeView/>; }"]',
+				'valid: [{ path: a.ts, code: "export default function Page() { return <div/>; }" }]',
+			),
+		});
+		const results = await testRules(loadRules(config));
+		expect(results.filter((r) => !r.ok)).toEqual([]);
+	});
+
+	test("a malformed example or an unread extension is a rule file problem", async () => {
+		const { config } = await repo({
+			"a.yml": fetchRule
+				.replace("- fetch('/x');", "- { code: x }")
+				.replace("- prefetch('/x');", "- { path: README.md, code: x }")
+				.replace(
+					"- { path: apps/web/src/lib/x.ts, code: \"fetch('/x');\" }",
+					"- { path: a.ts, code: x, lang: ts }",
+				),
+		});
+		const message = (() => {
+			try {
+				loadRules(config);
+				return "";
+			} catch (error) {
+				return (error as Error).message;
+			}
+		})();
+		expect(message).toContain(
+			'"examples.invalid" entries are code, or a mapping with path (repo-relative) and code.',
+		);
+		expect(message).toContain(
+			'"examples.valid" path README.md: no language of this rule reads that extension.',
+		);
+		expect(message).toContain('"examples.valid" has "lang"');
+	});
+});

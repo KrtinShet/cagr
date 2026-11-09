@@ -81,3 +81,58 @@ examples:
 		"FAIL kebab-files: invalid example did not fire:\n  lib/UserCard.ts",
 	);
 });
+
+test("rules test and explain show a code example's path", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "gw-cli-"));
+	await Bun.write(join(dir, "cagr.toml"), "");
+	await Bun.write(
+		join(dir, ".cagr/rules/fetch.yml"),
+		`id: no-fetch
+language: typescript
+ignores: ["**/route.ts"]
+message: fetch in app code.
+instead: Move it into src/api.
+rule:
+  pattern: fetch($$$A)
+examples:
+  invalid:
+    - { path: app/route.ts, code: "fetch(1)" }
+  valid: ["load(1)"]
+`,
+	);
+	const result = Bun.spawnSync(["bun", cli, "rules", "test"], { cwd: dir });
+	expect(result.exitCode).toBe(1);
+	expect(result.stdout.toString()).toContain(
+		"FAIL no-fetch: invalid example at app/route.ts did not fire:\n  fetch(1)",
+	);
+	const explain = Bun.spawnSync(["bun", cli, "explain", "no-fetch"], {
+		cwd: dir,
+	});
+	expect(explain.stdout.toString()).toContain(
+		"Fires on:\n  app/route.ts: fetch(1)\nAllows:\n  load(1)",
+	);
+});
+
+test("rules test reports a kind the language lacks as a rule file problem", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "gw-cli-"));
+	await Bun.write(join(dir, "cagr.toml"), "");
+	await Bun.write(
+		join(dir, ".cagr/rules/typed.yml"),
+		`id: typed
+language: javascript
+message: a type.
+instead: Drop it.
+rule:
+  kind: type_annotation
+examples:
+  invalid: ["let a: number"]
+  valid: ["let a"]
+`,
+	);
+	const result = Bun.spawnSync(["bun", cli, "rules", "test"], { cwd: dir });
+	expect(result.exitCode).toBe(2);
+	const stderr = result.stderr.toString();
+	expect(stderr).toContain("Rule files have problems:");
+	expect(stderr).toContain("the rule does not work for javascript");
+	expect(stderr).not.toContain("    at ");
+});
