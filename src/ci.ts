@@ -7,6 +7,7 @@ import { branchFinding, commitMessageFinding } from "./guards/names";
 import { stackFiles, tidy, withFiles } from "./hook/stack-files";
 import { resolveBase } from "./review/review";
 import { classify, riskReport } from "./risk";
+import { layoutFindings } from "./rules/layout";
 import { findInFiles, loadRules, RuleError } from "./rules/rules";
 import { run, runShell } from "./run";
 import { sync } from "./sync";
@@ -173,6 +174,25 @@ export async function ci(
 	} catch (error) {
 		if (!(error instanceof RuleError)) throw error;
 		checks.push(check("Code rules", [error.message]));
+	}
+
+	if (config.layout.length > 0) {
+		const findings = layoutFindings(
+			config.layout,
+			changed.filter((path) => existsSync(join(cwd, path))),
+		);
+		const line = (finding: (typeof findings)[number]) =>
+			`${finding.rule}: ${finding.message} (${finding.detail}.) Instead: ${finding.instead}`;
+		checks.push(
+			check(
+				"Layout",
+				findings.map((finding) => `${finding.path} ${line(finding)}`),
+				findings.map((finding) => ({
+					file: finding.path,
+					message: line(finding),
+				})),
+			),
+		);
 	}
 
 	const risk = classify(changed, config);

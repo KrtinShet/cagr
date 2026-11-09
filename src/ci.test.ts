@@ -134,3 +134,31 @@ test("publish writes the step summary and the tier output", () => {
 	);
 	expect(readFileSync(env.GITHUB_OUTPUT, "utf8")).toBe("tier=high\n");
 });
+
+test("a file the branch adds in the wrong place fails the Layout check", async () => {
+	const { repo, config } = await branch(
+		{
+			...stack({}),
+			layout: [
+				{
+					id: "kebab-files",
+					files: ["src/**"],
+					name: "^[a-z0-9]+(-[a-z0-9]+)*$",
+					message: "Files use kebab-case names.",
+					instead: "Rename it, such as user-card.ts.",
+				},
+			],
+		},
+		{ "src/UserCard.ts": "export const a = 1;\n", "src/ok-name.ts": "" },
+		"feat: add a",
+	);
+	const result = await ci(config, { cwd: repo.root, base: "main", env: {} });
+	const layout = result.checks.find((c) => c.name === "Layout");
+	expect(result.ok).toBe(false);
+	expect(layout?.ok).toBe(false);
+	expect(layout?.output).toContain(
+		'src/UserCard.ts kebab-files: Files use kebab-case names. (the name "UserCard"',
+	);
+	expect(layout?.output).not.toContain("ok-name");
+	expect(layout?.annotations.map((a) => a.file)).toEqual(["src/UserCard.ts"]);
+});

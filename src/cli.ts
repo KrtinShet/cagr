@@ -22,6 +22,7 @@ import { reviewCommand, riskCommand } from "./review/cli";
 import { ghCli } from "./review/github";
 import { AnswerError } from "./review/report";
 import { ReviewInputError } from "./review/review";
+import { explainLayout } from "./rules/layout";
 import { loadRules, RuleError, testRules } from "./rules/rules";
 import { GitSetupError, installGitHooks, keptNotes, sync } from "./sync";
 import { version } from "./version";
@@ -39,7 +40,7 @@ Usage: cagr <command>
   risk [--base <b>] [files]    The risk tier of this branch's change, the approvals it needs, the owners.
   ci [--base <branch>]         In CI: the same checks the hooks ran, on the branch's changed files.
   check <files...>             Run the edit checks and code rules on files.
-  explain <id>                 Explain a guard or a code rule.
+  explain <id>                 Explain a guard, a code rule or a layout rule.
   rules test                   Check every rule's examples: invalid ones must fire, valid ones must not.
   schema                       Print the JSON schema for cagr.toml.
   hook <event> --agent <name>  Called by agent hooks: reads the agent's JSON on stdin.
@@ -249,11 +250,16 @@ async function main(argv: string[]): Promise<number> {
 				return 0;
 			}
 			const config = loadConfig(process.cwd());
+			const layout = config?.layout.find((entry) => entry.id === id);
+			if (config && layout) {
+				console.log(explainLayout(layout, config));
+				return 0;
+			}
 			const rules = config ? loadRules(config) : [];
 			const rule = rules.find((entry) => entry.id === id);
 			if (!rule) {
 				console.error(
-					`No guard or rule "${id ?? ""}". Known: ${[...guards.map((g) => g.id), ...rules.map((r) => r.id)].join(", ")}.`,
+					`No guard or rule "${id ?? ""}". Known: ${[...guards.map((g) => g.id), ...rules.map((r) => r.id), ...(config?.layout ?? []).map((l) => l.id)].join(", ")}.`,
 				);
 				return 1;
 			}

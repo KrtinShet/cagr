@@ -23,3 +23,29 @@ test("an option a command does not take is an error that lists the ones it does"
 	expect(checkOptions("risk", ["--base", "main", "src/a.ts"])).toBeNull();
 	expect(checkOptions("hook", ["--anything"])).toBeNull();
 });
+
+test("explain and check know layout rules", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "gw-cli-"));
+	await Bun.write(
+		join(dir, "cagr.toml"),
+		`[[layout]]
+id = "kebab-files"
+files = ["src/**"]
+name = '^[a-z0-9]+(-[a-z0-9]+)*$'
+message = "Files use kebab-case names."
+instead = "Rename it, such as user-card.ts."
+`,
+	);
+	await Bun.write(join(dir, "src/UserCard.ts"), "export {};\n");
+	const explain = Bun.spawnSync(["bun", cli, "explain", "kebab-files"], {
+		cwd: dir,
+	});
+	expect(explain.stdout.toString()).toContain("kebab-files (layout rule from");
+	const check = Bun.spawnSync(["bun", cli, "check", "src/UserCard.ts"], {
+		cwd: dir,
+	});
+	expect(check.exitCode).toBe(1);
+	expect(check.stdout.toString() + check.stderr.toString()).toContain(
+		"src/UserCard.ts kebab-files: Files use kebab-case names.",
+	);
+});

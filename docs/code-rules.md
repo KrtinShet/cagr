@@ -65,6 +65,35 @@ Globs in `files` and `ignores` are relative to the repo root and work like the [
 
 A rule needs `instead` and examples on purpose. `instead` makes the block message useful. Examples make the rule testable, so a rule that silently stops matching gets caught.
 
+### Import boundaries
+
+To keep one part of the code from importing another, match the import's source string with a `regex` and scope the rule to the importing files with `files`. This rule keeps shared components from reaching into features, the app router or the server:
+
+```yaml
+id: components-stay-shared
+language: typescript
+files: ["apps/web/src/components/**"]
+message: Shared components may not import from $SRC.
+instead: Pass the data in as props, or move the code into src/sections/<feature>/.
+rule:
+  kind: string
+  regex: "^['\"]@/(sections|app|api|server|layouts|store)/"
+  pattern: $SRC
+  inside:
+    any:
+      - kind: import_statement
+      - kind: export_statement
+examples:
+  invalid:
+    - import { DealCard } from "@/sections/deals/deal-card";
+    - export { db } from '@/server/db';
+  valid:
+    - import { Button } from "@/components/button";
+    - const label = "@/sections/x";
+```
+
+The string node includes its quotes, so the regex starts with `['"]`. `inside` keeps it to import and re-export sources, so a plain string with the same text does not fire. Use one rule per boundary, each with its own `files`. For rules about file names and folders, use [layout rules](configuration.md#layout).
+
 ## Languages
 
 | `language`   | Files it checks                                              |
@@ -118,7 +147,7 @@ It exits 1 when any example fails. Run it in your `verify` script or in CI.
 
 ## `cagr check <files...>`
 
-Runs what the agent hooks run on files, outside an agent: the [protected-file](guards.md#protected-file) check, the `on_edit` commands of each stack that covers the files, and the code rules. Use it to try a new rule or glob.
+Runs what the agent hooks run on files, outside an agent: the [protected-file](guards.md#protected-file) check, the `on_edit` commands of each stack that covers the files, the code rules and the [layout rules](configuration.md#layout). Use it to try a new rule or glob.
 
 ```
 $ cagr check src/a.ts
@@ -145,4 +174,4 @@ Allows:
   logger.info("hi")
 ```
 
-It also explains built-in guards. An unknown id lists every known guard and rule id.
+It also explains built-in guards and [layout rules](configuration.md#layout). An unknown id lists every known guard and rule id.

@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { guardIds } from "../guards/catalog";
 import {
 	builtinResolver,
 	type PresetResolver,
@@ -12,6 +13,7 @@ import {
 	defaultCommitTypes,
 	defaultExtensions,
 	type Effort,
+	type LayoutRule,
 	type NameRule,
 	type PackageManager,
 	type RiskTier,
@@ -196,6 +198,7 @@ function applyDefaults(raw: RawConfig, root: string, source: string): Config {
 		rules: {
 			dirs: (rules.dirs as string[] | undefined) ?? [".cagr/rules"],
 		},
+		layout: layoutRules((raw.layout as RawConfig[] | undefined) ?? []),
 		review: {
 			enabled: (review.enabled as boolean | undefined) ?? false,
 			gate: (review.gate as string[] | undefined) ?? [
@@ -233,6 +236,46 @@ function applyDefaults(raw: RawConfig, root: string, source: string): Config {
 		},
 		brief: (raw.brief as string[] | undefined) ?? [],
 	};
+}
+
+function layoutRules(entries: RawConfig[]): LayoutRule[] {
+	const seen = new Set<string>();
+	return entries.map((entry) => {
+		const id = entry.id as string;
+		const where = `layout "${id}"`;
+		if (guardIds.includes(id))
+			throw new ConfigError(
+				`${where}: "${id}" is a built-in guard. Pick another id.`,
+			);
+		if (seen.has(id))
+			throw new ConfigError(
+				`${where}: two layout rules use this id. Give each its own.`,
+			);
+		seen.add(id);
+		const allowed = (entry.allowed as string[] | undefined) ?? [];
+		if (entry.name === undefined && allowed.length === 0)
+			throw new ConfigError(
+				`${where} checks nothing. Set name (a regular expression for the file name) or allowed (globs where the files may live).`,
+			);
+		let name: RegExp | null = null;
+		if (typeof entry.name === "string")
+			try {
+				name = new RegExp(entry.name);
+			} catch {
+				throw new ConfigError(
+					`${where}: name "${entry.name}" is not a valid regular expression.`,
+				);
+			}
+		return {
+			id,
+			files: entry.files as string[],
+			ignores: (entry.ignores as string[] | undefined) ?? [],
+			name,
+			allowed,
+			message: entry.message as string,
+			instead: entry.instead as string,
+		};
+	});
 }
 
 function nameRule(value: unknown, types: string[]): NameRule | null {
