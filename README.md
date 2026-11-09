@@ -125,20 +125,20 @@ In CI, `cagr ci` runs the checks the agent ran (edit checks, turn-end checks, co
 
 ## Commands
 
-| Command                       | What it does                                                                                                        |
-| ----------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| `init [--dry-run] [--force]`  | Detect the repo, write the config, the agent hooks and the git hooks.                                               |
-| `sync [--check]`              | Rewrite the generated files, or fail when they drift.                                                               |
-| `install-git-hooks`           | Write the git hooks and set `core.hooksPath`.                                                                       |
-| `doctor [--github]`           | Check the config, the wiring, the tools on PATH, and hook timings against the budgets.                              |
-| `review [...]`                | Review the branch with a reviewer agent. `review help` lists `answer`, `status`, `stats`, `eval`, `--scan`, `--ci`. |
-| `risk [--base <b>]`           | The change's risk tier, the approvals it needs, and the owners.                                                     |
-| `ci [--base <b>]`             | In CI: the checks the hooks ran, on the branch's changed files.                                                     |
-| `check <files...>`            | Run the edit checks and code rules on files, outside an agent.                                                      |
-| `explain <id>`                | Explain a built-in guard, a code rule or a layout rule.                                                             |
-| `rules test`                  | Test every rule's examples.                                                                                         |
-| `hook <event> --agent <name>` | Called by the agent hooks.                                                                                          |
-| `git <hook>`                  | Called by the git hooks.                                                                                            |
+| Command                           | What it does                                                                                                        |
+| --------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `init [--dry-run] [--force]`      | Detect the repo, write the config, the agent hooks and the git hooks.                                               |
+| `sync [--check]`                  | Rewrite the generated files, or fail when they drift.                                                               |
+| `install-git-hooks`               | Write the git hooks and set `core.hooksPath`.                                                                       |
+| `doctor [--github]`               | Check the config, the wiring, the tools on PATH, and hook timings against the budgets.                              |
+| `review [...]`                    | Review the branch with a reviewer agent. `review help` lists `answer`, `status`, `stats`, `eval`, `--scan`, `--ci`. |
+| `risk [--base <b>]`               | The change's risk tier, the approvals it needs, and the owners.                                                     |
+| `ci [--base <b>]`                 | In CI: the checks the hooks ran, on the branch's changed files.                                                     |
+| `check <files...>`, `check --all` | Run the edit checks and code rules on files, or the code and layout rules on every file.                            |
+| `explain <id>`                    | Explain a built-in guard, a code rule or a layout rule.                                                             |
+| `rules test`                      | Test every rule's examples.                                                                                         |
+| `hook <event> --agent <name>`     | Called by the agent hooks.                                                                                          |
+| `git <hook>`                      | Called by the git hooks.                                                                                            |
 
 ## Time budgets
 

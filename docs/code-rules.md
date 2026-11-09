@@ -113,7 +113,7 @@ A rule only checks files whose extension its language reads. The Python, Go and 
 
 - After each edit, on the edited file (`file.after_edit`).
 - At the end of a turn, on every file changed in the turn (`turn.end`).
-- In `cagr check <files...>`.
+- In `cagr check <files...>`, and on every file in `cagr check --all`.
 - In `cagr ci`, on the branch's changed files.
 
 If a rule file has a problem (bad YAML, a missing field, a duplicate id), every rule check fails with one message that lists each problem, for example:
@@ -156,6 +156,21 @@ src/a.ts:1:1 no-console-log: console.log("x", 1) leaves debug output in app code
 ```
 
 It exits 1 when it finds a problem. Otherwise it prints "No problems in N files." Note that `on_edit` commands run for real, so a formatter with `--write` changes the files.
+
+## `cagr check --all`
+
+Rules run on changed files only, so old code that breaks a new rule stays hidden until someone edits it. `cagr check --all` runs the code rules and the [layout rules](configuration.md#layout) over every file git tracks or would track (files your `.gitignore` excludes are skipped). Use it when you move an existing checker into cagr, and add it to your `verify` script to keep the whole repo clean.
+
+```
+$ cagr check --all
+## Rules
+src/old.ts:1:1 no-console-log: console.log(1) leaves debug output in app code. Instead: Use `logger.info` from src/lib/logger.ts.
+
+## Layout
+src/OldName.ts kebab-files: Files use kebab-case names. (the name "OldName" does not match /^[a-z0-9]+(-[a-z0-9]+)*$/.) Instead: Rename it.
+```
+
+It exits 1 on any finding, or prints "No problems in N files." It does not run `on_edit` commands, since those may change files; your `verify` script runs your linters on the whole repo already. It does not take file names; `cagr check <files...>` is for that.
 
 ## `cagr explain <id>`
 

@@ -1,4 +1,5 @@
 import { resolve } from "node:path";
+import { checkAll } from "./check-all";
 import { annotations, ci, ciReport, publish } from "./ci";
 import { jsonSchema } from "./config/json-schema";
 import { ConfigError, loadConfig } from "./config/load";
@@ -45,7 +46,8 @@ Usage: cagr <command>
   review [...]                 Review this branch with a reviewer agent. \`cagr review help\` for more.
   risk [--base <b>] [files]    The risk tier of this branch's change, the approvals it needs, the owners.
   ci [--base <branch>]         In CI: the same checks the hooks ran, on the branch's changed files.
-  check <files...>             Run the edit checks and code rules on files.
+  check <files...> | --all     Run the edit checks and code rules on files, or the
+                               code and layout rules on every file.
   explain <id>                 Explain a guard, a code rule or a layout rule.
   rules test                   Check every rule's examples: invalid ones must fire, valid ones must not.
   schema                       Print the JSON schema for cagr.toml.
@@ -81,7 +83,7 @@ const options: Record<string, string[]> = {
 	doctor: ["--github"],
 	risk: ["--base"],
 	ci: ["--base"],
-	check: [],
+	check: ["--all"],
 	explain: [],
 	rules: [],
 	schema: [],
@@ -228,8 +230,19 @@ async function main(argv: string[]): Promise<number> {
 			return result.ok ? 0 : 1;
 		}
 		case "check": {
+			if (args.includes("--all")) {
+				if (args.length > 1)
+					throw new UsageError(
+						"cagr check --all checks every file. Drop the file names, or drop --all.",
+					);
+				const result = await checkAll(requireConfig());
+				console.log(result.report);
+				return result.ok ? 0 : 1;
+			}
 			if (args.length === 0)
-				throw new UsageError("Name the files to check: cagr check <files...>");
+				throw new UsageError(
+					"Name the files to check: cagr check <files...>, or check every file: cagr check --all",
+				);
 			const config = requireConfig();
 			const files = args.map((file) => resolve(file));
 			const problems = files
