@@ -325,7 +325,7 @@ async function main(argv: string[]): Promise<number> {
 			];
 			for (const result of results.filter((entry) => !entry.ok))
 				console.log(
-					`FAIL ${result.rule}: ${result.kind} example${result.path ? ` at ${result.path}` : ""} ${result.kind === "invalid" ? `did not fire${result.skipped ? ` (${result.skipped})` : ""}` : `fired ${result.matches} time${result.matches === 1 ? "" : "s"}`}:\n  ${result.example.trim().replace(/\n/g, "\n  ")}`,
+					`FAIL ${result.rule}: ${result.kind} example${result.path ? ` at ${result.path}` : ""} ${result.kind === "invalid" ? `did not fire${result.skipped ? ` (${result.skipped})` : ""}` : result.skipped ? `was not checked (${result.skipped})` : `fired ${result.matches} time${result.matches === 1 ? "" : "s"}`}:\n  ${result.example.trim().replace(/\n/g, "\n  ")}`,
 				);
 			const failed = results.filter((entry) => !entry.ok).length;
 			console.log(

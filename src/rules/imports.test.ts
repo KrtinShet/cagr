@@ -294,3 +294,27 @@ examples:
 	);
 	expect(findings[0]?.instead).toContain("run its sync or prepare step");
 });
+
+test("rules test fails examples it could not check, valid and invalid, with the reason", async () => {
+	const { root, config } = await repo({
+		...files,
+		"apps/web/tsconfig.json": '{ "extends": "./.nuxt/tsconfig.json" }',
+		".cagr/rules/a.yml": boundaryRule,
+	});
+	const results = await testRules(loadRules(config), root);
+	const alias = results.filter((r) =>
+		r.skipped?.includes("it could not be checked"),
+	);
+	// Every in-scope example with an alias import, valid or invalid.
+	expect(alias.map((r) => r.example)).toEqual([
+		'import { db } from "@/server/db";',
+		'import type { Row } from "@/server/types";',
+		'import { cn } from "@/utils/cn";',
+	]);
+	for (const result of alias) {
+		expect(result.ok).toBe(false);
+		expect(result.skipped).toContain("nuxi prepare");
+	}
+	expect(alias.map((r) => r.kind)).toContain("valid");
+	expect(alias.map((r) => r.kind)).toContain("invalid");
+});

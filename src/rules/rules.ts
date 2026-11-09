@@ -473,6 +473,8 @@ type Match = {
 	message: string;
 	/** In place of the rule's own instead, when the rule could not run. */
 	instead?: string;
+	/** Set when this is not a match but a note that the rule could not check the file. */
+	unchecked?: true;
 };
 
 /** Where the code being matched lives: the repo root, and the file's repo-relative path when there is one. */
@@ -503,6 +505,7 @@ function matches(
 					column: start.column + 1,
 					message: `Could not check ${text}: ${error.reason}`,
 					instead: error.fix,
+					unchecked: true,
 				});
 				return found;
 			}
@@ -623,18 +626,24 @@ export async function testRules(
 								? "the path matches ignores, so the rule does not run on it"
 								: "the path is not in files, so the rule does not run on it"
 							: null;
-				const count =
+				const found =
 					parser && skipped === null
-						? matches(napi, rule, parser, code, { root, path }).length
-						: 0;
+						? matches(napi, rule, parser, code, { root, path })
+						: [];
+				const unchecked = found.find((match) => match.unchecked);
+				const count = unchecked ? 0 : found.length;
+				const reason = unchecked
+					? `it could not be checked: ${unchecked.message} ${unchecked.instead ?? ""}`.trim()
+					: skipped;
 				results.push({
 					rule: rule.id,
 					kind,
 					example: code,
 					...(path ? { path } : {}),
-					...(skipped ? { skipped } : {}),
+					...(reason ? { skipped: reason } : {}),
 					matches: count,
-					ok: kind === "invalid" ? count > 0 : count === 0,
+					// An example the rule could not check proves nothing either way.
+					ok: unchecked ? false : kind === "invalid" ? count > 0 : count === 0,
 				});
 			}
 	}
