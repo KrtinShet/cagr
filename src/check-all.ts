@@ -23,7 +23,7 @@ function isFile(path: string) {
  * Returns git's error when it cannot list them.
  */
 export function repoFiles(root: string): string[] | { error: string } {
-	let listed: ReturnType<typeof Bun.spawnSync>;
+	let listed: { exitCode: number | null; stdout: Buffer; stderr: Buffer };
 	try {
 		listed = Bun.spawnSync(
 			["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
