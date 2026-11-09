@@ -210,7 +210,7 @@ export const configSchema: Node = obj({
 			}),
 			guide: str({
 				description:
-					"The repo's review instructions, read into every review. Missing is fine.",
+					"The repo's review instructions, read into every review. Default: .cagr/review.md, or REVIEW.md when only that exists. Missing is fine.",
 			}),
 			effort: str({
 				enum: efforts,
@@ -324,7 +324,10 @@ export type RiskPath = {
 
 export type Config = {
 	root: string;
+	/** The config file: cagr.toml, or pyproject.toml with [tool.cagr]. */
 	source: string;
+	/** Every file that set config: `source`, then each TOML fragment in `.cagr/`. */
+	sources: string[];
 	extends: string[];
 	agents: { enabled: AgentName[]; command: string; nested_docs: boolean };
 	git: {

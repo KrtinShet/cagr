@@ -53,7 +53,7 @@ After you change the config, run `cagr sync` to rewrite the hook files. Every ke
 - [Guards](guards.md): every built-in guard, what it blocks, its message, and how to configure or turn it off.
 - [Hooks and events](hooks-and-events.md): the five events, how Claude Code and Codex map onto them, time budgets, fail-open, and the git hooks.
 - [Code rules](code-rules.md): ast-grep rules in `.cagr/rules/*.yml`, `cagr rules test`, `cagr check` and `cagr explain`.
-- [Review](review.md): `cagr review`, effort levels, findings, rounds, answers, stats, evals, the PR gate, `REVIEW.md` and risk tiers.
+- [Review](review.md): `cagr review`, effort levels, findings, rounds, answers, stats, evals, the PR gate, the review guide and risk tiers.
 - [CI](ci.md): `cagr ci`, `cagr review --ci`, the generated workflow, PR template and CODEOWNERS, and `cagr doctor --github`.
 - [CLI reference](cli.md): every command and flag.
 - [Limits and troubleshooting](limits.md): what cagr is not, and what to do when something goes wrong.

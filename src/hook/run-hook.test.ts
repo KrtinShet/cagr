@@ -1,4 +1,7 @@
 import { expect, test } from "bun:test";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { ConfigError } from "../config/load";
 import { config } from "../test/config";
 import { runHook } from "./run-hook";
@@ -60,4 +63,26 @@ test("no environment variable turns the hooks off", async () => {
 	} finally {
 		delete process.env.CAGR_REVIEWER;
 	}
+});
+
+test("a protected glob from a .cagr/ fragment denies the edit", async () => {
+	const dir = await mkdtemp(join(tmpdir(), "gw-fragment-hook-"));
+	await mkdir(join(dir, ".cagr"), { recursive: true });
+	await writeFile(join(dir, "cagr.toml"), "");
+	await writeFile(
+		join(dir, ".cagr/guards.toml"),
+		'[[files.protected]]\nglob = "infra/**"\nreason = "Infra changes go through the platform team."\n',
+	);
+	const output = await runHook(
+		"claude",
+		"file.before_edit",
+		JSON.stringify({
+			session_id: "s",
+			cwd: dir,
+			tool_name: "Write",
+			tool_input: { file_path: join(dir, "infra/main.tf"), content: "" },
+		}),
+		dir,
+	);
+	expect(output).toContain("Infra changes go through the platform team.");
 });

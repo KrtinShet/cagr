@@ -5,7 +5,7 @@ nav_order: 7
 
 # Review
 
-`cagr review` reviews the branch against its base with a reviewer agent: Claude Code or Codex, started read-only in a fresh context, with its own hooks turned off. It reads `REVIEW.md` (what matters in this repo), the diff, the commit messages and the risk tier, and it can read any other file in the repo that it needs.
+`cagr review` reviews the branch against its base with a reviewer agent: Claude Code or Codex, started read-only in a fresh context, with its own hooks turned off. It reads the review guide, `.cagr/review.md` (what matters in this repo), the diff, the commit messages and the risk tier, and it can read any other file in the repo that it needs.
 
 With review on, the [review gate](guards.md#review-gate) denies `gh pr create` and `gh pr ready` until the current commit has passed a review. The loop for an agent is:
 
@@ -127,11 +127,11 @@ cagr review answer f4 --minor "the log line only runs in dev"
 - how many findings there were, how many were fixed, and how many were answered of each kind;
 - the noise: "Noise: X% of findings were answered as wrong."
 
-A high noise rate means the reviewer flags things that are not problems. Tell it what to skip in `REVIEW.md`.
+A high noise rate means the reviewer flags things that are not problems. Tell it what to skip in the review guide.
 
 ## Evals
 
-Evals measure the reviewer on past changes with a known answer, so a change to `REVIEW.md`, the model or the effort can be measured instead of guessed.
+Evals measure the reviewer on past changes with a known answer, so a change to the review guide, the model or the effort can be measured instead of guessed.
 
 Put one TOML file per case in `.cagr/review-evals/`:
 
@@ -188,9 +188,9 @@ A scan reviews the tracked files that match the globs. It does not need a clean 
 
 `[review] model` passes a model to `claude` (`--model`) or `codex` (`-m`).
 
-## REVIEW.md
+## The review guide
 
-`[review] guide` (default `REVIEW.md`) is read into every review. It is where you say what matters in this repo and what does not. A missing file is fine. `cagr init` writes a starter when review is on and the file does not exist:
+`[review] guide` is read into every review. It defaults to `.cagr/review.md`, or to `REVIEW.md` when only that file exists. It is where you say what matters in this repo and what does not. A missing file is fine. `cagr init` writes a starter `.cagr/review.md` when review is on and no guide exists:
 
 ```markdown
 # Review guide

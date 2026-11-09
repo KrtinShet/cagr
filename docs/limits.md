@@ -82,7 +82,7 @@ The review covers commits, so tracked changes must be committed first. Untracked
 
 ### The reviewer flags things that are not problems
 
-Answer them with `cagr review answer <id> --wrong "<why>"`. `cagr review stats` shows how often that happens. Tell the reviewer what to skip in `REVIEW.md`, then run `cagr review eval` to check it did not miss more bugs.
+Answer them with `cagr review answer <id> --wrong "<why>"`. `cagr review stats` shows how often that happens. Tell the reviewer what to skip in the review guide (`.cagr/review.md`), then run `cagr review eval` to check it did not miss more bugs.
 
 ### Code rules do not fire
 

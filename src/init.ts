@@ -1,6 +1,13 @@
-import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join, relative } from "node:path";
-import { configFileName, loadConfig } from "./config/load";
+import {
+	existsSync,
+	mkdirSync,
+	readdirSync,
+	readFileSync,
+	writeFileSync,
+} from "node:fs";
+import { dirname, join, relative } from "node:path";
+import { configFileName, loadConfig, resolveConfig } from "./config/load";
+import type { RawConfig } from "./config/presets";
 import type { AgentName, Config, PackageManager } from "./config/schema";
 import { stackFiles, withFiles } from "./hook/stack-files";
 import { toPosix } from "./paths";
@@ -373,28 +380,15 @@ export function configToml(detection: Detection): string {
 	}
 	lines.push(
 		"",
-		"# Files agents may not edit, on top of the preset's .env* and lockfiles.",
-		"# [[files.protected]]",
-		'# glob = "migrations/**"',
-		'# reason = "Migrations are generated. Run `bun run db:migrate` instead."',
-		"",
-		"# Commands agents may not run.",
-		"# [[commands.blocked]]",
-		'# match = "prisma db push"',
-		'# reason = "Use `bun run db:migrate --name <change>`."',
+		"# Keep this file to short settings. Lists and rules live in .cagr/:",
+		"# protected files and blocked commands in .cagr/guards.toml, risk tiers in",
+		"# .cagr/risk.toml, code and layout rules in .cagr/rules/*.yml, and the review",
+		"# guide in .cagr/review.md. cagr reads every .cagr/**/*.toml as part of this config.",
 		"",
 		"# The preset gates `gh pr create` on a review by a reviewer agent and keeps merging with people.",
-		"# REVIEW.md says what the reviewer should check. `cagr review help` shows the commands.",
+		"# `cagr review help` shows the commands.",
 		"# [review]",
 		'# effort = "standard"   # quick, standard or deep; high-risk changes always get deep',
-		'# skip = ["**/*.snap"]',
-		"",
-		"# Risk tiers by path: low needs no approval, medium one, high two. The change takes its highest file.",
-		"# [[risk.paths]]",
-		'# glob = "src/auth/**"',
-		'# tier = "high"',
-		'# owners = ["@your-org/security"]',
-		'# reason = "Sign-in and sessions."',
 		"",
 		"# GitHub: `cagr sync` writes the workflow, the PR template and CODEOWNERS.",
 		"# [ci]",
@@ -405,6 +399,35 @@ export function configToml(detection: Detection): string {
 	);
 	return lines.join("\n");
 }
+
+/** The `.cagr/` files init starts a repo with: the lists, kept out of cagr.toml. */
+export const starterFragments: Record<string, string> = {
+	".cagr/guards.toml": [
+		"# Part of the cagr config: cagr reads every .cagr/**/*.toml with cagr.toml.",
+		"",
+		"# Files agents may not edit, on top of the preset's .env* and lockfiles.",
+		"# [[files.protected]]",
+		'# glob = "migrations/**"',
+		'# reason = "Migrations are generated. Run `bun run db:migrate` instead."',
+		"",
+		"# Commands agents may not run.",
+		"# [[commands.blocked]]",
+		'# match = "prisma db push"',
+		'# reason = "Use `bun run db:migrate --name <change>`."',
+		"",
+	].join("\n"),
+	".cagr/risk.toml": [
+		"# Part of the cagr config: cagr reads every .cagr/**/*.toml with cagr.toml.",
+		"",
+		"# Risk tiers by path: low needs no approval, medium one, high two. The change takes its highest file.",
+		"# [[risk.paths]]",
+		'# glob = "src/auth/**"',
+		'# tier = "high"',
+		'# owners = ["@your-org/security"]',
+		'# reason = "Sign-in and sessions."',
+		"",
+	].join("\n"),
+};
 
 /** Runs the repo's own on_edit commands on the files sync wrote, so the repo's lint passes on them. */
 export async function formatGenerated(config: Config, written: string[]) {
@@ -441,14 +464,24 @@ export async function init(
 	const text = configToml(detection);
 	const notes: string[] = [];
 	if (options.dryRun) return { detection, config: text, written: [], notes };
+	// Check the new config against the .cagr/ files before replacing the old one.
+	resolveConfig(Bun.TOML.parse(text) as RawConfig, root, file);
 	writeFileSync(file, text);
 	const config = loadConfig(root);
 	if (!config) throw new Error(`Could not read back ${file}.`);
 	const synced = sync(config);
 	const written = [configFileName, ...synced.written];
 	notes.push(...keptNotes(synced.kept, synced.removed));
+	for (const [path, text] of Object.entries(starterFragments)) {
+		const target = join(root, path);
+		if (existsSync(target)) continue;
+		mkdirSync(dirname(target), { recursive: true });
+		writeFileSync(target, text);
+		written.push(path);
+	}
 	const guide = join(root, config.review.guide);
 	if (config.review.enabled && !existsSync(guide)) {
+		mkdirSync(dirname(guide), { recursive: true });
 		writeFileSync(guide, starterReviewGuide);
 		written.push(config.review.guide);
 	}

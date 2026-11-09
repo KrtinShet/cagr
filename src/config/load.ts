@@ -60,6 +60,25 @@ export function loadConfig(
 	return resolveConfig(found.raw, dirname(found.file), found.file, resolvers);
 }
 
+/** The folder of config fragments and rules, at the repo root. */
+export const fragmentDir = ".cagr";
+
+/** Folders in `.cagr/` that hold TOML of another kind, not config. */
+const notConfig = ["review-evals/"];
+
+/** Every TOML file in `.cagr/` under `root`, at any depth, sorted, except the review evals. */
+export function fragmentFiles(root: string): string[] {
+	const dir = join(root, fragmentDir);
+	if (!existsSync(dir)) return [];
+	return [...new Bun.Glob("**/*.toml").scanSync({ cwd: dir })]
+		.filter((file) => {
+			const path = file.replaceAll("\\", "/");
+			return !notConfig.some((folder) => path.startsWith(folder));
+		})
+		.map((file) => join(dir, file))
+		.sort();
+}
+
 export function resolveConfig(
 	raw: RawConfig,
 	root: string,
@@ -67,8 +86,84 @@ export function resolveConfig(
 	resolvers: PresetResolver[] = [builtinResolver],
 ): Config {
 	validate(raw, source);
-	const merged = withPresets(raw, source, resolvers, []);
-	return applyDefaults(merged, root, source);
+	const { combined, sources } = withFragments(raw, root, source);
+	const merged = withPresets(combined, source, resolvers, []);
+	return applyDefaults(merged, root, source, sources);
+}
+
+/**
+ * Adds each TOML file in `.cagr/` to the config, in sorted order. Lists of tables
+ * add up, as with presets. Any other value may be set in one file only, so
+ * there is no question which one wins.
+ */
+function withFragments(
+	raw: RawConfig,
+	root: string,
+	source: string,
+): { combined: RawConfig; sources: string[] } {
+	const files = fragmentFiles(root);
+	const owners = new Map<string, Owner>();
+	const errors: string[] = [];
+	claim(raw, source, "", owners, errors);
+	let combined = raw;
+	for (const file of files) {
+		const { $schema: _, ...fragment } = parseToml(file);
+		validate(fragment, file);
+		if (fragment.extends !== undefined)
+			errors.push(
+				`${file} sets extends. Presets are chosen in ${source} only: move it there.`,
+			);
+		claim(fragment, file, "", owners, errors);
+		combined = merge(combined, fragment);
+	}
+	if (errors.length > 0)
+		throw new ConfigError(
+			`The config files disagree:\n${errors.map((error) => `  - ${error}`).join("\n")}`,
+		);
+	return { combined, sources: [source, ...files] };
+}
+
+/** The lists of tables that add up across files and presets, even when one is empty. */
+const listsThatAddUp = new Set([
+	"stack",
+	"files.protected",
+	"commands.blocked",
+	"risk.paths",
+]);
+
+type Owner = { file: string; table: boolean };
+
+/**
+ * Records which file set each value, and reports a value two files set. A
+ * table in one file and a plain value at the same key in another also clash.
+ */
+function claim(
+	raw: RawConfig,
+	file: string,
+	prefix: string,
+	owners: Map<string, Owner>,
+	errors: string[],
+) {
+	const clash = (path: string, other: string) =>
+		errors.push(
+			`${path} is set in both ${other} and ${file}. Keep it in one of them.`,
+		);
+	for (const [key, value] of Object.entries(raw)) {
+		if (prefix === "" && (key === "$schema" || key === "extends")) continue;
+		const path = prefix === "" ? key : `${prefix}.${key}`;
+		const owner = owners.get(path);
+		if (isTable(value)) {
+			if (owner && !owner.table) clash(path, owner.file);
+			else {
+				if (!owner) owners.set(path, { file, table: true });
+				claim(value, file, path, owners, errors);
+			}
+			continue;
+		}
+		if (listsThatAddUp.has(path) || isTableList(value)) continue;
+		if (owner) clash(path, owner.file);
+		else owners.set(path, { file, table: false });
+	}
 }
 
 function validate(raw: RawConfig, source: string) {
@@ -112,12 +207,22 @@ function withPresets(
 }
 
 /** Lists of tables add to the base; every other value replaces it. */
-export function merge(base: RawConfig, over: RawConfig): RawConfig {
+export function merge(
+	base: RawConfig,
+	over: RawConfig,
+	prefix = "",
+): RawConfig {
 	const out: RawConfig = { ...base };
 	for (const [key, value] of Object.entries(over)) {
+		const path = prefix === "" ? key : `${prefix}.${key}`;
 		const current = out[key];
-		if (isTable(current) && isTable(value)) out[key] = merge(current, value);
-		else if (isTableList(current) && isTableList(value))
+		if (isTable(current) && isTable(value))
+			out[key] = merge(current, value, path);
+		else if (
+			Array.isArray(current) &&
+			Array.isArray(value) &&
+			(listsThatAddUp.has(path) || (isTableList(current) && isTableList(value)))
+		)
 			out[key] = [...current, ...value];
 		else out[key] = value;
 	}
@@ -129,7 +234,12 @@ const isTable = (value: unknown): value is RawConfig =>
 const isTableList = (value: unknown): value is RawConfig[] =>
 	Array.isArray(value) && value.length > 0 && value.every(isTable);
 
-function applyDefaults(raw: RawConfig, root: string, source: string): Config {
+function applyDefaults(
+	raw: RawConfig,
+	root: string,
+	source: string,
+	sources: string[],
+): Config {
 	const agents = (raw.agents ?? {}) as RawConfig;
 	const git = (raw.git ?? {}) as RawConfig;
 	const files = (raw.files ?? {}) as RawConfig;
@@ -144,6 +254,7 @@ function applyDefaults(raw: RawConfig, root: string, source: string): Config {
 	return {
 		root,
 		source,
+		sources,
 		extends: (raw.extends as string[] | undefined) ?? [],
 		agents: {
 			enabled: (agents.enabled as AgentName[] | undefined) ?? [
@@ -212,7 +323,7 @@ function applyDefaults(raw: RawConfig, root: string, source: string): Config {
 			],
 			reviewer: (review.reviewer as string | undefined) ?? "auto",
 			model: (review.model as string | undefined) ?? null,
-			guide: (review.guide as string | undefined) ?? "REVIEW.md",
+			guide: (review.guide as string | undefined) ?? defaultGuide(root),
 			effort: (review.effort as Effort | undefined) ?? "standard",
 			security: (review.security as boolean | undefined) ?? true,
 			max_rounds: (review.max_rounds as number | undefined) ?? 3,
@@ -242,6 +353,15 @@ function applyDefaults(raw: RawConfig, root: string, source: string): Config {
 		},
 		brief: (raw.brief as string[] | undefined) ?? [],
 	};
+}
+
+/** `.cagr/review.md`, unless only a REVIEW.md exists. */
+function defaultGuide(root: string) {
+	const inFolder = `${fragmentDir}/review.md`;
+	return !existsSync(join(root, inFolder)) &&
+		existsSync(join(root, "REVIEW.md"))
+		? "REVIEW.md"
+		: inFolder;
 }
 
 function nameRule(value: unknown, types: string[]): NameRule | null {

@@ -38,10 +38,10 @@ An option a command does not take is an error that lists the options it does tak
 cagr init [--dry-run] [--force]
 ```
 
-Detects the stacks, package managers, tools, agents and protected branch, writes `cagr.toml`, runs `sync`, writes a starter `REVIEW.md` when review is on and the file is missing, formats the JSON it wrote with your `on_edit` commands, and installs the git hooks. See [Getting started](getting-started.md).
+Detects the stacks, package managers, tools, agents and protected branch, writes a short `cagr.toml` and starter `.cagr/guards.toml` and `.cagr/risk.toml` (each only when missing), runs `sync`, writes a starter `.cagr/review.md` when review is on and no guide exists, formats the JSON it wrote with your `on_edit` commands, and installs the git hooks. See [Getting started](getting-started.md).
 
 - `--dry-run`: print the config it would write. Write nothing.
-- `--force`: overwrite an existing `cagr.toml`. Without it, `init` stops if the file exists.
+- `--force`: overwrite an existing `cagr.toml`. Without it, `init` stops if the file exists. Files in `.cagr/` are never overwritten.
 
 ## sync
 
@@ -67,7 +67,7 @@ Writes the git hooks to `[git] hooks_path` and sets `git config core.hooksPath` 
 cagr doctor [--github]
 ```
 
-Checks the config and code rules load, the generated files match, `core.hooksPath` is set and the hooks are executable, `cagr` and every command's program can be found, the review setup, and the median time of each hook against its budget. Prints `ok` or `FAIL` per line. Exits 1 if any line fails.
+Checks the config and code rules load (and lists the `.cagr/*.toml` fragments that joined the config), the generated files match, `core.hooksPath` is set and the hooks are executable, `cagr` and every command's program can be found, the review setup, and the median time of each hook against its budget. Prints `ok` or `FAIL` per line. Exits 1 if any line fails.
 
 - `--github`: also check the protected branch's settings on GitHub through `gh`. See [CI](ci.md#check-branch-protection).
 
