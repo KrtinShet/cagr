@@ -228,6 +228,13 @@ function toExample(
 	if (typeof path !== "string" || path === "" || typeof code !== "string")
 		return shape;
 	if (
+		path.startsWith("/") ||
+		path.includes("\\") ||
+		/^[A-Za-z]:/.test(path) ||
+		path.split("/").some((part) => part === "." || part === "..")
+	)
+		return `path ${path} is not repo-relative, so files and ignores could never match it. Write it from the repo root with forward slashes, such as apps/web/src/a.ts.`;
+	if (
 		ruleLanguages.length > 0 &&
 		!ruleLanguages.some((language) => parserForFile(language, path))
 	)
@@ -410,6 +417,8 @@ export type ExampleResult = {
 	example: string;
 	/** The repo-relative path a code example is tested at, when it gives one. */
 	path?: string;
+	/** Why the rule did not run on the example, when it did not. */
+	skipped?: string;
 	ok: boolean;
 	matches: number;
 };
@@ -428,17 +437,25 @@ export async function testRules(rules: Rule[]): Promise<ExampleResult[]> {
 				const parser = path
 					? ruleParserForFile(rule, path)?.parser
 					: parsers[0];
-				const runs =
-					parser !== undefined &&
-					parser !== null &&
-					parsers.includes(parser) &&
-					(path === null || appliesTo(rule, path));
-				const count = runs ? matches(napi, rule, parser, code).length : 0;
+				const skipped = !parser
+					? "no language of the rule reads it"
+					: !parsers.includes(parser)
+						? `the rule's kinds do not exist in the ${parser} parser, so it does not run on this file`
+						: path !== null && !appliesTo(rule, path)
+							? rule.ignores.some((glob) => matchesGlob(glob, path))
+								? "the path matches ignores, so the rule does not run on it"
+								: "the path is not in files, so the rule does not run on it"
+							: null;
+				const count =
+					parser && skipped === null
+						? matches(napi, rule, parser, code).length
+						: 0;
 				results.push({
 					rule: rule.id,
 					kind,
 					example: code,
 					...(path ? { path } : {}),
+					...(skipped ? { skipped } : {}),
 					matches: count,
 					ok: kind === "invalid" ? count > 0 : count === 0,
 				});

@@ -418,8 +418,12 @@ describe("example paths", () => {
 			),
 		});
 		const failed = (await testRules(loadRules(config))).filter((r) => !r.ok);
-		expect(failed.map((r) => [r.kind, r.path])).toEqual([
-			["invalid", "apps/web/src/app/items/route.tsx"],
+		expect(failed.map((r) => [r.kind, r.path, r.skipped])).toEqual([
+			[
+				"invalid",
+				"apps/web/src/app/items/route.tsx",
+				"the path matches ignores, so the rule does not run on it",
+			],
 		]);
 	});
 
@@ -432,6 +436,21 @@ describe("example paths", () => {
 		});
 		const results = await testRules(loadRules(config));
 		expect(results.filter((r) => !r.ok)).toEqual([]);
+	});
+
+	test("a path that is not repo-relative is a rule file problem", async () => {
+		for (const bad of [
+			"./apps/web/src/app/x.ts",
+			"/apps/web/src/app/x.ts",
+			"../x.ts",
+			"apps/web/../web/src/app/x.ts",
+			"apps\\\\web\\\\x.ts",
+		]) {
+			const { config } = await repo({
+				"a.yml": fetchRule.replace("apps/web/src/lib/x.ts", bad),
+			});
+			expect(() => loadRules(config)).toThrow("is not repo-relative");
+		}
 	});
 
 	test("a malformed example or an unread extension is a rule file problem", async () => {

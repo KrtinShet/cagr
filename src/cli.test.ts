@@ -103,7 +103,7 @@ examples:
 	const result = Bun.spawnSync(["bun", cli, "rules", "test"], { cwd: dir });
 	expect(result.exitCode).toBe(1);
 	expect(result.stdout.toString()).toContain(
-		"FAIL no-fetch: invalid example at app/route.ts did not fire:\n  fetch(1)",
+		"FAIL no-fetch: invalid example at app/route.ts did not fire (the path matches ignores, so the rule does not run on it):\n  fetch(1)",
 	);
 	const explain = Bun.spawnSync(["bun", cli, "explain", "no-fetch"], {
 		cwd: dir,
