@@ -64,3 +64,32 @@ test("a missing gh login says how to fix it", async () => {
 	const lines = await githubLines(settings, broken);
 	expect(lines[0]?.text).toContain("gh auth login");
 });
+
+test("[review] status wants cagr/review and cagr/checks to be required", async () => {
+	const statuses = config({
+		git: { pre_push: "bun run verify" },
+		review: { status: true },
+	});
+	const protection = (contexts: string[]) =>
+		gh({
+			"repos/o/r/branches/main/protection": {
+				required_status_checks: { contexts },
+			},
+		});
+	const missing = (await githubLines(statuses, protection(["cagr/review"])))
+		.filter((line) => !line.ok)
+		.map((line) => line.text)
+		.filter((text) => text.includes("cagr/"));
+	expect(missing).toEqual([
+		expect.stringContaining(
+			"[review] status sends `cagr/checks`, but it is not a required check",
+		),
+	]);
+	const both = await githubLines(
+		statuses,
+		protection(["cagr/review", "cagr/checks"]),
+	);
+	expect(both.map((line) => line.text)).toContain(
+		"The `cagr/checks` commit status is a required check.",
+	);
+});

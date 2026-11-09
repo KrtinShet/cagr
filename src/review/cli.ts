@@ -3,7 +3,7 @@ import { gitContext } from "../git";
 import { classify, riskReport } from "../risk";
 import { run } from "../run";
 import { evalReport, readLastRun, runEvals, writeLastRun } from "./eval";
-import { ciReview, ghCli } from "./github";
+import { ciReview, type Gh, ghCli } from "./github";
 import {
 	answerFinding,
 	reviewReport,
@@ -12,6 +12,7 @@ import {
 	statusReport,
 } from "./report";
 import { ReviewInputError, resolveBase, review } from "./review";
+import { sendReviewStatus } from "./status";
 import { allRecords, readRecord, recordPath, writeRecord } from "./store";
 import { type AnswerKind, answerKinds } from "./types";
 
@@ -88,10 +89,17 @@ async function branchRecord(cwd: string) {
 	return { git, file, record: readRecord(file) };
 }
 
+/** Tells GitHub the review's state when [review] status is on. Never fails the command. */
+async function reportStatus(config: Config, cwd: string, gh: Gh) {
+	const note = await sendReviewStatus(config, cwd, gh);
+	if (note) console.error(`cagr: ${note}`);
+}
+
 export async function reviewCommand(
 	config: Config,
 	args: string[],
 	cwd: string,
+	gh: Gh = ghCli,
 ): Promise<number> {
 	const sub = args[0];
 	if (sub === "help" || args.includes("--help")) {
@@ -114,6 +122,7 @@ export async function reviewCommand(
 		console.log(
 			`Answered ${finding.id} as ${kind}. ${record?.findings.some((entry) => entry.status === "open" && entry.severity === "important") ? "Other Important findings are still open." : "No Important finding is open."}`,
 		);
+		await reportStatus(config, cwd, gh);
 		return 0;
 	}
 	if (sub === "status") {
@@ -157,6 +166,7 @@ export async function reviewCommand(
 	});
 	const report = reviewReport(outcome, config.review.max_rounds);
 	console.log(report);
+	if (!scan) await reportStatus(config, cwd, gh);
 	if (scan && issue && outcome.found.length > 0) {
 		const url = await ghCli(
 			[

@@ -121,7 +121,7 @@ review = true             # the workflow reviews each PR; needs the ANTHROPIC_AP
 nightly = ["src/**"]      # reviews old code every night and opens an issue
 ```
 
-In CI, `cagr ci` runs the checks the agent ran (edit checks, turn-end checks, code rules, commit and branch names, generated files, the PR body) on the branch's changed files, so a change made without the hooks cannot merge. `cagr review --ci` posts the review as inline PR comments; resolving a thread counts as an answer. `cagr doctor --github` checks the branch protection that only GitHub can enforce: approvals, stale approval dismissal, thread resolution, code owners, required checks.
+In CI, `cagr ci` runs the checks the agent ran (edit checks, turn-end checks, code rules, commit and branch names, generated files, the PR body) on the branch's changed files, so a change made without the hooks cannot merge. `cagr review --ci` posts the review as inline PR comments; resolving a thread counts as an answer. `cagr doctor --github` checks the branch protection that only GitHub can enforce: approvals, stale approval dismissal, thread resolution, code owners, required checks. A repo that does not want to spend Actions minutes can set `[review] status = true`: `cagr review` and the pre-push hook then send the commit statuses `cagr/review` and `cagr/checks` through `gh`, and branch protection can require those instead of a workflow.
 
 ## Commands
 
@@ -139,6 +139,7 @@ In CI, `cagr ci` runs the checks the agent ran (edit checks, turn-end checks, co
 | `rules test`                  | Test every rule's examples.                                                                                         |
 | `hook <event> --agent <name>` | Called by the agent hooks.                                                                                          |
 | `git <hook>`                  | Called by the git hooks.                                                                                            |
+| `post-status <sha>`           | Called by the pre-push hook: sends the GitHub commit statuses when `[review] status` is on.                         |
 
 ## Time budgets
 

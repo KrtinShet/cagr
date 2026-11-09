@@ -22,6 +22,7 @@ import { reviewCommand, riskCommand } from "./review/cli";
 import { ghCli } from "./review/github";
 import { AnswerError } from "./review/report";
 import { ReviewInputError } from "./review/review";
+import { postStatusAfterPush } from "./review/status";
 import { explainLayout } from "./rules/layout";
 import { loadRules, RuleError, testRules } from "./rules/rules";
 import {
@@ -51,6 +52,9 @@ Usage: cagr <command>
   schema                       Print the JSON schema for cagr.toml.
   hook <event> --agent <name>  Called by agent hooks: reads the agent's JSON on stdin.
   git <hook> [args]            Called by git hooks: ${gitHookNames.join(", ")}.
+  post-status <sha> --branch <b> [--checks] [--wait <s>]
+                               Called by the pre-push hook when [review] status is on: sets the
+                               cagr/review and cagr/checks commit statuses once GitHub has <sha>.
 
 Events: ${agentEvents.join(", ")}. Agents: ${agentNames.join(", ")}.`;
 
@@ -85,6 +89,7 @@ const options: Record<string, string[]> = {
 	explain: [],
 	rules: [],
 	schema: [],
+	"post-status": ["--branch", "--wait", "--checks"],
 };
 
 /** Help for a command, or a UsageError for an option it does not take. */
@@ -316,6 +321,31 @@ async function main(argv: string[]): Promise<number> {
 		case "schema":
 			console.log(JSON.stringify(jsonSchema(), null, "\t"));
 			return 0;
+		case "post-status": {
+			const branch = flag(args, "--branch");
+			const wait = Number(flag(args, "--wait") ?? "0");
+			const checks = args.includes("--checks");
+			const sha = args.find((arg) => !arg.startsWith("-"));
+			if (!sha || !branch || !Number.isFinite(wait))
+				throw new UsageError(
+					"Usage: cagr post-status <sha> --branch <branch> [--checks] [--wait <seconds>]",
+				);
+			const config = requireConfig();
+			const lines = await postStatusAfterPush(
+				config,
+				process.cwd(),
+				{
+					sha,
+					branch,
+					checks: checks ? config.git.pre_push : null,
+					waitSeconds: wait,
+				},
+				ghCli,
+			);
+			for (const line of lines)
+				console.log(`${new Date().toISOString()} ${line}`);
+			return 0;
+		}
 		default:
 			throw new UsageError(`Unknown command "${command}".\n\n${help}`);
 	}

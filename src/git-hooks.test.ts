@@ -170,6 +170,61 @@ describe("pre-push", () => {
 		});
 	});
 
+	test("[review] status starts post-status in the background, --checks only for a clean HEAD", async () => {
+		const started: string[][] = [];
+		const start = (args: string[]) => {
+			started.push(args);
+		};
+		const status = repo({
+			git: { pre_push: ["true"] },
+			review: { status: true },
+		});
+		const push = `${line("feat/doctor", second)}${line("feat/older", first)}`;
+		const result = await prePush(push, status, root, {}, start);
+		expect(result.ok).toBe(true);
+		expect(result.messages[0]).toContain(
+			"sending the GitHub commit statuses once the push lands",
+		);
+		expect(started).toEqual([
+			[
+				"post-status",
+				second,
+				"--branch",
+				"feat/doctor",
+				"--wait",
+				"120",
+				"--checks",
+			],
+			["post-status", first, "--branch", "feat/older", "--wait", "120"],
+		]);
+		started.length = 0;
+		await prePush(line("feat/doctor", second), repo(), root, {}, start);
+		await prePush(
+			line("feat/doctor", second),
+			repo({ git: { pre_push: ["exit 1"] }, review: { status: true } }),
+			root,
+			{},
+			start,
+		);
+		expect(started).toEqual([]);
+	});
+
+	test("[review] status without pre_push commands sends only cagr/review", async () => {
+		const started: string[][] = [];
+		await prePush(
+			line("feat/doctor", second),
+			repo({ review: { status: true } }),
+			root,
+			{},
+			(args) => {
+				started.push(args);
+			},
+		);
+		expect(started).toEqual([
+			["post-status", second, "--branch", "feat/doctor", "--wait", "120"],
+		]);
+	});
+
 	test("the skip variable skips everything", async () => {
 		expect(
 			(

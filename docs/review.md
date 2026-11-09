@@ -58,6 +58,8 @@ When nothing Important is open, it ends with "Passed. No Important finding is op
 
 Exit codes: 0 passed, 1 Important findings open, 2 error (including a reviewer that could not run, and bad arguments).
 
+With `[review] status = true`, `cagr review` and `cagr review answer` also set the GitHub commit status `cagr/review` on HEAD: `success` when the gate passes, `failure` with the count of open Important findings. A note on stderr says whether it was sent. The exit code does not change. See [Commit statuses without a workflow](ci.md#commit-statuses-without-a-workflow).
+
 ## Effort
 
 Effort sets how many agents look at the change.

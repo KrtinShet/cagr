@@ -422,6 +422,10 @@
 				"agents_may_merge": {
 					"type": "boolean",
 					"description": "Let agents run `gh pr merge` and `gh pr review --approve`. Off: approval stays with a person."
+				},
+				"status": {
+					"type": "boolean",
+					"description": "Report to GitHub without a workflow: `cagr review` sets the commit status cagr/review, and the pre-push hook sets cagr/checks after its commands pass. Needs `gh`."
 				}
 			},
 			"description": "The review gate and the reviewer agent."

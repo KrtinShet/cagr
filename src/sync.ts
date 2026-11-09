@@ -191,8 +191,18 @@ function shimTargets(config: Config): Target[] {
 		}));
 }
 
-/** Shims sync wrote that it would no longer write, with why each goes. */
+const workflowPath = (config: Config) =>
+	join(config.root, ".github", "workflows", "cagr.yml");
+
+/** Files sync wrote that it would no longer write, with why each goes. */
 function staleFiles(
+	config: Config,
+	wanted: Target[],
+): { path: string; why: string }[] {
+	return [...staleShims(config, wanted), ...staleWorkflow(config)];
+}
+
+function staleShims(
 	config: Config,
 	wanted: Target[],
 ): { path: string; why: string }[] {
@@ -214,6 +224,15 @@ function staleFiles(
 				? "the AGENTS.md it imported is gone."
 				: "[agents] nested_docs is off.",
 		}));
+}
+
+/** The workflow sync wrote, left behind after `[ci] github` was turned off: it would keep spending Actions minutes. */
+function staleWorkflow(config: Config): { path: string; why: string }[] {
+	const path = workflowPath(config);
+	if (config.ci.github || isSymlink(path) || !existsSync(path)) return [];
+	return readFileSync(path, "utf8").includes(generatedMark)
+		? [{ path, why: "[ci] github is off." }]
+		: [];
 }
 
 function targets(config: Config, only?: "git"): Target[] {
@@ -244,7 +263,7 @@ function targets(config: Config, only?: "git"): Target[] {
 	if (only !== "git") list.push(...shimTargets(config));
 	if (only !== "git" && config.ci.github) {
 		list.push({
-			path: join(config.root, ".github", "workflows", "cagr.yml"),
+			path: workflowPath(config),
 			executable: false,
 			desired: () => workflowYaml(config),
 		});

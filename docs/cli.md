@@ -28,6 +28,7 @@ An option a command does not take is an error that lists the options it does tak
 | [`schema`](#schema)                       | Print the JSON schema for `cagr.toml`.                                |
 | [`hook`](#hook)                           | Called by the agent hooks.                                            |
 | [`git`](#git)                             | Called by the git hooks.                                              |
+| [`post-status`](#post-status)             | Called by the pre-push hook: sends the GitHub commit statuses.        |
 | `help`                                    | Print the command list.                                               |
 | `version`, `--version`                    | Print the version.                                                    |
 
@@ -98,7 +99,7 @@ cagr review help
 | `eval`                                                | Score the reviewer on `.cagr/review-evals/*.toml`. `--case` runs one case. `--effort` picks the effort. |
 | `help`                                                | Print this list.                                                                                        |
 
-Exit codes: 0 passed, 1 Important findings open, 2 error. See [Review](review.md).
+Exit codes: 0 passed, 1 Important findings open, 2 error. With `[review] status = true`, `review` and `answer` also send the `cagr/review` commit status to GitHub. See [Review](review.md).
 
 ## risk
 
@@ -166,6 +167,14 @@ cagr git pre-push <remote> <url>
 ```
 
 Called by the generated git hooks. `commit-msg` reads the message file (default `.git/COMMIT_EDITMSG`). `pre-push` reads the refs being pushed on stdin, as git sends them. On failure it prints the problems and "A human can skip this once with CAGR_SKIP=1." and exits 1. If the config is broken, it prints the error and exits 0. See [Git hooks](hooks-and-events.md#git-hooks).
+
+## post-status
+
+```
+cagr post-status <sha> --branch <branch> [--checks] [--wait <seconds>]
+```
+
+Started in the background by the pre-push hook when `[review] status` is on. It waits up to `--wait` seconds for GitHub to have `<sha>`, sends `cagr/checks` as `success` when `--checks` is given, and sends `cagr/review` from the review record of `<branch>`. It always exits 0 and prints one line per status; the hook sends that output to `.git/cagr/status.log`. See [Commit statuses without a workflow](ci.md#commit-statuses-without-a-workflow).
 
 ## Environment variables
 
