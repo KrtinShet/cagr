@@ -96,6 +96,24 @@ describe("resolveImport", () => {
 		}
 	});
 
+	test("a relative extends that does not exist is a rule problem", async () => {
+		const { root } = await repo({
+			"tsconfig.json": '{ "extends": "./configs/base" }',
+		});
+		expect(() => resolveImport(root, "src/a.ts", "@/x")).toThrow(
+			"it extends ./configs/base, which does not exist",
+		);
+	});
+
+	test("extends without .json finds the .json file", async () => {
+		const { root } = await repo({
+			"tsconfig.json": '{ "extends": "./configs/base" }',
+			"configs/base.json":
+				'{ "compilerOptions": { "paths": { "@/*": ["../src/*"] } } }',
+		});
+		expect(resolveImport(root, "src/a.ts", "@/x")).toBe("src/x");
+	});
+
 	test("a catch-all * alias keeps package names when nothing local exists", async () => {
 		const { root } = await repo({
 			"tsconfig.json":
@@ -137,6 +155,12 @@ describe("resolveImport", () => {
 		// The whole target, not its last segment.
 		expect(crosses(boundary, "@acme/swr")).toBe(false);
 		expect(crosses(boundary, "apps/web/src/lib/swr")).toBe(false);
+		expect(
+			crosses(
+				{ forbid: ["/apps/web/src/sections/**"], allow: [] },
+				"apps/web/src/sections/a.ts",
+			),
+		).toBe(true);
 		expect(
 			crosses(
 				{ forbid: ["apps/**"], allow: ["types.ts"] },

@@ -115,7 +115,7 @@ function readOptions(
 	file: string,
 	seen = new Set<string>(),
 ): { paths?: [Record<string, string[]>, string]; baseUrl?: string } {
-	if (seen.has(file) || !existsSync(file)) return {};
+	if (seen.has(file)) return {};
 	seen.add(file);
 	let parsed: unknown;
 	try {
@@ -144,10 +144,18 @@ function readOptions(
 	let options: ReturnType<typeof readOptions> = {};
 	for (const parent of parents) {
 		const path = join(dir, parent);
-		options = {
-			...options,
-			...readOptions(path.endsWith(".json") ? path : `${path}.json`, seen),
-		};
+		const found = [path, `${path}.json`].find((candidate) => {
+			try {
+				return statSync(candidate).isFile();
+			} catch {
+				return false;
+			}
+		});
+		if (!found)
+			throw new RuleError(
+				`Import rules cannot read ${file}: it extends ${parent}, which does not exist. Fix "extends" so its paths can be resolved.`,
+			);
+		options = { ...options, ...readOptions(found, seen) };
 	}
 	const own =
 		typeof raw.compilerOptions === "object" && raw.compilerOptions !== null
@@ -305,7 +313,8 @@ const globs = new Map<string, Bun.Glob>();
 function matchesTarget(pattern: string, target: string) {
 	let glob = globs.get(pattern);
 	if (!glob) {
-		glob = new Bun.Glob(pattern);
+		// A leading / means the repo root, as in files and ignores.
+		glob = new Bun.Glob(pattern.replace(/^\//, ""));
 		globs.set(pattern, glob);
 	}
 	return glob.match(target);
