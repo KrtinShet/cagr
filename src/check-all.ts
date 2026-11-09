@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { statSync } from "node:fs";
 import { join } from "node:path";
 import type { Config } from "./config/schema";
 import { formatLayout, layoutFindings } from "./rules/layout";
@@ -9,17 +9,29 @@ import {
 	RuleError,
 } from "./rules/rules";
 
-/** Every file git tracks or would track (not ignored) that is on disk, repo-relative. Null outside a git repo. */
-export function repoFiles(root: string): string[] | null {
+function isFile(path: string) {
+	try {
+		return statSync(path).isFile();
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * Every regular file git tracks or would track (not ignored), repo-relative.
+ * Folders git lists (submodules, nested repos, symlinks to folders) are left out.
+ * Returns git's error when it cannot list them.
+ */
+export function repoFiles(root: string): string[] | { error: string } {
 	const listed = Bun.spawnSync(
 		["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
-		{ cwd: root, stdout: "pipe", stderr: "ignore" },
+		{ cwd: root, stdout: "pipe", stderr: "pipe" },
 	);
-	if (listed.exitCode !== 0) return null;
+	if (listed.exitCode !== 0) return { error: listed.stderr.toString().trim() };
 	const paths = listed.stdout
 		.toString()
 		.split("\0")
-		.filter((path) => path !== "" && existsSync(join(root, path)));
+		.filter((path) => path !== "" && isFile(join(root, path)));
 	return [...new Set(paths)].sort();
 }
 
@@ -32,11 +44,12 @@ export async function checkAll(
 	config: Config,
 ): Promise<{ ok: boolean; report: string }> {
 	const paths = repoFiles(config.root);
-	if (paths === null)
+	if (!Array.isArray(paths))
 		return {
 			ok: false,
-			report:
-				"cagr check --all lists files with git, and this folder is not a git repo. Run `git init`, or name the files: cagr check <files...>",
+			report: /not a git repository/i.test(paths.error)
+				? "cagr check --all lists files with git, and this folder is not a git repo. Run `git init`, or name the files: cagr check <files...>"
+				: `cagr check --all lists files with \`git ls-files\`, which failed: ${paths.error || "no message"}. Fix that, or name the files: cagr check <files...>`,
 		};
 	const sections: string[] = [];
 	try {

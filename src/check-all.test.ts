@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { checkAll } from "./check-all";
@@ -75,6 +75,44 @@ test("--all outside a git repo says how to fix it", async () => {
 	);
 	expect(result.ok).toBe(false);
 	expect(result.report).toContain("Run `git init`, or name the files");
+});
+
+test("--all skips folders git lists: nested repos and symlinks to folders", async () => {
+	const { root, git, commit } = await tempRepo();
+	await commit("chore: add", { "src/a.ts": "export {};\n" });
+	// An untracked nested repo is listed as `src/Three.js/`; a symlink to a folder as itself.
+	const nested = await tempRepo();
+	await git("clone", "-q", nested.root, "src/Three.js");
+	symlinkSync(join(root, "src"), join(root, "src/LinkDir.js"));
+	const config = resolveConfig({ layout }, root, join(root, "cagr.toml"));
+	expect(await checkAll(config)).toEqual({
+		ok: true,
+		report: "No problems in 2 files.",
+	});
+});
+
+test("--all names git's error when git fails inside a repo", async () => {
+	const { root, git } = await tempRepo();
+	await git("config", "core.repositoryformatversion", "99");
+	const result = await checkAll(
+		resolveConfig({}, root, join(root, "cagr.toml")),
+	);
+	expect(result.ok).toBe(false);
+	expect(result.report).toContain("`git ls-files`, which failed:");
+	expect(result.report).not.toContain("git init");
+});
+
+test("--all reports a broken rule file and still runs the layout rules", async () => {
+	const { root, commit } = await tempRepo();
+	await commit("chore: add", {
+		".cagr/rules/bad.yml": "id: [\n",
+		"src/BadName.ts": "export {};\n",
+	});
+	const config = resolveConfig({ layout }, root, join(root, "cagr.toml"));
+	const result = await checkAll(config);
+	expect(result.ok).toBe(false);
+	expect(result.report).toContain("## Rules\n");
+	expect(result.report).toContain("## Layout\nsrc/BadName.ts kebab-files");
 });
 
 test("cagr check --all exits 1 on a finding and rejects file names", async () => {
