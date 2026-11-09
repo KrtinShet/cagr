@@ -63,8 +63,8 @@ cagr reads every `*.toml` file under `.cagr/`, in any subfolder, as part of the 
 How fragments join `cagr.toml`:
 
 - They are read after `cagr.toml`, in sorted path order.
-- Lists of tables (`[[stack]]`, `files.protected`, `commands.blocked`, `risk.paths`) add up across all files, in that order.
-- Any other value, including a plain list, may be set in one file only. Setting it in two is an error that names both files: "review.effort is set in both .../cagr.toml and .../.cagr/review.toml. Keep it in one of them."
+- Lists of tables (`[[stack]]`, `files.protected`, `commands.blocked`, `risk.paths`) add up across all files, in that order. An empty list adds nothing.
+- Any other value, including a plain list, may be set in one file only. Setting it in two, or setting a table in one file and a plain value at the same key in another, is an error that names both files: "review.effort is set in both .../cagr.toml and .../.cagr/review.toml. Keep it in one of them."
 - `extends` may only be set in `cagr.toml`.
 - Each fragment is checked against the same schema, and an error names the fragment.
 - Any file may set `"$schema"` for editor completion. See [JSON schema for editors](#json-schema-for-editors).
@@ -78,7 +78,7 @@ Every command and hook sees the merged config. `cagr doctor` lists the fragments
 How a preset merges with your config:
 
 - Tables merge key by key, at every depth.
-- Lists of tables (`[[stack]]`, `files.protected`, `commands.blocked`, `risk.paths`) add your entries to the preset's.
+- Lists of tables (`[[stack]]`, `files.protected`, `commands.blocked`, `risk.paths`) add your entries to the preset's. An empty list adds nothing and removes nothing.
 - Any other value, including a plain list, replaces the preset's.
 
 So you cannot remove a preset's protected file by leaving it out. To change what `recommended` does, set the single values you want to differ, such as `block_force_push = false`.

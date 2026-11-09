@@ -192,3 +192,17 @@ test("init keeps cagr.toml short and puts the lists in .cagr/", async () => {
 		"# mine\n",
 	);
 });
+
+test("init --force keeps the old cagr.toml when the new one clashes with .cagr/", async () => {
+	const dir = await mkdtemp(join(tmpdir(), "gw-init-clash-"));
+	await mkdir(join(dir, ".cagr"), { recursive: true });
+	await writeFile(join(dir, "cagr.toml"), "# old\n");
+	await writeFile(
+		join(dir, ".cagr/git.toml"),
+		'[agents]\nenabled = ["claude"]\n',
+	);
+	await expect(init(dir, { force: true })).rejects.toThrow(
+		"agents.enabled is set in both",
+	);
+	expect(await readFile(join(dir, "cagr.toml"), "utf8")).toBe("# old\n");
+});

@@ -6,7 +6,8 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { dirname, join, relative } from "node:path";
-import { configFileName, loadConfig } from "./config/load";
+import { configFileName, loadConfig, resolveConfig } from "./config/load";
+import type { RawConfig } from "./config/presets";
 import type { AgentName, Config, PackageManager } from "./config/schema";
 import { stackFiles, withFiles } from "./hook/stack-files";
 import { toPosix } from "./paths";
@@ -463,6 +464,8 @@ export async function init(
 	const text = configToml(detection);
 	const notes: string[] = [];
 	if (options.dryRun) return { detection, config: text, written: [], notes };
+	// Check the new config against the .cagr/ files before replacing the old one.
+	resolveConfig(Bun.TOML.parse(text) as RawConfig, root, file);
 	writeFileSync(file, text);
 	const config = loadConfig(root);
 	if (!config) throw new Error(`Could not read back ${file}.`);

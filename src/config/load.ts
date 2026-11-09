@@ -102,7 +102,7 @@ function withFragments(
 	source: string,
 ): { combined: RawConfig; sources: string[] } {
 	const files = fragmentFiles(root);
-	const owners = new Map<string, string>();
+	const owners = new Map<string, Owner>();
 	const errors: string[] = [];
 	claim(raw, source, "", owners, errors);
 	let combined = raw;
@@ -123,28 +123,46 @@ function withFragments(
 	return { combined, sources: [source, ...files] };
 }
 
-/** Records which file set each value, and reports a value two files set. */
+/** The lists of tables that add up across files and presets, even when one is empty. */
+const listsThatAddUp = new Set([
+	"stack",
+	"files.protected",
+	"commands.blocked",
+	"risk.paths",
+]);
+
+type Owner = { file: string; table: boolean };
+
+/**
+ * Records which file set each value, and reports a value two files set. A
+ * table in one file and a plain value at the same key in another also clash.
+ */
 function claim(
 	raw: RawConfig,
 	file: string,
 	prefix: string,
-	owners: Map<string, string>,
+	owners: Map<string, Owner>,
 	errors: string[],
 ) {
+	const clash = (path: string, other: string) =>
+		errors.push(
+			`${path} is set in both ${other} and ${file}. Keep it in one of them.`,
+		);
 	for (const [key, value] of Object.entries(raw)) {
 		if (prefix === "" && (key === "$schema" || key === "extends")) continue;
 		const path = prefix === "" ? key : `${prefix}.${key}`;
+		const owner = owners.get(path);
 		if (isTable(value)) {
-			claim(value, file, path, owners, errors);
+			if (owner && !owner.table) clash(path, owner.file);
+			else {
+				if (!owner) owners.set(path, { file, table: true });
+				claim(value, file, path, owners, errors);
+			}
 			continue;
 		}
-		if (isTableList(value)) continue;
-		const other = owners.get(path);
-		if (other)
-			errors.push(
-				`${path} is set in both ${other} and ${file}. Keep it in one of them.`,
-			);
-		else owners.set(path, file);
+		if (listsThatAddUp.has(path) || isTableList(value)) continue;
+		if (owner) clash(path, owner.file);
+		else owners.set(path, { file, table: false });
 	}
 }
 
@@ -189,12 +207,22 @@ function withPresets(
 }
 
 /** Lists of tables add to the base; every other value replaces it. */
-export function merge(base: RawConfig, over: RawConfig): RawConfig {
+export function merge(
+	base: RawConfig,
+	over: RawConfig,
+	prefix = "",
+): RawConfig {
 	const out: RawConfig = { ...base };
 	for (const [key, value] of Object.entries(over)) {
+		const path = prefix === "" ? key : `${prefix}.${key}`;
 		const current = out[key];
-		if (isTable(current) && isTable(value)) out[key] = merge(current, value);
-		else if (isTableList(current) && isTableList(value))
+		if (isTable(current) && isTable(value))
+			out[key] = merge(current, value, path);
+		else if (
+			Array.isArray(current) &&
+			Array.isArray(value) &&
+			(listsThatAddUp.has(path) || (isTableList(current) && isTableList(value)))
+		)
 			out[key] = [...current, ...value];
 		else out[key] = value;
 	}

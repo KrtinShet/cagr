@@ -173,6 +173,51 @@ describe("defaults", () => {
 });
 
 describe("fragments in .cagr/", () => {
+	test("a table in one file and a plain value in another clash", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "gw-fragments-"));
+		await mkdir(join(dir, ".cagr"), { recursive: true });
+		await writeFile(
+			join(dir, "cagr.toml"),
+			'[git]\nbranch_name = "type/name"\n',
+		);
+		await writeFile(
+			join(dir, ".cagr/git.toml"),
+			'[git.branch_name]\npattern = "^x/.+$"\nexample = "x/y"\n',
+		);
+		expect(() => loadConfig(dir)).toThrow(
+			`git.branch_name is set in both ${join(dir, "cagr.toml")} and ${join(dir, ".cagr/git.toml")}.`,
+		);
+		await writeFile(
+			join(dir, "cagr.toml"),
+			'[git]\nbranch_name = { pattern = "^x/.+$", example = "x/y" }\n',
+		);
+		await writeFile(
+			join(dir, ".cagr/git.toml"),
+			'[git]\nbranch_name = "type/name"\n',
+		);
+		expect(() => loadConfig(dir)).toThrow("git.branch_name is set in both");
+	});
+
+	test("an empty list of guards adds nothing and removes nothing", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "gw-fragments-"));
+		await mkdir(join(dir, ".cagr"), { recursive: true });
+		await writeFile(
+			join(dir, "cagr.toml"),
+			'extends = ["recommended"]\nfiles.protected = []\n[[commands.blocked]]\nmatch = "db push"\nreason = "Migrate."\n',
+		);
+		await writeFile(
+			join(dir, ".cagr/a.toml"),
+			"commands.blocked = []\nfiles.protected = []\n",
+		);
+		const config = loadConfig(dir);
+		expect(config?.commands.blocked.map((entry) => entry.match)).toEqual([
+			"db push",
+		]);
+		expect(config?.files.protected.map((entry) => entry.glob)).toContain(
+			".env*",
+		);
+	});
+
 	test("review eval cases in .cagr/review-evals are not config", async () => {
 		const dir = await mkdtemp(join(tmpdir(), "gw-fragments-"));
 		await mkdir(join(dir, ".cagr/review-evals"), { recursive: true });
