@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { resolveConfig } from "../config/load";
+import { parserForFile } from "./languages";
 import {
 	findInFiles,
 	formatFinding,
@@ -321,6 +322,16 @@ examples:
 		);
 	});
 
+	test("a name Object inherits is not a language, and not a crash", async () => {
+		const { config } = await repo({
+			"a.yml": noPrint.replace("language: python", "language: constructor"),
+		});
+		expect(() => loadRules(config)).toThrow(RuleError);
+		expect(() => loadRules(config)).toThrow('"language" must be one of');
+		expect(parserForFile("typescript", "a.constructor")).toBeNull();
+		expect(parserForFile("toString", "a.ts")).toBeNull();
+	});
+
 	test("language must name known languages", async () => {
 		const { config } = await repo({
 			"a.yml": noConsole.replace(
@@ -328,9 +339,6 @@ examples:
 				"language: [typescript, cobol]",
 			),
 			"b.yml": noPrint.replace("language: python", "language: []"),
-			"c.yml": noPrint
-				.replace("id: no-print", "id: c")
-				.replace("language: python", "language: constructor"),
 		});
 		expect(() => loadRules(config)).toThrow("or a list of them");
 	});
