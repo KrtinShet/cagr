@@ -88,6 +88,10 @@ export function loadRules(config: Config): Rule[] {
 			problems.push(
 				`${rule.source}: id "${rule.id}" is a built-in guard. Pick another id.`,
 			);
+		if (config.layout.some((layout) => layout.id === rule.id))
+			problems.push(
+				`${rule.source}: id "${rule.id}" is also a [[layout]] rule in ${config.source}. Pick another id.`,
+			);
 		const other = seen.get(rule.id);
 		if (other)
 			problems.push(

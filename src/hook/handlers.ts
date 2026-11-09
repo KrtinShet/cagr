@@ -17,6 +17,7 @@ import {
 import { insideRoot } from "../paths";
 import { gateResult } from "../review/gate";
 import { readRecord, recordPath } from "../review/store";
+import { formatLayout, layoutFindings } from "../rules/layout";
 import {
 	findInFiles,
 	formatFinding,
@@ -171,8 +172,43 @@ async function fileBeforeEdit(
 	for (const file of input.files) {
 		const finding = editFinding(file, config, { mainCheckout });
 		if (finding) return { kind: "deny", reason: render(finding) };
+		// Only a new file: an existing one in the wrong place is reported after the edit, not frozen.
+		const path = insideRoot(config.root, file);
+		if (path === null || existsSync(file)) continue;
+		// Every broken rule in one message, so a rename does not run into the next one.
+		const [first, ...rest] = layoutFindings(config.layout, [path]);
+		if (first)
+			return {
+				kind: "deny",
+				reason: render({
+					id: first.rule,
+					reason: [first, ...rest]
+						.map(
+							(layout, i) =>
+								`${i === 0 ? `Do not create ${path}: ` : `Also (${layout.rule}): `}${layout.message} (${layout.detail}.) Instead: ${layout.instead}`,
+						)
+						.join(" "),
+				}),
+			};
 	}
 	return { kind: "allow" };
+}
+
+/** Layout findings for `files` (absolute), or null when there are no layout rules. */
+export function layoutCheck(
+	config: Config,
+	files: string[],
+): CheckResult | null {
+	if (config.layout.length === 0) return null;
+	const paths = files
+		.map((file) => insideRoot(config.root, file))
+		.filter((path) => path !== null);
+	const findings = layoutFindings(config.layout, paths);
+	return {
+		name: "Layout",
+		ok: findings.length === 0,
+		output: tidy(findings.map(formatLayout).join("\n")),
+	};
 }
 
 async function fileAfterEdit(
@@ -216,6 +252,8 @@ export async function editChecks(
 	}
 	const rules = await ruleCheck(config, existing, "file.after_edit", timings);
 	if (rules && !rules.ok) problems.push(`## Rules\n${rules.output}`);
+	const layout = layoutCheck(config, existing);
+	if (layout && !layout.ok) problems.push(`## Layout\n${layout.output}`);
 	recordTimings(config.root, timings);
 	return problems;
 }
@@ -285,6 +323,8 @@ async function turnEnd(input: HookInput, config: Config): Promise<Decision> {
 	const results = await Promise.all(checks);
 	const rules = await ruleCheck(config, existing, "turn.end", timings);
 	if (rules) results.push(rules);
+	const layout = layoutCheck(config, existing);
+	if (layout) results.push(layout);
 	recordTimings(config.root, timings);
 	const decision = stopDecision(state, results);
 	if (decision.action === "block") {

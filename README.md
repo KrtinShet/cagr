@@ -6,7 +6,7 @@ Coding agents slip. They run `npm install` in a bun repo, push to `main`, edit `
 
 - **Commands**: it denies the wrong package manager, a push to the protected branch, a force push, hook skips, and any command you list, before the command runs.
 - **Files**: it denies edits to protected files such as `.env*` and lockfiles, before the edit happens.
-- **Edits**: after each edit it runs your formatters and linters (Biome, ESLint, Ruff) and your own ast-grep code rules, on the changed files only.
+- **Edits**: after each edit it runs your formatters and linters (Biome, ESLint, Ruff) and your own ast-grep code rules, on the changed files only. Layout rules stop a new file from being created with the wrong name or in the wrong folder.
 - **End of turn**: the agent may not finish while your checks (tsc, mypy, pytest, `bun run lint`) fail. It blocks at most 2 stops in a row, then lets the agent go and tells the human, so it never traps the agent in a loop.
 - **Pull requests**: `gh pr create` is denied until a reviewer agent in a fresh context has reviewed the current commit and every Important finding is fixed or answered. Agents may not merge or approve. See [Review](#review).
 - **Git**: the commit-msg and pre-push hooks check commit subjects, branch names and pushes to `main`. They cover any agent, and any human, even without agent hooks.
@@ -135,7 +135,7 @@ In CI, `cagr ci` runs the checks the agent ran (edit checks, turn-end checks, co
 | `risk [--base <b>]`           | The change's risk tier, the approvals it needs, and the owners.                                                     |
 | `ci [--base <b>]`             | In CI: the checks the hooks ran, on the branch's changed files.                                                     |
 | `check <files...>`            | Run the edit checks and code rules on files, outside an agent.                                                      |
-| `explain <id>`                | Explain a built-in guard or a code rule.                                                                            |
+| `explain <id>`                | Explain a built-in guard, a code rule or a layout rule.                                                             |
 | `rules test`                  | Test every rule's examples.                                                                                         |
 | `hook <event> --agent <name>` | Called by the agent hooks.                                                                                          |
 | `git <hook>`                  | Called by the git hooks.                                                                                            |

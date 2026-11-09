@@ -23,7 +23,7 @@ An option a command does not take is an error that lists the options it does tak
 | [`risk`](#risk)                           | The change's risk tier, the approvals it needs, and the owners.       |
 | [`ci`](#ci)                               | In CI: the checks the hooks ran, on the branch's changed files.       |
 | [`check`](#check)                         | Run the edit checks and code rules on files.                          |
-| [`explain`](#explain)                     | Explain a built-in guard or a code rule.                              |
+| [`explain`](#explain)                     | Explain a built-in guard, a code rule or a layout rule.               |
 | [`rules test`](#rules-test)               | Test every rule's examples.                                           |
 | [`schema`](#schema)                       | Print the JSON schema for `cagr.toml`.                                |
 | [`hook`](#hook)                           | Called by the agent hooks.                                            |
@@ -114,7 +114,7 @@ Prints the risk tier of the branch's change compared with `--base` (default: the
 cagr ci [--base <branch>]
 ```
 
-Runs the checks the hooks ran on the branch's changed files: generated files, branch name, commit messages, edit checks, turn-end checks, code rules, risk, and the pull request body. Exits 1 if any check fails. The base is `--base`, else `GITHUB_BASE_REF`, else the protected branch, else `main`. See [CI](ci.md#cagr-ci).
+Runs the checks the hooks ran on the branch's changed files: generated files, branch name, commit messages, edit checks, turn-end checks, code rules, layout rules, risk, and the pull request body. Exits 1 if any check fails. The base is `--base`, else `GITHUB_BASE_REF`, else the protected branch, else `main`. See [CI](ci.md#cagr-ci).
 
 ## check
 
@@ -122,7 +122,7 @@ Runs the checks the hooks ran on the branch's changed files: generated files, br
 cagr check <files...>
 ```
 
-Runs the protected-file check, the `on_edit` commands and the code rules on the named files, outside an agent. Prints the problems and exits 1, or prints "No problems in N files." and exits 0. `on_edit` commands run for real, so formatters may change the files. See [Code rules](code-rules.md#cagr-check-files).
+Runs the protected-file check, the `on_edit` commands, the code rules and the layout rules on the named files, outside an agent. Prints the problems and exits 1, or prints "No problems in N files." and exits 0. `on_edit` commands run for real, so formatters may change the files. See [Code rules](code-rules.md#cagr-check-files).
 
 ## explain
 
@@ -130,7 +130,7 @@ Runs the protected-file check, the `on_edit` commands and the code rules on the 
 cagr explain <id>
 ```
 
-For a built-in guard: the event it runs on, what it catches, the fix and the config. For a code rule: its message, what to do instead, its note, and its examples. An unknown id lists every known id and exits 1. It works without a config for guards. See [Guards](guards.md).
+For a built-in guard: the event it runs on, what it catches, the fix and the config. For a code rule: its message, what to do instead, its note, and its examples. For a layout rule: its message, what to do instead, its files, and the name or places it allows. An unknown id lists every known id and exits 1. It works without a config for guards. See [Guards](guards.md).
 
 ## rules test
 

@@ -82,6 +82,11 @@ export async function doctor(
 	} catch (error) {
 		configLines.push({ ok: false, text: (error as Error).message });
 	}
+	if (config.layout.length > 0)
+		configLines.push({
+			ok: true,
+			text: `${config.layout.length} layout rule${config.layout.length === 1 ? "" : "s"}.`,
+		});
 	sections.push(["Config", configLines]);
 
 	const wiring: Line[] = [];
