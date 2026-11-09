@@ -65,6 +65,10 @@ export const configSchema: Node = obj({
 				description:
 					'How the generated hook files call cagr. "{root}" becomes the repo root for each agent.',
 			}),
+			nested_docs: bool({
+				description:
+					"Write a CLAUDE.md that imports AGENTS.md next to every AGENTS.md that has no CLAUDE.md.",
+			}),
 		},
 		{ description: "Agent adapters." },
 	),
@@ -316,7 +320,7 @@ export type Config = {
 	root: string;
 	source: string;
 	extends: string[];
-	agents: { enabled: AgentName[]; command: string };
+	agents: { enabled: AgentName[]; command: string; nested_docs: boolean };
 	git: {
 		protected_branch: string | null;
 		branch_name: NameRule | null;
