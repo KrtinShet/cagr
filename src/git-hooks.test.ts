@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, test } from "bun:test";
-import { mkdtemp, realpath, writeFile } from "node:fs/promises";
+import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { resolveConfig } from "./config/load";
@@ -207,6 +207,27 @@ describe("pre-push", () => {
 			start,
 		);
 		expect(started).toEqual([]);
+	});
+
+	test("[review] status leaves out --checks when an untracked file took part", async () => {
+		const started: string[][] = [];
+		await writeFile(join(root, "new-file.ts"), "export {};\n");
+		try {
+			await prePush(
+				line("feat/doctor", second),
+				repo({ git: { pre_push: ["true"] }, review: { status: true } }),
+				root,
+				{},
+				(args) => {
+					started.push(args);
+				},
+			);
+		} finally {
+			await rm(join(root, "new-file.ts"));
+		}
+		expect(started).toEqual([
+			["post-status", second, "--branch", "feat/doctor", "--wait", "120"],
+		]);
 	});
 
 	test("[review] status without pre_push commands sends only cagr/review", async () => {

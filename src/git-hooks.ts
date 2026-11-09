@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { mkdirSync, openSync, readFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, openSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { Config } from "./config/schema";
 import { gitContext } from "./git";
@@ -86,7 +86,15 @@ export const startInBackground: StartInBackground = (args, cwd, log) => {
 		env,
 		detached: true,
 		stdio: ["ignore", out, out],
-	}).unref();
+	})
+		// A start failure arrives as an event, not a throw: log it so the push still goes on.
+		.on("error", (error) => {
+			appendFileSync(
+				log,
+				`Could not start cagr post-status: ${error.message}\n`,
+			);
+		})
+		.unref();
 };
 
 export async function prePush(
@@ -164,12 +172,12 @@ async function sendStatuses(
 	try {
 		const git = await gitContext(cwd);
 		if (!git.commonDir) return [];
-		// The pre_push commands ran on the working tree, so they vouch only for a clean HEAD.
+		// The pre_push commands ran on the working tree, untracked files included, so they vouch only for a clean HEAD.
 		const clean =
 			config.git.pre_push.length > 0 &&
 			(
 				await run(
-					["git", "status", "--porcelain", "--untracked-files=no"],
+					["git", "status", "--porcelain", "--untracked-files=normal"],
 					cwd,
 					{
 						env: gitEnv,
