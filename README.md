@@ -23,13 +23,13 @@ The full docs are at [krtinshet.github.io/cagr](https://krtinshet.github.io/cagr
 - [Configuration](docs/configuration.md): every key in `cagr.toml`.
 - [Guards](docs/guards.md): every built-in guard and its message.
 - [Hooks and events](docs/hooks-and-events.md), [Code rules](docs/code-rules.md), [Review](docs/review.md), [CI](docs/ci.md).
-- [CLI reference](docs/cli.md) and [Limits and troubleshooting](docs/limits.md).
+- [CLI reference](docs/cli.md), [Limits and troubleshooting](docs/limits.md) and [Releasing](docs/releasing.md).
 
 ## Quick start
 
 ```sh
 curl -fsSL https://github.com/krtinshet/cagr/releases/latest/download/install.sh | sh
-# or: bun add -d cagr    /    npm i -D cagr
+# or: bun add -d @krtinshet/cagr    /    npm i -D @krtinshet/cagr
 
 cd your-repo
 cagr init      # detects your stacks, writes cagr.toml and the hook files
