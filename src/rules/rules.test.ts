@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { resolveConfig } from "../config/load";
+import { parserForFile } from "./languages";
 import {
 	findInFiles,
 	formatFinding,
@@ -217,4 +218,153 @@ describe("import boundaries", () => {
 			'apps/web/src/components/ui/a.tsx:1:26 components-stay-shared: Shared components may not import from "@/sections/deals/deal-card". Instead: Pass the data in as props, or move the code into src/sections/<feature>/.',
 		]);
 	});
+});
+
+// superagent's ARCH008: JSX kinds exist in the TSX grammar, not in the plain TypeScript one.
+const jsxRule = `id: pages-render-views
+language: typescript
+message: <$TAG> does not belong in a page.
+instead: Render a *View screen.
+rule:
+  any: [{ kind: jsx_opening_element }, { kind: jsx_self_closing_element }]
+  has:
+    field: name
+    pattern: $TAG
+    not: { regex: "View$" }
+examples:
+  invalid: ["export default function Page() { return <div/>; }"]
+  valid: ["export default function Page() { return <HomeView/>; }"]
+`;
+
+describe("languages", () => {
+	test("JSX kinds under typescript check .tsx files, and skip .ts files", async () => {
+		const { root, config } = await repo({ "a.yml": jsxRule });
+		const results = await testRules(loadRules(config));
+		expect(results.filter((r) => !r.ok)).toEqual([]);
+		await writeFile(join(root, "page.tsx"), "export const P = () => <div/>;\n");
+		await writeFile(join(root, "page.ts"), "export const p = 1;\n");
+		const findings = await findInFiles(
+			loadRules(config),
+			[join(root, "page.tsx"), join(root, "page.ts")],
+			root,
+		);
+		expect(findings.map((f) => [f.path, f.message])).toEqual([
+			["page.tsx", "<div> does not belong in a page."],
+		]);
+	});
+
+	test("a kind no parser of the language has is a rule file problem, not a crash", async () => {
+		const { config } = await repo({
+			"a.yml": jsxRule.replace("jsx_opening_element", "jsx_openin_element"),
+		});
+		const rules = loadRules(config);
+		await expect(testRules(rules)).rejects.toThrow(RuleError);
+		await expect(testRules(rules)).rejects.toThrow(
+			"(pages-render-views): the rule does not work for typescript: Rule contains invalid kind matcher: Invalid Kind: Kind `jsx_openin_element` is invalid",
+		);
+	});
+
+	test("a bad regex is a rule file problem in findInFiles too", async () => {
+		const { root, config } = await repo({
+			"a.yml": noConsole.replace(
+				"pattern: console.log($$$ARGS)",
+				'regex: "(["',
+			),
+		});
+		await writeFile(join(root, "a.ts"), "console.log(1);\n");
+		await expect(
+			findInFiles(loadRules(config), [join(root, "a.ts")], root),
+		).rejects.toThrow("Rule files have problems:");
+	});
+
+	test("a list of languages checks every language's files", async () => {
+		const { root, config } = await repo({
+			"a.yml": noConsole.replace(
+				"language: typescript",
+				"language: [typescript, JavaScript]",
+			),
+		});
+		const rules = loadRules(config);
+		expect(rules[0]?.languages).toEqual(["typescript", "javascript"]);
+		for (const name of ["a.ts", "b.tsx", "c.js", "d.jsx", "e.mjs", "f.py"])
+			await writeFile(join(root, name), "console.log(1);\n");
+		const findings = await findInFiles(
+			rules,
+			["a.ts", "b.tsx", "c.js", "d.jsx", "e.mjs", "f.py"].map((n) =>
+				join(root, n),
+			),
+			root,
+		);
+		expect(findings.map((f) => f.path)).toEqual([
+			"a.ts",
+			"b.tsx",
+			"c.js",
+			"d.jsx",
+			"e.mjs",
+		]);
+	});
+
+	test("a language in the list the rule's kinds do not exist in is a problem", async () => {
+		const { config } = await repo({
+			"a.yml": `id: typed
+language: [typescript, javascript]
+message: a type annotation.
+instead: Remove it.
+rule:
+  kind: type_annotation
+examples:
+  invalid: ["const a: number = 1;"]
+  valid: ["const a = 1;"]
+`,
+		});
+		await expect(testRules(loadRules(config))).rejects.toThrow(
+			'the rule does not work for javascript: Rule contains invalid kind matcher: Invalid Kind: Kind `type_annotation` is invalid. Fix the rule, or drop javascript from "language", then run `cagr rules test`.',
+		);
+	});
+
+	test("a name Object inherits is not a language, and not a crash", async () => {
+		const { config } = await repo({
+			"a.yml": noPrint.replace("language: python", "language: constructor"),
+		});
+		expect(() => loadRules(config)).toThrow(RuleError);
+		expect(() => loadRules(config)).toThrow('"language" must be one of');
+		expect(parserForFile("typescript", "a.constructor")).toBeNull();
+		expect(parserForFile("toString", "a.ts")).toBeNull();
+	});
+
+	test("language must name known languages", async () => {
+		const { config } = await repo({
+			"a.yml": noConsole.replace(
+				"language: typescript",
+				"language: [typescript, cobol]",
+			),
+			"b.yml": noPrint.replace("language: python", "language: []"),
+		});
+		expect(() => loadRules(config)).toThrow("or a list of them");
+	});
+});
+
+test("checking only .ts files does not load or judge the python parser", async () => {
+	// A fresh process, since an earlier test in this one may have registered python already.
+	const dir = await mkdtemp(join(tmpdir(), "gw-rules-"));
+	const script = join(dir, "run.ts");
+	await writeFile(
+		script,
+		`import { findInFiles, loadRules } from ${JSON.stringify(join(import.meta.dir, "rules.ts"))};
+import { resolveConfig } from ${JSON.stringify(join(import.meta.dir, "../config/load.ts"))};
+const root = ${JSON.stringify(dir)};
+const rules = loadRules(resolveConfig({}, root, "test.toml"));
+const findings = await findInFiles(rules, [root + "/a.ts"], root);
+console.log(JSON.stringify(findings.map((f) => f.path)));
+`,
+	);
+	await mkdir(join(dir, ".cagr/rules"), { recursive: true });
+	await writeFile(
+		join(dir, ".cagr/rules/a.yml"),
+		noConsole.replace("language: typescript", "language: [typescript, python]"),
+	);
+	await writeFile(join(dir, "a.ts"), "console.log(1);\n");
+	const result = Bun.spawnSync(["bun", script]);
+	expect(result.stderr.toString()).toBe("");
+	expect(result.stdout.toString().trim()).toBe('["a.ts"]');
 });

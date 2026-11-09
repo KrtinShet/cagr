@@ -300,7 +300,7 @@ async function main(argv: string[]): Promise<number> {
 			}
 			console.log(
 				[
-					`${rule.id} (${rule.language} rule from ${rule.source})`,
+					`${rule.id} (${rule.languages.join(", ")} rule from ${rule.source})`,
 					"",
 					`Message: ${rule.message}`,
 					`Instead: ${rule.instead}`,

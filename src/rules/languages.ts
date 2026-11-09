@@ -52,7 +52,13 @@ export function setEmbeddedParsers(
 }
 
 export function parserForFile(language: string, file: string) {
-	return languages[language]?.extensions[extname(file).slice(1)] ?? null;
+	const extensions = Object.hasOwn(languages, language)
+		? languages[language]?.extensions
+		: undefined;
+	const extension = extname(file).slice(1);
+	return extensions && Object.hasOwn(extensions, extension)
+		? (extensions[extension] ?? null)
+		: null;
 }
 
 export function prebuildDir(platform = process.platform, arch = process.arch) {

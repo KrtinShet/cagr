@@ -24,6 +24,7 @@ import {
 	loadLayoutRules,
 	loadRuleSet,
 	RuleError,
+	type RuleFinding,
 	type RuleSet,
 } from "../rules/rules";
 import { run, runShell } from "../run";
@@ -299,7 +300,18 @@ async function ruleChecks(
 	}
 	const layout = layoutCheck(config, set.layout, files);
 	if (set.code.length === 0) return { rules: null, layout };
-	const findings = await findInFiles(set.code, files, config.root);
+	let findings: RuleFinding[];
+	try {
+		findings = await findInFiles(set.code, files, config.root);
+	} catch (error) {
+		// A rule that does not compile for its language is a rule file problem too.
+		if (error instanceof RuleError)
+			return {
+				rules: { name: "Rules", ok: false, output: error.message },
+				layout,
+			};
+		throw error;
+	}
 	timings.push({
 		event,
 		check: "rules",

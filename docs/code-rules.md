@@ -51,7 +51,7 @@ src/a.ts:1:1 no-console-log: console.log("x", 1) leaves debug output in app code
 | Field              | Required | Meaning                                                                                                             |
 | ------------------ | -------- | ------------------------------------------------------------------------------------------------------------------- |
 | `id`               | yes      | A unique name. It may not be a [built-in guard](guards.md) id, and two rules may not share one.                     |
-| `language`         | yes      | One of the [languages](#languages) below. Case does not matter.                                                     |
+| `language`         | yes      | One of the [languages](#languages) below, or a list of them such as `[typescript, javascript]`. Case does not matter. |
 | `rule`             | yes      | The ast-grep rule: `pattern`, `kind`, `has`, `inside`, `all`, `any`, `not` and the rest.                            |
 | `message`          | yes      | What is wrong. `$VAR` becomes the text the metavariable matched, and `$$$VAR` the text of all the nodes it matched. |
 | `instead`          | yes      | What to use instead, so the agent can fix it.                                                                       |
@@ -164,7 +164,11 @@ Edits to a file that already exists are not denied, so old files can still be fi
 | `go`         | `.go`                                                        |
 | `rust`       | `.rs`                                                        |
 
-A rule only checks files whose extension its language reads. The Python, Go and Rust parsers are built into the binary. On first use, cagr writes them to `~/.cache/cagr/<version>/` (or `$XDG_CACHE_HOME/cagr/<version>/`, or `%LOCALAPPDATA%\cagr\<version>\` on Windows).
+A rule only checks files whose extension one of its languages reads. With a list, such as `language: [typescript, javascript]`, one rule covers `.ts`, `.tsx`, `.js`, `.jsx`, `.mjs` and `.cjs`. When two languages read the same extension, the first one in the list reads it.
+
+A rule may use node kinds that only some of a language's parsers have. JSX kinds such as `jsx_opening_element` exist in the TSX parser, not the plain TypeScript one, so a `typescript` rule that uses them checks `.tsx` files and skips `.ts` files. A kind that none of a language's parsers have, such as `type_annotation` under `javascript`, is a rule file problem that names the language. Examples are read with the first parser the rule works in.
+
+ The Python, Go and Rust parsers are built into the binary. On first use, cagr writes them to `~/.cache/cagr/<version>/` (or `$XDG_CACHE_HOME/cagr/<version>/`, or `%LOCALAPPDATA%\cagr\<version>\` on Windows).
 
 ## When rules run
 
@@ -173,7 +177,7 @@ A rule only checks files whose extension its language reads. The Python, Go and 
 - In `cagr check <files...>`, and on every file in `cagr check --all`.
 - In `cagr ci`, on the branch's changed files.
 
-If a rule file has a problem (bad YAML, a missing field, a duplicate id), every rule check fails with one message that lists each problem, for example:
+If a rule file has a problem (bad YAML, a missing field, a duplicate id, a kind or regex ast-grep rejects), every rule check fails with one message that lists each problem, for example:
 
 ```
 Rule files have problems:
