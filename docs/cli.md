@@ -29,7 +29,7 @@ An option a command does not take is an error that lists the options it does tak
 | [`hook`](#hook)                           | Called by the agent hooks.                                            |
 | [`git`](#git)                             | Called by the git hooks.                                              |
 | [`post-status`](#post-status)             | Called by the pre-push hook: sends the GitHub commit statuses.        |
-| `help`                                    | Print the command list.                                               |
+| `help`                                    | Print the command list and the files cagr reads, `.cagr/` included. |
 | `version`, `--version`                    | Print the version.                                                    |
 
 ## init
