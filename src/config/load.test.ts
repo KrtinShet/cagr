@@ -171,3 +171,113 @@ describe("defaults", () => {
 		]);
 	});
 });
+
+describe("fragments in .cagr/", () => {
+	async function repo(files: Record<string, string>) {
+		const dir = await mkdtemp(join(tmpdir(), "gw-fragments-"));
+		for (const [path, text] of Object.entries(files)) {
+			await mkdir(join(dir, path, ".."), { recursive: true });
+			await writeFile(join(dir, path), text);
+		}
+		return dir;
+	}
+
+	test("every .cagr/**/*.toml joins cagr.toml, and lists of tables add up", async () => {
+		const dir = await repo({
+			"cagr.toml":
+				'extends = ["recommended"]\n[[files.protected]]\nglob = "a/**"\nreason = "A."\n',
+			".cagr/guards.toml":
+				'[[files.protected]]\nglob = "b/**"\nreason = "B."\n\n[[commands.blocked]]\nmatch = "db push"\nreason = "Migrate."\n',
+			".cagr/team/risk.toml":
+				'[[risk.paths]]\nglob = "src/auth/**"\ntier = "high"\n\n[review]\neffort = "deep"\n',
+			".cagr/rules/r.yml": "not: toml\n",
+		});
+		const config = loadConfig(dir);
+		expect(config?.files.protected.map((entry) => entry.glob)).toEqual([
+			".env*",
+			expect.stringContaining("bun.lock"),
+			"a/**",
+			"b/**",
+		]);
+		expect(config?.commands.blocked.map((entry) => entry.match)).toEqual([
+			"db push",
+		]);
+		expect(config?.risk.paths.map((entry) => entry.glob)).toContain(
+			"src/auth/**",
+		);
+		expect(config?.review.effort).toBe("deep");
+		expect(config?.review.enabled).toBe(true);
+		expect(config?.sources).toEqual([
+			join(dir, "cagr.toml"),
+			join(dir, ".cagr/guards.toml"),
+			join(dir, ".cagr/team/risk.toml"),
+		]);
+	});
+
+	test("a value set in two files is an error that names both", async () => {
+		const dir = await repo({
+			"cagr.toml": '[review]\neffort = "quick"\n',
+			".cagr/a.toml": '[git]\npre_push = ["x"]\n',
+			".cagr/b.toml": '[review]\neffort = "deep"\n[git]\npre_push = ["y"]\n',
+		});
+		const message = (() => {
+			try {
+				loadConfig(dir);
+				return "";
+			} catch (error) {
+				expect(error).toBeInstanceOf(ConfigError);
+				return (error as Error).message;
+			}
+		})();
+		expect(message).toContain(
+			`review.effort is set in both ${join(dir, "cagr.toml")} and ${join(dir, ".cagr/b.toml")}. Keep it in one of them.`,
+		);
+		expect(message).toContain(
+			`git.pre_push is set in both ${join(dir, ".cagr/a.toml")} and ${join(dir, ".cagr/b.toml")}.`,
+		);
+	});
+
+	test("a fragment is checked against the same schema, and the error names it", async () => {
+		const dir = await repo({
+			"cagr.toml": "",
+			".cagr/guards.toml": '[[commands.blocked]]\nmatch = "x"\n',
+		});
+		expect(() => loadConfig(dir)).toThrow(
+			`${join(dir, ".cagr/guards.toml")} has problems:\n  - commands.blocked[0].reason is required.`,
+		);
+		await writeFile(join(dir, ".cagr/guards.toml"), "[git]\nprotected_branch = \n");
+		expect(() => loadConfig(dir)).toThrow(
+			new RegExp(`${join(dir, ".cagr/guards.toml")}:\\d+:\\d+: not valid TOML`),
+		);
+	});
+
+	test("extends stays in cagr.toml; $schema may be in every file", async () => {
+		const dir = await repo({
+			"cagr.toml": '"$schema" = "./cagr.schema.json"\n',
+			".cagr/a.toml": '"$schema" = "../cagr.schema.json"\n',
+		});
+		expect(loadConfig(dir)?.sources).toHaveLength(2);
+		await writeFile(join(dir, ".cagr/a.toml"), 'extends = ["recommended"]\n');
+		expect(() => loadConfig(dir)).toThrow(
+			"sets extends. Presets are chosen in",
+		);
+	});
+
+	test("the review guide is .cagr/review.md, or REVIEW.md when only that exists", async () => {
+		const none = await repo({ "cagr.toml": "" });
+		expect(loadConfig(none)?.review.guide).toBe(".cagr/review.md");
+		const old = await repo({ "cagr.toml": "", "REVIEW.md": "x" });
+		expect(loadConfig(old)?.review.guide).toBe("REVIEW.md");
+		const both = await repo({
+			"cagr.toml": "",
+			"REVIEW.md": "x",
+			".cagr/review.md": "y",
+		});
+		expect(loadConfig(both)?.review.guide).toBe(".cagr/review.md");
+		const set = await repo({
+			"cagr.toml": '[review]\nguide = "docs/review.md"\n',
+			".cagr/review.md": "y",
+		});
+		expect(loadConfig(set)?.review.guide).toBe("docs/review.md");
+	});
+});

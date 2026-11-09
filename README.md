@@ -107,13 +107,13 @@ examples:
 
 ## Review
 
-`cagr review` reviews the branch against its base with a reviewer agent: Claude Code or Codex, whichever you run, started read-only in a fresh context. It reads `REVIEW.md` (what matters in this repo), the diff, the commit messages and the risk tier, and reads any other file it needs.
+`cagr review` reviews the branch against its base with a reviewer agent: Claude Code or Codex, whichever you run, started read-only in a fresh context. It reads the review guide, `.cagr/review.md` (what matters in this repo), the diff, the commit messages and the risk tier, and reads any other file it needs.
 
 - **Effort** sets the agents. `quick`: one bug finder. `standard`: a bug finder and a security finder, then a verifier that drops what it cannot confirm. `deep`: three finders and three verifiers, keeping a finding when two agree. A high-risk change gets `deep` unless you pass `--effort`.
 - **Findings** are Important, Nit or Pre-existing. Style findings are dropped. Only Important ones hold the gate.
 - **Rounds**: after round 1 the reviewer sees only the new commits and the open findings, marks what was fixed, and does not repeat itself. After `max_rounds` (3) it tells the author to step back.
 - **Answers**: a finding that is wrong or intentional gets an answer instead of a fix: `cagr review answer f2 --wrong "the list is never empty here"`. A person reads every answer. `review stats` shows rounds to pass and how often findings were answered as wrong, which is the reviewer's noise.
-- **Evals**: put past bugs in `.cagr/review-evals/*.toml` (a commit range and where the bug was, or `clean = true`). `review eval` scores the reviewer and compares with the last run, so a change to `REVIEW.md` or the model can be measured.
+- **Evals**: put past bugs in `.cagr/review-evals/*.toml` (a commit range and where the bug was, or `clean = true`). `review eval` scores the reviewer and compares with the last run, so a change to the review guide or the model can be measured.
 - **Fails open**: when the reviewer cannot run, the round is recorded as an error, and the gate lets the PR through and tells the human it went out unreviewed.
 
 ```toml

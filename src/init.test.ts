@@ -155,14 +155,40 @@ test("the generated JSON files go through the repo's on_edit commands", async ()
 	);
 });
 
-test("init writes a starter REVIEW.md and keeps one that exists", async () => {
+test("init writes a starter .cagr/review.md and keeps a REVIEW.md that exists", async () => {
 	const fresh = await project({ "package.json": "{}" });
 	const result = await init(fresh);
-	expect(result.written).toContain("REVIEW.md");
-	expect(await readFile(join(fresh, "REVIEW.md"), "utf8")).toContain(
+	expect(result.written).toContain(".cagr/review.md");
+	expect(await readFile(join(fresh, ".cagr/review.md"), "utf8")).toContain(
 		"## Always check",
 	);
 	const kept = await project({ "package.json": "{}", "REVIEW.md": "mine\n" });
-	expect((await init(kept)).written).not.toContain("REVIEW.md");
+	const again = await init(kept);
+	expect(again.written).not.toContain("REVIEW.md");
+	expect(again.written).not.toContain(".cagr/review.md");
 	expect(await readFile(join(kept, "REVIEW.md"), "utf8")).toBe("mine\n");
+});
+
+test("init keeps cagr.toml short and puts the lists in .cagr/", async () => {
+	const root = await project({ "package.json": "{}" });
+	const result = await init(root);
+	expect(result.written).toEqual(
+		expect.arrayContaining([".cagr/guards.toml", ".cagr/risk.toml"]),
+	);
+	const toml = await readFile(join(root, "cagr.toml"), "utf8");
+	for (const list of ["files.protected", "commands.blocked", "risk.paths"])
+		expect(toml).not.toContain(list);
+	expect(await readFile(join(root, ".cagr/guards.toml"), "utf8")).toContain(
+		"# [[commands.blocked]]",
+	);
+	expect(await readFile(join(root, ".cagr/risk.toml"), "utf8")).toContain(
+		"# [[risk.paths]]",
+	);
+	// A rerun with --force leaves the .cagr files a person may have filled in.
+	await writeFile(join(root, ".cagr/risk.toml"), "# mine\n");
+	const forced = await init(root, { force: true });
+	expect(forced.written).not.toContain(".cagr/risk.toml");
+	expect(await readFile(join(root, ".cagr/risk.toml"), "utf8")).toBe(
+		"# mine\n",
+	);
 });

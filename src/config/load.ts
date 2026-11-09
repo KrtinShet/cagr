@@ -60,6 +60,18 @@ export function loadConfig(
 	return resolveConfig(found.raw, dirname(found.file), found.file, resolvers);
 }
 
+/** The folder of config fragments and rules, at the repo root. */
+export const fragmentDir = ".cagr";
+
+/** Every TOML file in `.cagr/` under `root`, at any depth, sorted. */
+export function fragmentFiles(root: string): string[] {
+	const dir = join(root, fragmentDir);
+	if (!existsSync(dir)) return [];
+	return [...new Bun.Glob("**/*.toml").scanSync({ cwd: dir })]
+		.map((file) => join(dir, file))
+		.sort();
+}
+
 export function resolveConfig(
 	raw: RawConfig,
 	root: string,
@@ -67,8 +79,66 @@ export function resolveConfig(
 	resolvers: PresetResolver[] = [builtinResolver],
 ): Config {
 	validate(raw, source);
-	const merged = withPresets(raw, source, resolvers, []);
-	return applyDefaults(merged, root, source);
+	const { combined, sources } = withFragments(raw, root, source);
+	const merged = withPresets(combined, source, resolvers, []);
+	return applyDefaults(merged, root, source, sources);
+}
+
+/**
+ * Adds each TOML file in `.cagr/` to the config, in sorted order. Lists of tables
+ * add up, as with presets. Any other value may be set in one file only, so
+ * there is no question which one wins.
+ */
+function withFragments(
+	raw: RawConfig,
+	root: string,
+	source: string,
+): { combined: RawConfig; sources: string[] } {
+	const files = fragmentFiles(root);
+	const owners = new Map<string, string>();
+	const errors: string[] = [];
+	claim(raw, source, "", owners, errors);
+	let combined = raw;
+	for (const file of files) {
+		const { $schema: _, ...fragment } = parseToml(file);
+		validate(fragment, file);
+		if (fragment.extends !== undefined)
+			errors.push(
+				`${file} sets extends. Presets are chosen in ${source} only: move it there.`,
+			);
+		claim(fragment, file, "", owners, errors);
+		combined = merge(combined, fragment);
+	}
+	if (errors.length > 0)
+		throw new ConfigError(
+			`The config files disagree:\n${errors.map((error) => `  - ${error}`).join("\n")}`,
+		);
+	return { combined, sources: [source, ...files] };
+}
+
+/** Records which file set each value, and reports a value two files set. */
+function claim(
+	raw: RawConfig,
+	file: string,
+	prefix: string,
+	owners: Map<string, string>,
+	errors: string[],
+) {
+	for (const [key, value] of Object.entries(raw)) {
+		if (prefix === "" && (key === "$schema" || key === "extends")) continue;
+		const path = prefix === "" ? key : `${prefix}.${key}`;
+		if (isTable(value)) {
+			claim(value, file, path, owners, errors);
+			continue;
+		}
+		if (isTableList(value)) continue;
+		const other = owners.get(path);
+		if (other)
+			errors.push(
+				`${path} is set in both ${other} and ${file}. Keep it in one of them.`,
+			);
+		else owners.set(path, file);
+	}
 }
 
 function validate(raw: RawConfig, source: string) {
@@ -122,7 +192,12 @@ const isTable = (value: unknown): value is RawConfig =>
 const isTableList = (value: unknown): value is RawConfig[] =>
 	Array.isArray(value) && value.length > 0 && value.every(isTable);
 
-function applyDefaults(raw: RawConfig, root: string, source: string): Config {
+function applyDefaults(
+	raw: RawConfig,
+	root: string,
+	source: string,
+	sources: string[],
+): Config {
 	const agents = (raw.agents ?? {}) as RawConfig;
 	const git = (raw.git ?? {}) as RawConfig;
 	const files = (raw.files ?? {}) as RawConfig;
@@ -137,6 +212,7 @@ function applyDefaults(raw: RawConfig, root: string, source: string): Config {
 	return {
 		root,
 		source,
+		sources,
 		extends: (raw.extends as string[] | undefined) ?? [],
 		agents: {
 			enabled: (agents.enabled as AgentName[] | undefined) ?? [
@@ -205,7 +281,7 @@ function applyDefaults(raw: RawConfig, root: string, source: string): Config {
 			],
 			reviewer: (review.reviewer as string | undefined) ?? "auto",
 			model: (review.model as string | undefined) ?? null,
-			guide: (review.guide as string | undefined) ?? "REVIEW.md",
+			guide: (review.guide as string | undefined) ?? defaultGuide(root),
 			effort: (review.effort as Effort | undefined) ?? "standard",
 			security: (review.security as boolean | undefined) ?? true,
 			max_rounds: (review.max_rounds as number | undefined) ?? 3,
@@ -234,6 +310,15 @@ function applyDefaults(raw: RawConfig, root: string, source: string): Config {
 		},
 		brief: (raw.brief as string[] | undefined) ?? [],
 	};
+}
+
+/** `.cagr/review.md`, unless only a REVIEW.md exists. */
+function defaultGuide(root: string) {
+	const inFolder = `${fragmentDir}/review.md`;
+	return !existsSync(join(root, inFolder)) &&
+		existsSync(join(root, "REVIEW.md"))
+		? "REVIEW.md"
+		: inFolder;
 }
 
 function nameRule(value: unknown, types: string[]): NameRule | null {

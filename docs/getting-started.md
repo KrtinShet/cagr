@@ -79,14 +79,15 @@ The config it writes starts with `extends = ["recommended"]`. See [Configuration
 
 ### What `cagr init` writes
 
-| File                                                                                   | What it is                                                                          | Commit it? |
-| -------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- | ---------- |
-| `cagr.toml`                                                                            | The config.                                                                         | Yes        |
-| `.claude/settings.json`                                                                | Claude Code hooks (only if Claude Code is enabled).                                 | Yes        |
-| `.codex/hooks.json`                                                                    | Codex hooks (only if Codex is enabled).                                             | Yes        |
-| `.githooks/commit-msg`, `.githooks/pre-push`                                           | Git hooks.                                                                          | Yes        |
-| `REVIEW.md`                                                                            | A starter review guide, written only when review is on and the file does not exist. | Yes        |
-| `.github/workflows/cagr.yml`, `.github/pull_request_template.md`, `.github/CODEOWNERS` | Only when `[ci] github = true`. See [CI](ci.md).                                    | Yes        |
+| File                                                                                   | What it is                                                                                                                                                                | Commit it? |
+| -------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- |
+| `cagr.toml`                                                                            | The config: presets, the stack and single settings.                                                                                                                       | Yes        |
+| `.cagr/guards.toml`, `.cagr/risk.toml`                                                 | Starter lists, commented out: protected files, blocked commands and risk tiers. Written only when missing. See [Where config lives](configuration.md#where-config-lives). | Yes        |
+| `.claude/settings.json`                                                                | Claude Code hooks (only if Claude Code is enabled).                                                                                                                       | Yes        |
+| `.codex/hooks.json`                                                                    | Codex hooks (only if Codex is enabled).                                                                                                                                   | Yes        |
+| `.githooks/commit-msg`, `.githooks/pre-push`                                           | Git hooks.                                                                                                                                                                | Yes        |
+| `.cagr/review.md`                                                                      | A starter review guide, written only when review is on and no guide exists. An existing `REVIEW.md` is used instead.                                                      | Yes        |
+| `.github/workflows/cagr.yml`, `.github/pull_request_template.md`, `.github/CODEOWNERS` | Only when `[ci] github = true`. See [CI](ci.md).                                                                                                                          | Yes        |
 
 Then it runs your `on_edit` commands on the JSON files it wrote, so your formatter is happy with them, and sets `git config core.hooksPath .githooks`. If the folder is not a git repo, it writes the git hooks but does not set `core.hooksPath`. Run `cagr install-git-hooks` after `git init`.
 
@@ -102,7 +103,7 @@ Codex asks you to trust project hooks once. Open Codex in the repo and approve t
 
 `cagr doctor` prints one line per check, in these sections:
 
-- **Config**: the config and the code rules load.
+- **Config**: the config and the code rules load. An `Also config:` line lists the `.cagr/*.toml` fragments that joined `cagr.toml`.
 - **Wiring**: the generated files match the config, `core.hooksPath` points at the hooks folder, and the hooks are executable.
 - **Tools**: `cagr` is on `PATH`, and the program in every `on_edit`, `on_turn_end` and `pre_push` command can be found (including in `node_modules/.bin` and `.venv/bin`).
 - **Review** (when review is on): a reviewer agent is installed, and the guide and gate are set.
@@ -115,6 +116,6 @@ Each failing line says what to fix.
 ## Next steps
 
 - Read the brief your agent gets at the start of each session: it lists the rules in plain words.
-- Change `cagr.toml`, then run `cagr sync`. See [Configuration](configuration.md).
+- Change `cagr.toml` or the files in `.cagr/`, then run `cagr sync`. See [Configuration](configuration.md).
 - Add code rules in `.cagr/rules/`. See [Code rules](code-rules.md).
-- Fill in `REVIEW.md`. See [Review](review.md).
+- Fill in `.cagr/review.md`. See [Review](review.md).

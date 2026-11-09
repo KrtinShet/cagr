@@ -323,7 +323,7 @@
 				},
 				"guide": {
 					"type": "string",
-					"description": "The repo's review instructions, read into every review. Missing is fine."
+					"description": "The repo's review instructions, read into every review. Default: .cagr/review.md, or REVIEW.md when only that exists. Missing is fine."
 				},
 				"effort": {
 					"type": "string",

@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtemp } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { resolveConfig } from "./config/load";
+import { loadConfig, resolveConfig } from "./config/load";
 import { doctor, programsOf } from "./doctor";
 import { GitSetupError, installGitHooks, sync } from "./sync";
 
@@ -34,4 +34,19 @@ describe("doctor on a folder that is not a git repo", () => {
 		expect(report).toContain("Run `git init`, then `cagr install-git-hooks`.");
 		expect(installGitHooks(config)).rejects.toBeInstanceOf(GitSetupError);
 	});
+});
+
+test("doctor lists the .cagr files that add to the config", async () => {
+	const root = await mkdtemp(join(tmpdir(), "gw-doctor-"));
+	await mkdir(join(root, ".cagr"), { recursive: true });
+	await writeFile(join(root, "cagr.toml"), "");
+	await writeFile(
+		join(root, ".cagr/guards.toml"),
+		'[[commands.blocked]]\nmatch = "db push"\nreason = "Migrate."\n',
+	);
+	const config = loadConfig(root);
+	if (!config) throw new Error("no config");
+	const { report } = await doctor(config);
+	expect(report).toContain(`Config: ${join(root, "cagr.toml")}`);
+	expect(report).toContain("Also config: .cagr/guards.toml");
 });
