@@ -73,6 +73,13 @@ export function resolveConfig(
 
 function validate(raw: RawConfig, source: string) {
 	const errors: string[] = [];
+	if ("layout" in raw) {
+		const { layout: _, ...rest } = raw;
+		errors.push(
+			"[[layout]] moved out of the config, into rule files. Put each layout rule in a .cagr/rules/*.yml file, with its files, ignores, name and allowed under a `layout:` block and example paths under `examples:`, then delete [[layout]]. See https://github.com/KrtinShet/cagr/blob/main/docs/code-rules.md#layout-rules",
+		);
+		raw = rest;
+	}
 	configSchema.check(raw, "", errors);
 	if (errors.length > 0)
 		throw new ConfigError(
