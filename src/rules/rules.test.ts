@@ -317,7 +317,7 @@ examples:
 `,
 		});
 		await expect(testRules(loadRules(config))).rejects.toThrow(
-			'the rule does not work for javascript: Rule contains invalid kind matcher: Invalid Kind: Kind `type_annotation` is invalid. Drop javascript from "language", or split the rule.',
+			'the rule does not work for javascript: Rule contains invalid kind matcher: Invalid Kind: Kind `type_annotation` is invalid. Fix the rule, or drop javascript from "language", then run `cagr rules test`.',
 		);
 	});
 
@@ -331,4 +331,29 @@ examples:
 		});
 		expect(() => loadRules(config)).toThrow("or a list of them");
 	});
+});
+
+test("checking only .ts files does not load or judge the python parser", async () => {
+	// A fresh process, since an earlier test in this one may have registered python already.
+	const dir = await mkdtemp(join(tmpdir(), "gw-rules-"));
+	const script = join(dir, "run.ts");
+	await writeFile(
+		script,
+		`import { findInFiles, loadRules } from ${JSON.stringify(join(import.meta.dir, "rules.ts"))};
+import { resolveConfig } from ${JSON.stringify(join(import.meta.dir, "../config/load.ts"))};
+const root = ${JSON.stringify(dir)};
+const rules = loadRules(resolveConfig({}, root, "test.toml"));
+const findings = await findInFiles(rules, [root + "/a.ts"], root);
+console.log(JSON.stringify(findings.map((f) => f.path)));
+`,
+	);
+	await mkdir(join(dir, ".cagr/rules"), { recursive: true });
+	await writeFile(
+		join(dir, ".cagr/rules/a.yml"),
+		noConsole.replace("language: typescript", "language: [typescript, python]"),
+	);
+	await writeFile(join(dir, "a.ts"), "console.log(1);\n");
+	const result = Bun.spawnSync(["bun", script]);
+	expect(result.stderr.toString()).toBe("");
+	expect(result.stdout.toString().trim()).toBe('["a.ts"]');
 });
