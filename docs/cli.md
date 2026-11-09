@@ -22,7 +22,7 @@ An option a command does not take is an error that lists the options it does tak
 | [`review`](#review)                       | Review the branch with a reviewer agent.                              |
 | [`risk`](#risk)                           | The change's risk tier, the approvals it needs, and the owners.       |
 | [`ci`](#ci)                               | In CI: the checks the hooks ran, on the branch's changed files.       |
-| [`check`](#check)                         | Run the edit checks and code rules on files.                          |
+| [`check`](#check)                         | Run the edit checks and code rules on files, or every file (`--all`). |
 | [`explain`](#explain)                     | Explain a built-in guard, a code rule or a layout rule.               |
 | [`rules test`](#rules-test)               | Test every rule's examples.                                           |
 | [`schema`](#schema)                       | Print the JSON schema for `cagr.toml`.                                |
@@ -121,9 +121,12 @@ Runs the checks the hooks ran on the branch's changed files: generated files, br
 
 ```
 cagr check <files...>
+cagr check --all
 ```
 
 Runs the protected-file check, the `on_edit` commands, the code rules and the layout rules on the named files, outside an agent. Prints the problems and exits 1, or prints "No problems in N files." and exits 0. `on_edit` commands run for real, so formatters may change the files. See [Code rules](code-rules.md#cagr-check-files).
+
+With `--all`, it runs the code rules and layout rules over every file git tracks or would track, and skips the `on_edit` commands. See [Code rules](code-rules.md#cagr-check---all).
 
 ## explain
 
