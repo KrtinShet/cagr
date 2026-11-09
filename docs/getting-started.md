@@ -29,12 +29,12 @@ On Windows the script stops with a note. Download `cagr-windows-x64.exe` from th
 With a package manager, as a dev dependency:
 
 ```sh
-bun add -d cagr
+bun add -d @kslabs/cagr
 # or
-npm i -D cagr
+npm i -D @kslabs/cagr
 ```
 
-The `cagr` package is a small wrapper. It pulls in the binary for your system as an optional package named `cagr-<os>-<arch>`, or `cagr-linux-<arch>-musl` on musl. If you installed with `--no-optional` (or your package manager skipped optional packages), the wrapper cannot find the binary and says so. Reinstall without `--no-optional`, or use the install script.
+The `@kslabs/cagr` package is a small wrapper that puts the `cagr` command on your PATH. It pulls in the binary for your system as an optional package named `cagr-<os>-<arch>`, or `cagr-linux-<arch>-musl` on musl. If you installed with `--no-optional` (or your package manager skipped optional packages), the wrapper cannot find the binary and says so. Reinstall without `--no-optional`, or use the install script.
 
 ### Alpine and other musl systems
 

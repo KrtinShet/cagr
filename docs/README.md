@@ -14,7 +14,7 @@ cagr is a harness for coding agents. One `cagr.toml` sets the guardrails for Cla
 # Install the binary (macOS, Linux)
 curl -fsSL https://github.com/krtinshet/cagr/releases/latest/download/install.sh | sh
 # or add it to a JavaScript repo
-bun add -d cagr        # or: npm i -D cagr
+bun add -d @kslabs/cagr        # or: npm i -D @kslabs/cagr
 
 # Set up a repo
 cd your-repo
@@ -57,5 +57,6 @@ After you change the config, run `cagr sync` to rewrite the hook files. Every ke
 - [CI](ci.md): `cagr ci`, `cagr review --ci`, the generated workflow, PR template and CODEOWNERS, and `cagr doctor --github`.
 - [CLI reference](cli.md): every command and flag.
 - [Limits and troubleshooting](limits.md): what cagr is not, and what to do when something goes wrong.
+- [Releasing](releasing.md): how a new version gets to GitHub and npm, for maintainers.
 
-Source on [GitHub](https://github.com/krtinshet/cagr). Package on [npm](https://www.npmjs.com/package/cagr). MIT license.
+Source on [GitHub](https://github.com/krtinshet/cagr). Package on [npm](https://www.npmjs.com/package/@kslabs/cagr). MIT license.

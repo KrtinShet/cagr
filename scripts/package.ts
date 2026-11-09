@@ -1,5 +1,5 @@
 // Lays out what each channel publishes, from the binaries in dist/. Nothing is published.
-//   dist/npm/      the `cagr` wrapper and one cagr-* package per platform
+//   dist/npm/      the `@kslabs/cagr` wrapper and one cagr-* package per platform
 //   dist/wheels/   one py3-none-<platform> wheel per platform, binary in .data/scripts
 //   dist/release/  the bare binaries, SHA256SUMS and install.sh, for a GitHub release
 import {
@@ -53,6 +53,8 @@ for (const dir of ["npm", "wheels", "release"])
 const json = (value: unknown) => `${JSON.stringify(value, null, 2)}\n`;
 
 // npm
+// npm blocks the plain name `cagr` as too close to others, so the wrapper is scoped.
+const wrapperName = "@kslabs/cagr";
 const wrapper = join(dist, "npm", "cagr");
 mkdirSync(join(wrapper, "bin"), { recursive: true });
 copyFileSync(join(root, "packaging/npm/cagr.js"), join(wrapper, "bin/cagr.js"));
@@ -61,7 +63,7 @@ copyFileSync(join(root, "README.md"), join(wrapper, "README.md"));
 writeFileSync(
 	join(wrapper, "package.json"),
 	json({
-		name: "cagr",
+		name: wrapperName,
 		version,
 		description,
 		license,
@@ -77,6 +79,7 @@ writeFileSync(
 			"git-hooks",
 		],
 		bin: { cagr: "bin/cagr.js" },
+		publishConfig: { access: "public" },
 		files: ["bin"],
 		optionalDependencies: Object.fromEntries(
 			built.map((target) => [npmName(target), version]),
