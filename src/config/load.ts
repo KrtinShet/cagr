@@ -146,6 +146,7 @@ function applyDefaults(raw: RawConfig, root: string, source: string): Config {
 				"codex",
 			],
 			command: (agents.command as string | undefined) ?? "cagr",
+			nested_docs: (agents.nested_docs as boolean | undefined) ?? false,
 		},
 		git: {
 			protected_branch: (git.protected_branch as string | undefined) || null,

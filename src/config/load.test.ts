@@ -139,6 +139,7 @@ describe("defaults", () => {
 		expect(config.agents).toEqual({
 			enabled: ["claude", "codex"],
 			command: "cagr",
+			nested_docs: false,
 		});
 	});
 

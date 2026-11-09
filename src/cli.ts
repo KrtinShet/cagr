@@ -24,7 +24,13 @@ import { AnswerError } from "./review/report";
 import { ReviewInputError } from "./review/review";
 import { explainLayout } from "./rules/layout";
 import { loadRules, RuleError, testRules } from "./rules/rules";
-import { GitSetupError, installGitHooks, keptNotes, sync } from "./sync";
+import {
+	GitSetupError,
+	installGitHooks,
+	keptNotes,
+	SyncError,
+	sync,
+} from "./sync";
 import { version } from "./version";
 
 const help = `cagr ${version}: one config for every coding agent's guardrails.
@@ -318,6 +324,7 @@ async function main(argv: string[]): Promise<number> {
 const expected = (error: unknown) =>
 	error instanceof UsageError ||
 	error instanceof GitSetupError ||
+	error instanceof SyncError ||
 	error instanceof ConfigError ||
 	error instanceof RuleError ||
 	error instanceof ReviewInputError ||
