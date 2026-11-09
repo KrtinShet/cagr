@@ -21,9 +21,12 @@ export type Rule = {
 		utils?: unknown;
 		transform?: unknown;
 	};
-	examples: { invalid: string[]; valid: string[] };
+	examples: { invalid: CodeExample[]; valid: CodeExample[] };
 	source: string;
 };
+
+/** A snippet the rule is tested on. With a path, `files`, `ignores` and the path's parser apply. */
+export type CodeExample = { code: string; path: string | null };
 
 export type RuleFinding = {
 	rule: string;
@@ -169,15 +172,23 @@ function toRule(doc: unknown, file: string, problems: string[]): Rule | null {
 		problems.push(
 			`${where}: "rule" is required (an ast-grep rule, such as pattern: ...).`,
 		);
-	const examples = (raw.examples ?? {}) as Record<string, unknown>;
-	for (const kind of ["invalid", "valid"])
-		if (
-			!isStringList(examples[kind]) ||
-			(examples[kind] as string[]).length === 0
-		)
+	const rawExamples = (raw.examples ?? {}) as Record<string, unknown>;
+	const examples = { invalid: [] as CodeExample[], valid: [] as CodeExample[] };
+	for (const kind of ["invalid", "valid"] as const) {
+		const list = rawExamples[kind];
+		if (!Array.isArray(list) || list.length === 0) {
 			problems.push(
 				`${where}: "examples.${kind}" needs at least one code example.`,
 			);
+			continue;
+		}
+		for (const entry of list) {
+			const example = toExample(entry, ruleLanguages);
+			if (typeof example === "string")
+				problems.push(`${where}: "examples.${kind}" ${example}`);
+			else examples[kind].push(example);
+		}
+	}
 	for (const key of ["files", "ignores"])
 		if (raw[key] !== undefined && !isStringList(raw[key]))
 			problems.push(`${where}: "${key}" must be a list of globs.`);
@@ -196,12 +207,39 @@ function toRule(doc: unknown, file: string, problems: string[]): Rule | null {
 			...(raw.utils ? { utils: raw.utils } : {}),
 			...(raw.transform ? { transform: raw.transform } : {}),
 		},
-		examples: {
-			invalid: examples.invalid as string[],
-			valid: examples.valid as string[],
-		},
+		examples,
 		source: file,
 	};
+}
+
+/** One example, or what is wrong with it. */
+function toExample(
+	entry: unknown,
+	ruleLanguages: string[],
+): CodeExample | string {
+	if (typeof entry === "string") return { code: entry, path: null };
+	const shape =
+		"entries are code, or a mapping with path (repo-relative) and code.";
+	if (typeof entry !== "object" || entry === null || Array.isArray(entry))
+		return shape;
+	const { path, code, ...rest } = entry as Record<string, unknown>;
+	const extra = Object.keys(rest);
+	if (extra.length > 0) return `has "${extra[0]}": ${shape}`;
+	if (typeof path !== "string" || path === "" || typeof code !== "string")
+		return shape;
+	if (
+		path.startsWith("/") ||
+		path.includes("\\") ||
+		/^[A-Za-z]:/.test(path) ||
+		path.split("/").some((part) => part === "" || part === "." || part === "..")
+	)
+		return `path ${path} is not repo-relative, so files and ignores could never match it. Write it from the repo root with forward slashes, such as apps/web/src/a.ts.`;
+	if (
+		ruleLanguages.length > 0 &&
+		!ruleLanguages.some((language) => parserForFile(language, path))
+	)
+		return `path ${path}: no language of this rule reads that extension. Use a path its language reads, such as a .${Object.keys(languages[ruleLanguages[0] as string]?.extensions ?? {})[0] ?? "ts"} file.`;
+	return { code, path };
 }
 
 const isStringList = (value: unknown): value is string[] =>
@@ -377,6 +415,10 @@ export type ExampleResult = {
 	rule: string;
 	kind: "invalid" | "valid";
 	example: string;
+	/** The repo-relative path a code example is tested at, when it gives one. */
+	path?: string;
+	/** Why the rule did not run on the example, when it did not. */
+	skipped?: string;
 	ok: boolean;
 	matches: number;
 };
@@ -387,15 +429,33 @@ export async function testRules(rules: Rule[]): Promise<ExampleResult[]> {
 	compile(napi, new Map(rules.map((rule) => [rule, new Set(rule.languages)])));
 	const results: ExampleResult[] = [];
 	for (const rule of rules) {
-		// Examples are read as the first language, with the first parser the rule works in.
-		const parser = candidateParsers(rule).find((p) => works(rule, p)) as string;
+		const parsers = candidateParsers(rule).filter((p) => works(rule, p));
 		for (const kind of ["invalid", "valid"] as const)
-			for (const example of rule.examples[kind]) {
-				const count = matches(napi, rule, parser, example).length;
+			for (const { code, path } of rule.examples[kind]) {
+				// Without a path, an example is read with the first parser the rule works in.
+				// With one, it runs as the rule would run on that file, or not at all.
+				const parser = path
+					? ruleParserForFile(rule, path)?.parser
+					: parsers[0];
+				const skipped = !parser
+					? "no language of the rule reads it"
+					: !parsers.includes(parser)
+						? `the rule's kinds do not exist in the ${parser} parser, so it does not run on this file`
+						: path !== null && !appliesTo(rule, path)
+							? rule.ignores.some((glob) => matchesGlob(glob, path))
+								? "the path matches ignores, so the rule does not run on it"
+								: "the path is not in files, so the rule does not run on it"
+							: null;
+				const count =
+					parser && skipped === null
+						? matches(napi, rule, parser, code).length
+						: 0;
 				results.push({
 					rule: rule.id,
 					kind,
-					example,
+					example: code,
+					...(path ? { path } : {}),
+					...(skipped ? { skipped } : {}),
 					matches: count,
 					ok: kind === "invalid" ? count > 0 : count === 0,
 				});

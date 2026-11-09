@@ -25,7 +25,12 @@ import { AnswerError } from "./review/report";
 import { ReviewInputError } from "./review/review";
 import { postStatusAfterPush } from "./review/status";
 import { explainLayout, testLayoutRules } from "./rules/layout";
-import { loadRuleSet, RuleError, testRules } from "./rules/rules";
+import {
+	type CodeExample,
+	loadRuleSet,
+	RuleError,
+	testRules,
+} from "./rules/rules";
 import {
 	GitSetupError,
 	installGitHooks,
@@ -307,9 +312,9 @@ async function main(argv: string[]): Promise<number> {
 					...(rule.note ? [`Note: ${rule.note}`] : []),
 					"",
 					"Fires on:",
-					...rule.examples.invalid.map((example) => `  ${example}`),
+					...rule.examples.invalid.map(showExample),
 					"Allows:",
-					...rule.examples.valid.map((example) => `  ${example}`),
+					...rule.examples.valid.map(showExample),
 				].join("\n"),
 			);
 			return 0;
@@ -320,7 +325,7 @@ async function main(argv: string[]): Promise<number> {
 			const results = [...(await testRules(code)), ...testLayoutRules(layout)];
 			for (const result of results.filter((entry) => !entry.ok))
 				console.log(
-					`FAIL ${result.rule}: ${result.kind} example ${result.kind === "invalid" ? "did not fire" : `fired ${result.matches} time${result.matches === 1 ? "" : "s"}`}:\n  ${result.example.trim().replace(/\n/g, "\n  ")}`,
+					`FAIL ${result.rule}: ${result.kind} example${result.path ? ` at ${result.path}` : ""} ${result.kind === "invalid" ? `did not fire${result.skipped ? ` (${result.skipped})` : ""}` : `fired ${result.matches} time${result.matches === 1 ? "" : "s"}`}:\n  ${result.example.trim().replace(/\n/g, "\n  ")}`,
 				);
 			const failed = results.filter((entry) => !entry.ok).length;
 			console.log(
@@ -374,6 +379,9 @@ async function main(argv: string[]): Promise<number> {
 			throw new UsageError(`Unknown command "${command}".\n\n${help}`);
 	}
 }
+
+const showExample = (example: CodeExample) =>
+	`  ${example.path ? `${example.path}: ` : ""}${example.code.trim().replace(/\n/g, "\n  ")}`;
 
 const expected = (error: unknown) =>
 	error instanceof UsageError ||
