@@ -58,7 +58,7 @@ cagr.toml              extends, [git], [[stack]], [review] settings
   review.md            the review guide
 ```
 
-cagr reads every `*.toml` file under `.cagr/`, in any subfolder, as part of the config. Each one is a fragment with the same keys and tables as `cagr.toml`. The file names above are a convention only; split the config however suits the repo.
+cagr reads every `*.toml` file under `.cagr/`, in any subfolder, as part of the config. The one exception is `.cagr/review-evals/`, which holds [review evals](review.md#evals). Each one is a fragment with the same keys and tables as `cagr.toml`. The file names above are a convention only; split the config however suits the repo.
 
 How fragments join `cagr.toml`:
 

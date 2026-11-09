@@ -63,11 +63,18 @@ export function loadConfig(
 /** The folder of config fragments and rules, at the repo root. */
 export const fragmentDir = ".cagr";
 
-/** Every TOML file in `.cagr/` under `root`, at any depth, sorted. */
+/** Folders in `.cagr/` that hold TOML of another kind, not config. */
+const notConfig = ["review-evals/"];
+
+/** Every TOML file in `.cagr/` under `root`, at any depth, sorted, except the review evals. */
 export function fragmentFiles(root: string): string[] {
 	const dir = join(root, fragmentDir);
 	if (!existsSync(dir)) return [];
 	return [...new Bun.Glob("**/*.toml").scanSync({ cwd: dir })]
+		.filter((file) => {
+			const path = file.replaceAll("\\", "/");
+			return !notConfig.some((folder) => path.startsWith(folder));
+		})
 		.map((file) => join(dir, file))
 		.sort();
 }

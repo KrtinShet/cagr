@@ -173,6 +173,17 @@ describe("defaults", () => {
 });
 
 describe("fragments in .cagr/", () => {
+	test("review eval cases in .cagr/review-evals are not config", async () => {
+		const dir = await mkdtemp(join(tmpdir(), "gw-fragments-"));
+		await mkdir(join(dir, ".cagr/review-evals"), { recursive: true });
+		await writeFile(join(dir, "cagr.toml"), "");
+		await writeFile(
+			join(dir, ".cagr/review-evals/null-check.toml"),
+			'base = "abc"\nhead = "def"\nclean = true\n',
+		);
+		expect(loadConfig(dir)?.sources).toEqual([join(dir, "cagr.toml")]);
+	});
+
 	async function repo(files: Record<string, string>) {
 		const dir = await mkdtemp(join(tmpdir(), "gw-fragments-"));
 		for (const [path, text] of Object.entries(files)) {
@@ -245,7 +256,10 @@ describe("fragments in .cagr/", () => {
 		expect(() => loadConfig(dir)).toThrow(
 			`${join(dir, ".cagr/guards.toml")} has problems:\n  - commands.blocked[0].reason is required.`,
 		);
-		await writeFile(join(dir, ".cagr/guards.toml"), "[git]\nprotected_branch = \n");
+		await writeFile(
+			join(dir, ".cagr/guards.toml"),
+			"[git]\nprotected_branch = \n",
+		);
 		expect(() => loadConfig(dir)).toThrow(
 			new RegExp(`${join(dir, ".cagr/guards.toml")}:\\d+:\\d+: not valid TOML`),
 		);
