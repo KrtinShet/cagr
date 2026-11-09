@@ -6,6 +6,7 @@ import { insideRoot, matchesGlob } from "../paths";
 import {
 	crosses,
 	type ImportBoundary,
+	ImportConfigError,
 	importLanguages,
 	importMatcher,
 	resolveImport,
@@ -13,7 +14,6 @@ import {
 } from "./imports";
 import { languages, loadParsers, parserForFile } from "./languages";
 import { type LayoutRule, toLayoutRule } from "./layout";
-import { RuleError } from "./rule-error";
 
 export type Rule = {
 	id: string;
@@ -48,7 +48,7 @@ export type RuleFinding = {
 	instead: string;
 };
 
-export { RuleError } from "./rule-error";
+export class RuleError extends Error {}
 
 const allowedKeys = new Set([
 	"id",
@@ -467,7 +467,13 @@ function napiReason(error: unknown) {
 		.map((line) => line.replace(/[.:]$/, ""))
 		.join(": ");
 }
-type Match = { line: number; column: number; message: string };
+type Match = {
+	line: number;
+	column: number;
+	message: string;
+	/** In place of the rule's own instead, when the rule could not run. */
+	instead?: string;
+};
 
 /** Where the code being matched lives: the repo root, and the file's repo-relative path when there is one. */
 type At = { root: string; path: string | null };
@@ -485,7 +491,21 @@ function matches(
 		let message = rule.message;
 		if (rule.imports) {
 			const text = node.getMatch("SRC")?.text() ?? "";
-			const target = resolveImport(at.root, at.path, unquote(text));
+			let target: string;
+			try {
+				target = resolveImport(at.root, at.path, unquote(text));
+			} catch (error) {
+				if (!(error instanceof ImportConfigError)) throw error;
+				// Once per file: the other imports in it would say the same.
+				const start = node.range().start;
+				found.push({
+					line: start.line + 1,
+					column: start.column + 1,
+					message: `Could not check ${text}: ${error.reason}`,
+					instead: error.fix,
+				});
+				return found;
+			}
 			if (!crosses(rule.imports, target)) continue;
 			message = message.replace(/\$TARGET\b/g, target);
 		}
@@ -555,7 +575,7 @@ export async function findInFiles(
 				line: match.line,
 				column: match.column,
 				message: match.message,
-				instead: rule.instead,
+				instead: match.instead ?? rule.instead,
 			});
 	}
 	return findings;

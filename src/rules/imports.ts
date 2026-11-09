@@ -1,7 +1,21 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, normalize, posix, relative } from "node:path";
 import { toPosix } from "../paths";
-import { RuleError } from "./rule-error";
+
+/**
+ * A tsconfig or jsconfig an import rule needs and cannot read. It fails only
+ * that rule on that file, since the other rules do not depend on it.
+ */
+export class ImportConfigError extends Error {
+	constructor(
+		readonly reason: string,
+		readonly fix: string,
+	) {
+		super(`${reason} ${fix}`);
+	}
+}
+
+const fixFile = "Fix the file so import rules can resolve its paths.";
 
 /** An `imports:` block: the modules a rule's files may not import, by resolved path. */
 export type ImportBoundary = { forbid: string[]; allow: string[] };
@@ -122,13 +136,15 @@ function readOptions(
 		parsed = parseJsonc(readFileSync(file, "utf8"));
 	} catch (error) {
 		// Without its paths, alias imports would pass every boundary unchecked.
-		throw new RuleError(
-			`Import rules cannot read ${file}: ${(error as Error).message}. Fix the file so its paths can be resolved.`,
+		throw new ImportConfigError(
+			`Import rules cannot read ${file}: ${(error as Error).message}.`,
+			fixFile,
 		);
 	}
 	if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed))
-		throw new RuleError(
-			`Import rules cannot read ${file}: it is not a JSON object. Fix the file so its paths can be resolved.`,
+		throw new ImportConfigError(
+			`Import rules cannot read ${file}: it is not a JSON object.`,
+			fixFile,
 		);
 	const raw = parsed as {
 		extends?: unknown;
@@ -152,8 +168,9 @@ function readOptions(
 			}
 		});
 		if (!found)
-			throw new RuleError(
-				`Import rules cannot read ${file}: it extends ${parent}, which does not exist. Fix "extends" so its paths can be resolved.`,
+			throw new ImportConfigError(
+				`Import rules cannot read ${file}: it extends ${parent}, which does not exist.`,
+				'If a framework generates that file, run its sync or prepare step (such as `svelte-kit sync` or `nuxi prepare`). Otherwise fix "extends".',
 			);
 		options = { ...options, ...readOptions(found, seen) };
 	}

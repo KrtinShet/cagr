@@ -3,7 +3,12 @@ import { mkdir, mkdtemp, realpath, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { resolveConfig } from "../config/load";
-import { crosses, parseJsonc, resolveImport } from "./imports";
+import {
+	crosses,
+	ImportConfigError,
+	parseJsonc,
+	resolveImport,
+} from "./imports";
 import {
 	findInFiles,
 	formatFinding,
@@ -89,7 +94,9 @@ describe("resolveImport", () => {
 	test("a tsconfig that cannot be read is a rule problem, not a silent skip", async () => {
 		for (const text of ["{ nope", "null", "[]"]) {
 			const { root } = await repo({ "tsconfig.json": text });
-			expect(() => resolveImport(root, "src/a.ts", "@/x")).toThrow(RuleError);
+			expect(() => resolveImport(root, "src/a.ts", "@/x")).toThrow(
+				ImportConfigError,
+			);
 			expect(() => resolveImport(root, "src/a.ts", "@/x")).toThrow(
 				"Import rules cannot read",
 			);
@@ -254,4 +261,36 @@ describe("imports rules", () => {
 		expect(message).toContain('"imports.except" is not an imports key');
 		expect(message).toContain('(b): "imports.forbid" is required');
 	});
+});
+
+test("a generated tsconfig that is missing fails only the import rule, and says to generate it", async () => {
+	const { root, config } = await repo({
+		...files,
+		"apps/web/tsconfig.json": '{ "extends": "./.svelte-kit/tsconfig.json" }',
+		".cagr/rules/a.yml": boundaryRule,
+		".cagr/rules/b.yml": `id: no-console
+language: typescript
+message: console.log in app code.
+instead: Use the logger.
+rule: { pattern: console.log($$$A) }
+examples:
+  invalid: ["console.log(1)"]
+  valid: ["log(1)"]
+`,
+		"apps/web/src/components/card.tsx":
+			'import { a } from "@/server/db";\nimport { b } from "@/server/x";\nconsole.log(1);\n',
+	});
+	const findings = await findInFiles(
+		loadRules(config),
+		[join(root, "apps/web/src/components/card.tsx")],
+		root,
+	);
+	expect(findings.map((f) => [f.rule, f.line])).toEqual([
+		["components-stay-generic", 1],
+		["no-console", 3],
+	]);
+	expect(findings[0]?.message).toContain(
+		'Could not check "@/server/db": Import rules cannot read',
+	);
+	expect(findings[0]?.instead).toContain("run its sync or prepare step");
 });
