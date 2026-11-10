@@ -3,10 +3,13 @@ import {
 	constants,
 	fstatSync,
 	lstatSync,
+	mkdtempSync,
 	openSync,
 	readFileSync,
 	readlinkSync,
+	rmSync,
 } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Config } from "../config/schema";
 import { loadRuleSet } from "../rules/rules";
@@ -25,19 +28,29 @@ export async function collect(
 	options: { base?: string; committed?: boolean; deadline?: number } = {},
 ): Promise<Snapshot> {
 	const deadline = options.deadline ?? performance.now() + 15_000;
-	const git = async (...args: string[]) => {
+	let temporaryIndex: string | undefined;
+	const execute = async (args: string[], stdin?: string) => {
 		if (performance.now() >= deadline)
 			throw Error("collection deadline exceeded");
-		const result = await run(["git", ...args], config.root, {
-			timeoutMs: Math.max(1, Math.floor(deadline - performance.now())),
-			env: { GIT_OPTIONAL_LOCKS: "0" },
-		});
+		const result = await run(
+			["git", "-c", "core.filemode=true", ...args],
+			config.root,
+			{
+				timeoutMs: Math.max(1, Math.floor(deadline - performance.now())),
+				stdin,
+				env: {
+					GIT_OPTIONAL_LOCKS: "0",
+					...(temporaryIndex ? { GIT_INDEX_FILE: temporaryIndex } : {}),
+				},
+			},
+		);
 		if (!result.ok)
 			throw Error(`git ${args[0]} failed: ${result.output.trim()}`);
 		if (result.stdout.length > 8_000_000)
 			throw Error("Git output exceeds 8 MB");
 		return result.stdout;
 	};
+	const git = (...args: string[]) => execute(args);
 	const name = options.base || config.git.protected_branch || "main";
 	let target: string;
 	try {
@@ -60,75 +73,95 @@ export async function collect(
 	const snapshot = async () => {
 		if ((await git("ls-files", "--unmerged", "-z")).length)
 			throw Error("resolve unmerged index entries first");
-		const raw = (
-			await git(
-				"diff",
-				"--raw",
-				"--no-abbrev",
-				"--no-renames",
-				"--no-ext-diff",
-				"--no-textconv",
-				"-z",
-				base,
-				...(options.committed ? [head] : []),
-				"--",
-			)
-		).split("\0");
-		const changes: Change[] = [];
-		const identities: string[] = [];
-		for (let i = 0; i < raw.length - 1; i += 2) {
-			const fields = (raw[i] ?? "").split(" ");
-			const path = raw[i + 1] ?? "";
-			const status = fields[4] as Change["status"];
-			if (!["A", "M", "D", "T"].includes(status))
-				throw Error(`unsupported Git status ${status}`);
-			changes.push({ path, status, regular: fields[1]?.startsWith("100") });
-			identities.push(raw[i] ?? "", path);
-		}
-		if (!options.committed) {
-			const known = new Set(changes.map((change) => change.path));
-			for (const path of (
-				await git("ls-files", "--others", "--exclude-standard", "-z")
-			)
-				.split("\0")
-				.filter(Boolean))
-				if (!known.has(path)) changes.push({ path, status: "A" });
-			for (const change of changes) {
-				if (performance.now() >= deadline)
-					throw Error("collection deadline exceeded");
-				if (change.status === "D") continue;
-				const path = join(config.root, change.path);
-				const stat = lstatSync(path);
-				change.regular = stat.isFile();
-				if (stat.isFile()) {
-					if (stat.size > 32_000_000)
-						throw Error("changed file exceeds the 32 MB snapshot limit");
-					const descriptor = openSync(
-						path,
-						constants.O_RDONLY | constants.O_NOFOLLOW,
-					);
-					try {
-						const opened = fstatSync(descriptor);
-						if (!opened.isFile() || opened.size > 32_000_000)
-							throw Error("file changed during snapshot");
-						identities.push(
-							String(opened.mode),
-							new Bun.CryptoHasher("sha256")
-								.update(readFileSync(descriptor))
-								.digest("hex"),
-						);
-					} finally {
-						closeSync(descriptor);
-					}
-				} else
-					identities.push(
-						String(stat.mode),
-						stat.isSymbolicLink() ? readlinkSync(path) : String(stat.mtimeMs),
-					);
+		const scratch = options.committed
+			? null
+			: mkdtempSync(join(tmpdir(), "cagr-snapshot-"));
+		try {
+			if (scratch) {
+				const tracked = await git("ls-files", "--stage", "--full-name", "-z");
+				temporaryIndex = join(scratch, "index");
+				await git("read-tree", "--empty");
+				await execute(["update-index", "-z", "--index-info"], tracked);
 			}
+			const raw = (
+				await git(
+					"diff",
+					"--raw",
+					"--numstat",
+					"--relative",
+					"--ignore-submodules=none",
+					"--no-abbrev",
+					"--no-renames",
+					"--no-ext-diff",
+					"--no-textconv",
+					"-z",
+					base,
+					...(options.committed ? [head] : []),
+					"--",
+				)
+			).split("\0");
+			const changes: Change[] = [];
+			const identities: string[] = [];
+			for (let i = 0; i < raw.length - 1; i += 2) {
+				if (!raw[i]?.startsWith(":")) break;
+				const fields = (raw[i] ?? "").split(" ");
+				const path = raw[i + 1] ?? "";
+				const status = fields[4] as Change["status"];
+				if (!["A", "M", "D", "T"].includes(status))
+					throw Error(`unsupported Git status ${status}`);
+				changes.push({ path, status, regular: fields[1]?.startsWith("100") });
+				identities.push(raw[i] ?? "", path);
+			}
+			if (!options.committed) {
+				const known = new Set(changes.map((change) => change.path));
+				for (const path of (
+					await git("ls-files", "--others", "--exclude-standard", "-z")
+				)
+					.split("\0")
+					.filter(Boolean))
+					if (!known.has(path)) changes.push({ path, status: "A" });
+				for (const change of changes) {
+					if (performance.now() >= deadline)
+						throw Error("collection deadline exceeded");
+					if (change.status === "D") continue;
+					const path = join(config.root, change.path);
+					const stat = lstatSync(path);
+					change.regular = stat.isFile();
+					if (stat.isFile()) {
+						if (stat.size > 32_000_000)
+							throw Error("changed file exceeds the 32 MB snapshot limit");
+						const descriptor = openSync(
+							path,
+							constants.O_RDONLY | constants.O_NOFOLLOW,
+						);
+						try {
+							const opened = fstatSync(descriptor);
+							if (!opened.isFile() || opened.size > 32_000_000)
+								throw Error("file changed during snapshot");
+							const content = readFileSync(descriptor);
+							identities.push(
+								String(opened.mode),
+								new Bun.CryptoHasher("sha256").update(content).digest("hex"),
+							);
+						} finally {
+							closeSync(descriptor);
+						}
+					} else
+						identities.push(
+							String(stat.mode),
+							stat.isSymbolicLink() ? readlinkSync(path) : String(stat.mtimeMs),
+						);
+				}
+			}
+			if (changes.length > 20_000) throw Error("change exceeds 20000 paths");
+			return {
+				changes,
+				fingerprint: JSON.stringify([identities, changes]),
+			};
+		} finally {
+			temporaryIndex = undefined;
+			if (scratch) rmSync(scratch, { recursive: true, force: true });
 		}
-		if (changes.length > 20_000) throw Error("change exceeds 20000 paths");
-		return { changes, fingerprint: JSON.stringify([identities, changes]) };
 	};
 	for (let attempt = 0; attempt < 2; attempt++) {
 		const first = await snapshot();

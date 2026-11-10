@@ -376,7 +376,7 @@ async function ruleChecks(
 }
 
 async function turnEnd(input: HookInput, config: Config): Promise<Decision> {
-	const deadline = performance.now() + 55_000;
+	const deadline = performance.now() + Math.min(timeouts.onTurnEndMs, 55_000);
 	const file = stateFile(input.sessionId);
 	const state = await readTurnState(file);
 	if (!needsCheck(state, config.root) && !config.changes.rules.length)
@@ -399,6 +399,7 @@ async function turnEnd(input: HookInput, config: Config): Promise<Decision> {
 				...new Set([...(commands.get(command) ?? []), ...present]),
 			]);
 	}
+	let commandTimedOut = false;
 	const checks = [...commands]
 		.filter(
 			([command, paths]) => !command.includes("{files}") || paths.length > 0,
@@ -408,9 +409,10 @@ async function turnEnd(input: HookInput, config: Config): Promise<Decision> {
 				timeoutMs: Math.max(1, Math.floor(deadline - performance.now())),
 			});
 			timings.push({ event: "turn.end", check: command, ms: result.ms });
+			if (result.timedOut) commandTimedOut = true;
 			return {
 				name: `\`${command}\``,
-				ok: result.ok,
+				ok: result.ok || result.timedOut,
 				output: tidy(focusOnChanged(result.output, paths)),
 			};
 		});
@@ -452,27 +454,34 @@ async function turnEnd(input: HookInput, config: Config): Promise<Decision> {
 	if (rules) results.push(rules);
 	if (layout) results.push(layout);
 	recordTimings(config.root, timings);
+	const uncheckedNotice = [
+		changeResult?.unchecked ? changeResult.output : "",
+		commandTimedOut || rulesTimedOut
+			? "Unchecked: turn-end checks exceeded the whole-hook deadline. Run the configured checks and cagr rules check before merging."
+			: "",
+	]
+		.filter(Boolean)
+		.join("\n");
 	const decision = stopDecision(state, results);
 	if (decision.action === "block") {
 		await writeTurnState(file, {
 			...state,
 			failedStops: state.failedStops + 1,
 		});
-		return { kind: "block", reason: decision.reason };
+		return {
+			kind: "block",
+			reason: decision.reason,
+			...(uncheckedNotice ? { notice: uncheckedNotice } : {}),
+		};
 	}
 	await clearTurnState(file);
 	if (decision.action === "give-up")
 		return {
 			kind: "allow",
-			notice: `cagr: ${decision.message} The agent was let go so it does not loop. Run the checks yourself before you merge.`,
-		};
-	if (rulesTimedOut)
-		return {
-			kind: "allow",
 			notice:
-				"Unchecked: turn-end rule checks exceeded the whole-hook deadline. Run cagr check --all and cagr rules check before merging.",
+				`cagr: ${decision.message} The agent was let go so it does not loop. Run the checks yourself before you merge. ${uncheckedNotice}`.trim(),
 		};
-	return changeResult?.unchecked
-		? { kind: "allow", notice: changeResult.output }
+	return uncheckedNotice
+		? { kind: "allow", notice: uncheckedNotice }
 		: { kind: "allow" };
 }

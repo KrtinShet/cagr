@@ -77,7 +77,10 @@ claim that this session authored every change. Staging is not a second endpoint:
 staged content reverted in the working tree cannot satisfy an obligation.
 Pending staged content is reported separately. CI uses merge base to HEAD only,
 evaluates before formatters, and rejects dirty checkouts and a checkout that does
-not equal the PR event head SHA. Collection never writes the index or refs.
+not equal the PR event head SHA. Collection rebuilds a temporary index from staged
+identities to avoid cached timestamps and index flags hiding edits. It never
+writes the user's index or refs, and reads changed regular files without following
+symlinks.
 
 Local base selection is `--base`, `git.protected_branch`, then `main`. CI also
 uses nonempty `GITHUB_BASE_REF` before the configured branch. Resolution tries
@@ -92,7 +95,8 @@ violations block two stops, then allow with a human notice. Commands and CI exit
 nonzero on unchecked results or findings. Turn checks share a 55 second deadline,
 leaving time under the 60 second budget for output and state. Collection retries
 one race, caps Git output at 8 MB, changed paths at 20000, changed regular files
-at 32 MB each, and rules at 1000. Output limits retain complete fixes.
+at 32 MB each, rules at 1000, and evaluation at two million glob comparisons.
+Output limits retain complete fixes.
 
 Co-change proves that a companion changed, not that it is correct. This repo's
 schema equality test verifies the generated schema separately. A matching test

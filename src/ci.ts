@@ -1,5 +1,5 @@
 import { appendFileSync, existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, relative, resolve } from "node:path";
 import { checkChanges } from "./changes/check";
 import type { Config } from "./config/schema";
 import { gitContext } from "./git";
@@ -54,7 +54,7 @@ export async function ci(
 ): Promise<CiResult> {
 	const env = options.env ?? process.env;
 	const git = await gitContext(options.cwd);
-	const cwd = git.toplevel ?? options.cwd;
+	const cwd = config.root;
 	const baseName =
 		// Actions sets GITHUB_BASE_REF to "" outside pull requests, as on merge_group.
 		options.base ||
@@ -94,18 +94,26 @@ export async function ci(
 		),
 	);
 	if (env.GITHUB_EVENT_PATH) {
-		const event = JSON.parse(readFileSync(env.GITHUB_EVENT_PATH, "utf8")) as {
-			pull_request?: { head: { sha: string } };
-		};
-		if (
-			event.pull_request &&
-			event.pull_request.head?.sha !== changeResult.snapshot.head
-		)
+		try {
+			const event = JSON.parse(readFileSync(env.GITHUB_EVENT_PATH, "utf8")) as {
+				pull_request?: { head: { sha: string } };
+			};
+			if (
+				event.pull_request &&
+				event.pull_request.head?.sha !== changeResult.snapshot.head
+			)
+				checks.push(
+					check("PR head", [
+						"Check out the exact pull request head SHA and rerun cagr ci.",
+					]),
+				);
+		} catch {
 			checks.push(
 				check("PR head", [
-					"Check out the exact pull request head SHA and rerun cagr ci.",
+					"Unchecked: could not read the GitHub event. Restore readable valid event JSON and rerun cagr ci.",
 				]),
 			);
+		}
 	}
 	try {
 		const suppressions = await checkSuppressions(
@@ -281,6 +289,14 @@ export async function ci(
 				"Checks changed the checkout. Commit fixes and rerun cagr ci from a clean checkout.",
 			]),
 		);
+	for (const entry of checks)
+		for (const note of entry.annotations) {
+			if (note.file)
+				note.file = relative(
+					git.toplevel ?? config.root,
+					resolve(config.root, note.file),
+				).replaceAll("\\", "/");
+		}
 	return { ok: checks.every((entry) => entry.ok), checks, tier: risk.tier };
 }
 

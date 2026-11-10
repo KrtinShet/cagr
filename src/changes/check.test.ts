@@ -163,3 +163,133 @@ test("conflicts, shallow history and multiple merge bases are unchecked", async 
 	await repo.git("merge", "main").catch(() => {});
 	expect((await checkChanges(config)).output).toContain("unmerged");
 });
+
+test("mode changes and index flags cannot hide working-tree content; real index stays unchanged", async () => {
+	const { repo, config } = await setup();
+	await repo.git("config", "core.filemode", "false");
+	await repo.git("update-index", "--assume-unchanged", "src/a.ts");
+	await repo.git("update-index", "--skip-worktree", "schema.json");
+	await repo.write("src/a.ts", "new");
+	await repo.write("schema.json", "new");
+	chmodSync(join(repo.root, "migrations/old.sql"), 0o755);
+	const index = readFileSync(join(repo.root, ".git/index"));
+	const changes = (await collect(config)).changes;
+	expect(changes.some((c) => c.path === "src/a.ts" && c.status === "M")).toBe(
+		true,
+	);
+	expect(
+		changes.some((c) => c.path === "schema.json" && c.status === "M"),
+	).toBe(true);
+	expect(
+		changes.some((c) => c.path === "migrations/old.sql" && c.status === "M"),
+	).toBe(true);
+	expect(readFileSync(join(repo.root, ".git/index"))).toEqual(index);
+});
+
+test("nested config uses one path root for tracked and untracked inputs and CI commands", async () => {
+	const { repo } = await setup();
+	await repo.commit("chore: nested", {
+		"app/cagr.toml": "",
+		"app/src/a.ts": "old",
+		"app/schema.json": "old",
+	});
+	await repo.git("branch", "-f", "main", "HEAD");
+	const config = resolveConfig(
+		{ stack: [{ language: "typescript", on_turn_end: ["test -f src/a.ts"] }] },
+		join(repo.root, "app"),
+		join(repo.root, "app/cagr.toml"),
+	);
+	config.changes.rules = [rule()];
+	await repo.commit("feat: nested source", { "app/src/a.ts": "new" });
+	await repo.write("app/schema.json", "new");
+	expect((await collect(config)).changes.map((c) => c.path).sort()).toEqual([
+		"schema.json",
+		"src/a.ts",
+	]);
+	expect((await checkChanges(config)).ok).toBe(true);
+	await repo.commit("feat: nested companion", {});
+	const result = await ci(config, { cwd: repo.root, env: {} });
+	expect(result.checks.find((c) => c.name === "Change rules")?.ok).toBe(true);
+	expect(result.checks.find((c) => c.name === "Checks")?.ok).toBe(true);
+});
+
+test("unreadable and malformed event JSON produce an unchecked CI check", async () => {
+	const { repo, config } = await setup();
+	for (const path of [
+		join(repo.root, "missing-event.json"),
+		join(repo.root, "event.json"),
+	]) {
+		if (path.endsWith("/event.json"))
+			await repo.write("event.json", "not json");
+		const result = await ci(config, {
+			cwd: repo.root,
+			env: { GITHUB_EVENT_PATH: path },
+		});
+		expect(result.ok).toBe(false);
+		expect(result.checks.find((c) => c.name === "PR head")?.output).toContain(
+			"Unchecked",
+		);
+	}
+});
+
+test("collection retries one race, and repeated races are unchecked", async () => {
+	const runner = await import("../run");
+	const { spyOn } = await import("bun:test");
+	const { repo, config } = await setup();
+	await repo.write("src/a.ts", "changed");
+	const original = runner.run;
+	for (const persistent of [false, true]) {
+		let diffs = 0;
+		const spy = spyOn(runner, "run").mockImplementation(
+			async (argv, cwd, options) => {
+				const result = await original(argv, cwd, options);
+				if (cwd === repo.root && argv.includes("--numstat")) {
+					diffs++;
+					if (persistent || diffs === 2)
+						await repo.write("src/a.ts", `content ${diffs}`);
+				}
+				return result;
+			},
+		);
+		try {
+			const result = await checkChanges(config);
+			expect(diffs).toBe(4);
+			expect(result.unchecked).toBe(persistent);
+		} finally {
+			spy.mockRestore();
+		}
+	}
+});
+
+test("turn commands share the deadline and a timeout is visibly unchecked", async () => {
+	const { repo, config } = await setup();
+	config.changes.rules = [];
+	config.stack = [
+		{
+			language: "typescript",
+			package_manager: "bun",
+			paths: ["**"],
+			extensions: ["ts"],
+			on_edit: [],
+			on_turn_end: ["bun -e 'await Bun.sleep(1000)'"],
+		},
+	];
+	const { timeouts } = await import("../hook/handlers");
+	const original = timeouts.onTurnEndMs;
+	timeouts.onTurnEndMs = 30;
+	const input = {
+		event: "file.after_edit" as const,
+		sessionId: crypto.randomUUID(),
+		cwd: repo.root,
+		command: null,
+		files: [join(repo.root, "src/a.ts")],
+	};
+	try {
+		await handle(input, config);
+		const result = await handle({ ...input, event: "turn.end" }, config);
+		expect(result.kind).toBe("allow");
+		expect("notice" in result && result.notice).toContain("Unchecked");
+	} finally {
+		timeouts.onTurnEndMs = original;
+	}
+});

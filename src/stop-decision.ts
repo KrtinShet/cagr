@@ -39,7 +39,7 @@ export function stopDecision(
 		.join("\n\n");
 	return {
 		action: "block",
-		reason: `You changed code this turn and ${names} failed. Fix these before finishing.\n\n${details}`,
+		reason: `${failures.some((failure) => failure.name === "Change rules") ? "The branch change was checked" : "You changed code this turn"} and ${names} failed. Fix these before finishing.\n\n${details}`,
 	};
 }
 
