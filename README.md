@@ -1,6 +1,6 @@
 # cagr
 
-One config for every coding agent's guardrails, in every language.
+cagr checks what a coding agent does (its commands, edits, stops and pull requests) and makes it run and obey your linters.
 
 Coding agents slip. They run `npm install` in a bun repo, push to `main`, edit `.env`, skip hooks with `--no-verify`, and stop while the type check is still red. cagr watches what the agent does and stops each slip at the earliest moment it can see it. Every block message says what to do instead, so the agent fixes it on the next try.
 
@@ -15,10 +15,15 @@ cagr does not replace your tools. It runs them at the right moment and shows the
 
 It works with Claude Code and Codex today, and through the git hooks with every other agent.
 
+## How it differs from a linter
+
+A linter checks code. cagr checks what a coding agent does (its commands, edits, stops and pull requests) and makes it run and obey your linters. Most agent slips (`npm install` in a bun repo, a push to `main`, `--no-verify`, an edit to `.env`, stopping while `tsc` is red) leave nothing in the code for a linter to find. Where a linter does help, cagr runs it at the moment the agent can act on it: on the changed file right after the edit, and again before the agent may finish. It also differs from pre-commit hooks (too late, and skippable), CI (minutes later, in a log the agent may not read) and AGENTS.md (advice the agent can forget). [How cagr differs](docs/compared.md) has the full comparison.
+
 ## Docs
 
 The full docs are at [krtinshet.github.io/cagr](https://krtinshet.github.io/cagr/), and in [docs/](docs/README.md):
 
+- [How cagr differs](docs/compared.md): from linters, pre-commit hooks, CI, AGENTS.md, review bots and sandboxes.
 - [Getting started](docs/getting-started.md): install, `cagr init`, `cagr doctor`.
 - [Configuration](docs/configuration.md): every key in `cagr.toml`.
 - [Guards](docs/guards.md): every built-in guard and its message.

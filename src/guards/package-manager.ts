@@ -43,6 +43,33 @@ export function ecosystemOf(manager: PackageManager) {
 	return ecosystems.find((ecosystem) => manager in ecosystem.managers);
 }
 
+export function packageManagerSummary(config: Config): string | null {
+	const summaries = ecosystems.flatMap((ecosystem) => {
+		const chosen = [
+			...new Set(
+				config.stack
+					.map((stack) => stack.package_manager)
+					.filter(
+						(manager): manager is PackageManager =>
+							manager !== null && manager in ecosystem.managers,
+					),
+			),
+		];
+		if (chosen.length === 0) return [];
+		const allowed = chosen.flatMap(
+			(manager) => ecosystem.managers[manager] ?? [],
+		);
+		const denied = Object.values(ecosystem.managers)
+			.flat()
+			.filter((program) => !allowed.includes(program));
+		if (denied.length === 0) return [];
+		return [
+			`${denied.join(", ")} (use ${chosen.join(" or ")} for ${ecosystem.name})`,
+		];
+	});
+	return summaries.join("; ") || null;
+}
+
 /** The program a command runs, as a package manager sees it: `python -m pip` is pip. */
 function programName(words: string[]) {
 	const first = basename(words[0] ?? "").replace(/\.exe$/i, "");

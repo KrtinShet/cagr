@@ -3,6 +3,7 @@ import { join, relative } from "node:path";
 import type { Config } from "./config/schema";
 import { githubLines } from "./doctor-github";
 import { gitHookNames } from "./git-hooks";
+import { configuredGuards } from "./guards/catalog";
 import { readTimings } from "./hook/timings";
 import { toPosix } from "./paths";
 import { pickAgent } from "./review/agent";
@@ -95,6 +96,13 @@ export async function doctor(
 		configLines.push({ ok: false, text: (error as Error).message });
 	}
 	sections.push(["Config", configLines]);
+	sections.push([
+		"Guards",
+		configuredGuards(config).map((guard) => ({
+			ok: true,
+			text: `${guard.id}: ${guard.summary ?? `off (configure ${guard.config})`}`,
+		})),
+	]);
 
 	const wiring: Line[] = [];
 	try {

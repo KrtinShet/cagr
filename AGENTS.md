@@ -1,3 +1,5 @@
+cagr checks what a coding agent does (its commands, edits, stops and pull requests) and makes it run and obey your linters.
+
 # AGENTS.md
 
 cagr: a harness for coding agents. TypeScript on Bun, shipped as one compiled binary.

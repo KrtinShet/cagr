@@ -206,3 +206,72 @@ test("init --force keeps the old cagr.toml when the new one clashes with .cagr/"
 	);
 	expect(await readFile(join(dir, "cagr.toml"), "utf8")).toBe("# old\n");
 });
+
+test("init and dry-run describe resolved guards and commands, including fragments", async () => {
+	const root = await project({
+		"package.json":
+			'{"packageManager":"bun@1","scripts":{"lint":"x","typecheck":"x"}}',
+		"biome.json": "{}",
+		"tsconfig.json": "{}",
+		".cagr/custom.toml":
+			'[git]\nblock_force_push = false\n[[commands.blocked]]\nmatch = "db push"\nreason = "Migrate instead."\n',
+	});
+	const preview = await init(root, { dryRun: true });
+	expect(await Bun.file(join(root, "cagr.toml")).exists()).toBe(false);
+	expect(preview.enforcement).toContain(
+		"npm, npx, pnpm, pnpx, yarn (use bun for JavaScript)",
+	);
+	expect(preview.enforcement).toContain("pushes to main");
+	expect(preview.enforcement).not.toContain("force pushes");
+	expect(preview.enforcement).toContain("db push (Migrate instead.)");
+	expect(preview.enforcement).toContain(
+		"edits to .env* (except .env.example, .env.sample, .env.template)",
+	);
+	expect(preview.enforcement).toContain(
+		"Will hold: gh pr create, gh pr ready until reviewed",
+	);
+	expect(preview.enforcement).toContain("Will require: branch names matching");
+	expect(preview.enforcement).toContain(
+		"Will run after each edit in typescript (**): bunx biome check",
+	);
+	expect(preview.enforcement).toContain(
+		"Before the agent stops after edits in typescript (**): bun run lint; bun run typecheck.",
+	);
+	expect((await init(root)).enforcement).toBe(preview.enforcement);
+});
+
+test("init explains empty command slots and a repo with no stacks", async () => {
+	const bare = await init(await project({}), { dryRun: true });
+	expect(bare.enforcement).toContain(
+		"No stacks configured. Add [[stack]] with on_edit and on_turn_end commands in cagr.toml.",
+	);
+	const empty = await init(await project({ "package.json": "{}" }), {
+		dryRun: true,
+	});
+	expect(empty.enforcement).toContain(
+		"none. Add commands to [[stack]].on_edit in cagr.toml",
+	);
+	expect(empty.enforcement).toContain(
+		"no commands. Add commands to [[stack]].on_turn_end in cagr.toml",
+	);
+});
+
+test("enforcement summary includes pre-push commands and empty policy groups", async () => {
+	const { enforcementSummary } = await import("./init");
+	const config = resolveConfig(
+		{
+			git: {
+				pre_push: ["bun run verify"],
+				branch_name: "off",
+				commit_message: "off",
+			},
+			review: { enabled: false, pr_sections: [] },
+		},
+		"/tmp/cagr-summary-no-fragments",
+		"cagr.toml",
+	);
+	const summary = enforcementSummary(config);
+	expect(summary).toContain("Will hold: none.");
+	expect(summary).toContain("Will require: none.");
+	expect(summary).toContain("Before a push: bun run verify.");
+});

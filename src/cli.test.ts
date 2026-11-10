@@ -149,3 +149,20 @@ examples:
 	expect(stderr).toContain("the rule does not work for javascript");
 	expect(stderr).not.toContain("    at ");
 });
+
+test("init prints enforcement after detection for normal and dry runs", () => {
+	for (const args of [["--dry-run"], []]) {
+		const dir = mkdtempSync(join(tmpdir(), "gw-cli-"));
+		const result = Bun.spawnSync(["bun", cli, "init", ...args], { cwd: dir });
+		const text = result.stdout.toString();
+		expect(result.exitCode).toBe(0);
+		expect(text.indexOf("Will deny:")).toBeGreaterThan(text.indexOf("Found:"));
+		expect(text.indexOf("Will deny:")).toBeLessThan(
+			text.indexOf(args.length ? "Would write" : "Wrote"),
+		);
+		expect(text).toContain(
+			"Will hold: gh pr create, gh pr ready until reviewed",
+		);
+		expect(existsSync(join(dir, "cagr.toml"))).toBe(args.length === 0);
+	}
+});
