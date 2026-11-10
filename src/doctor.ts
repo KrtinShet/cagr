@@ -310,7 +310,7 @@ export async function doctor(
 		const over = check === "total" && budget !== undefined && median > budget;
 		timing.push({
 			ok: !over,
-			text: `${event} ${check === "total" ? "(whole hook)" : `\`${check}\``}: median ${median} ms, max ${max} ms over ${values.length} runs${over ? `, over the ${budget} ms budget` : ""}.`,
+			text: `${event} ${check === "total" ? "(whole hook)" : `\`${check}\``}: median ${Math.round(median)} ms, max ${Math.round(max)} ms over ${values.length} runs${over ? `, over the ${budget} ms budget` : ""}.`,
 		});
 	}
 	sections.push(["Timing", timing]);

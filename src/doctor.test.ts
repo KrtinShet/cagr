@@ -147,3 +147,19 @@ test("doctor checks tools behind a scoped golangci command", () => {
 		{ name: "golangci-lint", dirs: [] },
 	]);
 });
+
+test("doctor rounds fractional whole-hook and sub-step timings", async () => {
+	const { recordTimings } = await import("./hook/timings");
+	const root = await mkdtemp(join(tmpdir(), "cagr-doctor-timing-"));
+	recordTimings(root, [
+		{ event: "turn.end", check: "change collection", ms: 661.377083 },
+		{ event: "turn.end", check: "change collection", ms: 709.5101669999999 },
+		{ event: "file.after_edit", check: "total", ms: 9.123456 },
+	]);
+	const { report } = await doctor(
+		resolveConfig({}, root, join(root, "cagr.toml")),
+	);
+	expect(report).toContain("`change collection`: median 710 ms, max 710 ms");
+	expect(report).toContain("(whole hook): median 9 ms, max 9 ms");
+	expect(report).not.toContain("709.510");
+});

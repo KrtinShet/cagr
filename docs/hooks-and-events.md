@@ -183,7 +183,7 @@ After an edit, the configured command runs as usual, including its fixes. A fail
 
 Missing baselines, malformed or incomplete reports, tool errors, stderr, timeouts, unsupported flags and unsupported commands retain the original failing result. Unexpected cagr errors still follow the normal fail-open policy. Comparison subprocesses each get at most 250 ms and share the remaining 900 ms edit-check deadline. A slow tool can therefore stay strict. Existing configured commands keep their existing timeout; this feature does not guarantee that arbitrary commands fit the 1 s budget.
 
-The session brief lists commands eligible for comparison. Biome stays strict in v1 because its stdin path does not provide JSON diagnostics in 2.6.6. Every turn-end command and CI check stays strict, even when edit checks allow inherited findings. This mode neither creates suppressions nor claims that the repo is clean.
+The session brief lists commands eligible for comparison. Biome lint and check use a temporary baseline workspace and the repo-local binary with the root config. Only complete lint reports are compared. Ignored files, missing or nested configs, extends, overrides, plugins, custom VCS roots, formatter or assist failures, and uncertain reports stay strict. Temporary files are removed after comparison; no repo files are written by the comparison. See [configuration](configuration.md#existing-lint-findings) for supported flags and limits. Every turn-end command and CI check stays strict, even when edit checks allow inherited findings. This mode neither creates suppressions nor claims that the repo is clean.
 
 ## Local decision counts
 

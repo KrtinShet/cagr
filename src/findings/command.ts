@@ -1,4 +1,4 @@
-export type FindingTool = "eslint" | "ruff";
+export type FindingTool = "eslint" | "ruff" | "biome";
 export type FindingCommand = { tool: FindingTool; argv: string[] };
 
 /** Only literal argv with one changed-file placeholder can be compared safely. */
@@ -14,28 +14,35 @@ export function findingCommand(command: string): FindingCommand | null {
 	)
 		words.splice(0, 2);
 	const tool = words.shift();
-	if (tool !== "eslint" && tool !== "ruff") return null;
+	if (tool !== "eslint" && tool !== "ruff" && tool !== "biome") return null;
 	if (tool === "ruff" && words.shift() !== "check") return null;
+	const action = tool === "biome" ? words.shift() : undefined;
+	if (tool === "biome" && action !== "check" && action !== "lint") return null;
 	const flags =
-		tool === "eslint"
-			? ["--fix", "--quiet", "--no-ignore", "--no-warn-ignored"]
-			: ["--fix", "--unsafe-fixes", "--no-cache"];
+		tool === "biome"
+			? ["--write", "--fix", "--no-errors-on-unmatched"]
+			: tool === "eslint"
+				? ["--fix", "--quiet", "--no-ignore", "--no-warn-ignored"]
+				: ["--fix", "--unsafe-fixes", "--no-cache"];
 	const valued =
-		tool === "eslint"
-			? ["--max-warnings"]
-			: [
-					"--select",
-					"--ignore",
-					"--extend-select",
-					"--extend-ignore",
-					"--target-version",
-				];
+		tool === "biome"
+			? []
+			: tool === "eslint"
+				? ["--max-warnings"]
+				: [
+						"--select",
+						"--ignore",
+						"--extend-select",
+						"--extend-ignore",
+						"--target-version",
+					];
 	const args: string[] = [];
 	for (let i = 0; i < words.length; i++) {
 		const word = words[i] as string;
 		if (word === "{files}") continue;
 		if (flags.includes(word)) {
-			if (word !== "--fix" && word !== "--unsafe-fixes") args.push(word);
+			if (word !== "--fix" && word !== "--unsafe-fixes" && word !== "--write")
+				args.push(word);
 			continue;
 		}
 		const [flag, inline] = word.split("=");
@@ -51,6 +58,10 @@ export function findingCommand(command: string): FindingCommand | null {
 		.slice(0, command.trim().split(/\s+/).indexOf(tool) + 1);
 	return {
 		tool,
-		argv: [...prefix, ...(tool === "ruff" ? ["check"] : []), ...args],
+		argv: [
+			...prefix,
+			...(tool === "ruff" ? ["check"] : action ? [action] : []),
+			...args,
+		],
 	};
 }

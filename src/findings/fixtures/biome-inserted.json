@@ -1,0 +1,35 @@
+{
+	"summary": {
+		"changed": 0,
+		"unchanged": 1,
+		"matches": 0,
+		"duration": 587292,
+		"errors": 1,
+		"warnings": 0,
+		"infos": 0,
+		"skipped": 0,
+		"suggestedFixesSkipped": 0,
+		"diagnosticsNotPrinted": 0,
+		"scannerDuration": 225084
+	},
+	"diagnostics": [
+		{
+			"severity": "error",
+			"message": "This is an unexpected use of the debugger statement.",
+			"category": "lint/suspicious/noDebugger",
+			"location": {
+				"path": "/fixture/sample.js",
+				"start": {
+					"line": 2,
+					"column": 1
+				},
+				"end": {
+					"line": 2,
+					"column": 10
+				}
+			},
+			"advices": []
+		}
+	],
+	"command": "lint"
+}
