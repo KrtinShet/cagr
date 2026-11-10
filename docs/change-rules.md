@@ -78,9 +78,10 @@ staged content reverted in the working tree cannot satisfy an obligation.
 Pending staged content is reported separately. CI uses merge base to HEAD only,
 evaluates before formatters, and rejects dirty checkouts and a checkout that does
 not equal the PR event head SHA. Collection rebuilds a temporary index from staged
-identities to avoid cached timestamps and index flags hiding edits. It never
-writes the user's index or refs, and reads changed regular files without following
-symlinks.
+identities, lets Git capture the working tree, and compares that tree to the merge
+base. This avoids cached timestamps and index flags hiding edits and records
+symlinks rather than reading their targets. It writes temporary index and Git
+object data, never the user's index, worktree or refs.
 
 Local base selection is `--base`, `git.protected_branch`, then `main`. CI also
 uses nonempty `GITHUB_BASE_REF` before the configured branch. Resolution tries

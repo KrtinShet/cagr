@@ -294,7 +294,7 @@ test("turn commands share the deadline and a timeout is visibly unchecked", asyn
 	}
 });
 
-test("a parent symlink introduced after Git collection is unchecked before reading content", async () => {
+test("a parent symlink introduced during collection is captured without reading outside content", async () => {
 	const runner = await import("../run");
 	const { spyOn } = await import("bun:test");
 	const { renameSync, mkdtempSync, writeFileSync } = await import("node:fs");
@@ -318,8 +318,17 @@ test("a parent symlink introduced after Git collection is unchecked before readi
 	);
 	try {
 		const result = await checkChanges(config);
-		expect(result.unchecked).toBe(true);
-		expect(result.output).toContain("symlinked parent");
+		expect(result.unchecked).toBe(false);
+		expect(
+			result.snapshot?.changes.some(
+				(c) => c.path === "src/a.ts" && c.status === "D",
+			),
+		).toBe(true);
+		expect(
+			result.snapshot?.changes.some(
+				(c) => c.path === "src" && c.regular === false,
+			),
+		).toBe(true);
 	} finally {
 		spy.mockRestore();
 	}

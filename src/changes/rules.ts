@@ -64,6 +64,7 @@ export function evaluate(
 			(change.status === "A" || change.status === "M") &&
 			change.regular !== false,
 	);
+	const companionPaths = new Set(companions.map((change) => change.path));
 	for (const rule of rules) {
 		const triggers = changes.filter(
 			(change) =>
@@ -89,7 +90,7 @@ export function evaluate(
 		} else if (rule.kind === "sibling") {
 			for (const change of triggers.filter((change) => change.status === "A")) {
 				const target = targetPath(rule.target ?? "", change.path);
-				if (!companions.some((companion) => companion.path === target))
+				if (!companionPaths.has(target))
 					add(
 						change.path,
 						`Added ${change.path}; ${target} must be added or modified as a regular file.`,

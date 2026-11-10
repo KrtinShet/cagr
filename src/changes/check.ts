@@ -1,19 +1,7 @@
-import {
-	closeSync,
-	constants,
-	fstatSync,
-	lstatSync,
-	mkdtempSync,
-	openSync,
-	readFileSync,
-	readlinkSync,
-	realpathSync,
-	rmSync,
-} from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Config } from "../config/schema";
-import { insideRoot } from "../paths";
 import { loadRuleSet } from "../rules/rules";
 import { run } from "../run";
 import { type Change, evaluate, formatChange } from "./rules";
@@ -30,7 +18,6 @@ export async function collect(
 	options: { base?: string; committed?: boolean; deadline?: number } = {},
 ): Promise<Snapshot> {
 	const deadline = options.deadline ?? performance.now() + 15_000;
-	const root = realpathSync(config.root);
 	let temporaryIndex: string | undefined;
 	const execute = async (args: string[], stdin?: string) => {
 		if (performance.now() >= deadline)
@@ -80,11 +67,22 @@ export async function collect(
 			? null
 			: mkdtempSync(join(tmpdir(), "cagr-snapshot-"));
 		try {
+			let resultTree = head;
 			if (scratch) {
 				const tracked = await git("ls-files", "--stage", "--full-name", "-z");
+				const untracked = await git(
+					"ls-files",
+					"--others",
+					"--exclude-standard",
+					"-z",
+				);
+				if (untracked.split("\0").filter(Boolean).length > 20_000)
+					throw Error("change exceeds 20000 paths");
 				temporaryIndex = join(scratch, "index");
 				await git("read-tree", "--empty");
 				await execute(["update-index", "-z", "--index-info"], tracked);
+				await git("add", "--all", "--", ".");
+				resultTree = (await git("write-tree")).trim();
 			}
 			const raw = (
 				await git(
@@ -99,7 +97,7 @@ export async function collect(
 					"--no-textconv",
 					"-z",
 					base,
-					...(options.committed ? [head] : []),
+					resultTree,
 					"--",
 				)
 			).split("\0");
@@ -115,69 +113,27 @@ export async function collect(
 				changes.push({ path, status, regular: fields[1]?.startsWith("100") });
 				identities.push(raw[i] ?? "", path);
 			}
-			if (!options.committed) {
-				const known = new Set(changes.map((change) => change.path));
-				for (const path of (
-					await git("ls-files", "--others", "--exclude-standard", "-z")
+			const blobs = raw
+				.filter((_, i) => i % 2 === 0)
+				.filter((line) => line.startsWith(":"))
+				.map((line) => line.split(" "))
+				.filter((fields) => fields[1]?.startsWith("100"))
+				.map((fields) => fields[3])
+				.filter(Boolean);
+			if (blobs.length) {
+				const sizes = await execute(
+					["cat-file", "--batch-check=%(objectsize)"],
+					`${blobs.join("\n")}\n`,
+				);
+				if (
+					sizes
+						.trim()
+						.split("\n")
+						.some((size) => Number(size) > 32_000_000 || !/^\d+$/.test(size))
 				)
-					.split("\0")
-					.filter(Boolean))
-					if (!known.has(path)) changes.push({ path, status: "A" });
-				for (const change of changes) {
-					if (performance.now() >= deadline)
-						throw Error("collection deadline exceeded");
-					if (change.status === "D") continue;
-					let parent = root;
-					for (const component of change.path.split("/").slice(0, -1)) {
-						parent = join(parent, component);
-						if (lstatSync(parent).isSymbolicLink())
-							throw Error(
-								"a changed path has a symlinked parent; restore real directories and retry",
-							);
-					}
-					const path = join(root, change.path);
-					const stat = lstatSync(path);
-					change.regular = stat.isFile();
-					if (stat.isFile()) {
-						if (stat.size > 32_000_000)
-							throw Error("changed file exceeds the 32 MB snapshot limit");
-						const descriptor = openSync(
-							path,
-							constants.O_RDONLY | constants.O_NOFOLLOW,
-						);
-						try {
-							const opened = fstatSync(descriptor);
-							const resolved = realpathSync(
-								process.platform === "darwin"
-									? `/dev/fd/${descriptor}`
-									: process.platform === "linux"
-										? `/proc/self/fd/${descriptor}`
-										: path,
-							);
-							if (
-								insideRoot(root, resolved) === null ||
-								opened.dev !== stat.dev ||
-								opened.ino !== stat.ino
-							)
-								throw Error(
-									"file identity or parent changed during snapshot; retry after writes stop",
-								);
-							if (!opened.isFile() || opened.size > 32_000_000)
-								throw Error("file changed during snapshot");
-							const content = readFileSync(descriptor);
-							identities.push(
-								String(opened.mode),
-								new Bun.CryptoHasher("sha256").update(content).digest("hex"),
-							);
-						} finally {
-							closeSync(descriptor);
-						}
-					} else
-						identities.push(
-							String(stat.mode),
-							stat.isSymbolicLink() ? readlinkSync(path) : String(stat.mtimeMs),
-						);
-				}
+					throw Error(
+						"changed file exceeds the 32 MB snapshot limit or its blob is unavailable",
+					);
 			}
 			if (changes.length > 20_000) throw Error("change exceeds 20000 paths");
 			return {
