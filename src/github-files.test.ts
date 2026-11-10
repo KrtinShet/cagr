@@ -221,3 +221,11 @@ test("CI checks the exact PR head with full merge-base history", () => {
 		"ref: $" + "{{ github.event.pull_request.head.sha || github.sha }}",
 	);
 });
+
+test("every generated checkout has exactly one ref", () => {
+	const yaml = workflowYaml(bun);
+	const steps = yaml.split("      - uses: actions/checkout@v4").slice(1);
+	expect(steps.length).toBeGreaterThan(1);
+	for (const step of steps)
+		expect(step.split("      - ")[0]?.match(/^ {10}ref:/gm)).toHaveLength(1);
+});
