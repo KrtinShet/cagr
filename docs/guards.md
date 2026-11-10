@@ -17,15 +17,17 @@ Guards run at these events (see [Hooks and events](hooks-and-events.md)):
 
 - `command.before`: before the agent runs a shell command.
 - `file.before_edit`: before the agent edits a file.
+- `file.after_edit` and `ci`: check new lint suppressions after edits and against the branch base in CI.
 - `git.pre_push` and `git.commit_msg`: in the git hooks, for agents and humans alike.
 
 | Guard                                 | Runs at                          | Config                                             | On by default?                               |
 | ------------------------------------- | -------------------------------- | -------------------------------------------------- | -------------------------------------------- |
+| [lint-suppression](#lint-suppression) | file.after_edit, ci | `[suppressions] enabled, allow` | With `recommended` |
 | [package-manager](#package-manager)   | command.before                   | `[[stack]] package_manager`                        | When a stack names a manager                 |
 | [protected-branch](#protected-branch) | command.before, pre-push         | `[git] protected_branch`                           | When a branch is set (`recommended`: `main`) |
 | [force-push](#force-push)             | command.before, pre-push         | `[git] block_force_push`                           | With `recommended`                           |
 | [hook-skip](#hook-skip)               | command.before                   | `[git] block_hook_skips`, `skip_env`, `hooks_path` | With `recommended`                           |
-| [protected-file](#protected-file)     | file.before_edit                 | `[files] protected`                                | With `recommended` (`.env*`, lockfiles)      |
+| [protected-file](#protected-file)     | file.before_edit                 | `[files] protected`                                | With `recommended` (`.env*`, lockfiles, lint configs)      |
 | [blocked-command](#blocked-command)   | command.before                   | `[commands] blocked`                               | When you list commands                       |
 | [worktree-only](#worktree-only)       | command.before, file.before_edit | `[git] worktree_only`, `worktree_dir`              | No                                           |
 | [branch-name](#branch-name)           | pre-push                         | `[git] branch_name`, `commit_types`                | With `recommended`                           |
@@ -286,3 +288,45 @@ Agents do not set gh aliases for merging, approving, resolving threads or openin
 ## Code rules
 
 Your own ast-grep rules run after each edit and at the end of a turn, not before. They are covered in [Code rules](code-rules.md). A rule id may not reuse a guard id.
+
+## lint-suppression
+
+After an edit, cagr blocks suppression comments on lines added relative to HEAD.
+Untracked files count as all added. Existing suppressions on unchanged lines are
+left alone. `cagr ci` checks committed additions against the branch's merge base,
+so bypassing the hooks does not bypass this guard. `cagr explain lint-suppression`
+shows the guard's message and settings.
+
+The message names the file, line and comment: "Fix the cause instead of silencing
+the linter. If the rule is wrong here, leave the code as is and tell the user which
+rule and why; a person adds the suppression."
+
+The built-in table covers JS/TS ESLint, TypeScript directives (including
+`@ts-expect-error`), Biome, Oxlint and Prettier comments; Python noqa, type ignore,
+Pyright, Pylint and Ruff comments; Go nolint and lint:ignore comments; and Rust
+`#[allow(...)]` and `#![allow(...)]` attributes.
+
+The recommended preset enables it. To allow generated files, or turn it off:
+
+```toml
+[suppressions]
+enabled = true # false turns off the suppression guard
+allow = ["generated/**", "*.generated.ts"]
+```
+
+Allow globs use the same root-relative and file-name matching as protected files.
+Lint config protection is separate: the recommended preset protects Biome,
+ESLint, Ruff, mypy, golangci-lint, Clippy and Oxlint config files wholesale with
+"Do not weaken the lint config. Tell the user which rule gets in the way and why."
+Remove the recommended preset and configure `files.protected` yourself to change
+that protection.
+
+This is a fast lexical check, not a language parser. Ordinary quoted strings,
+Python triple-quoted strings, JS template literals and multiline comments are
+tracked. JS regular expression literals, template interpolation, Rust raw strings
+and lifetimes are not fully parsed: they can cause false positives or missed
+matches. A directive quoted inside a real comment is still reported. Rust allow
+attributes are checked as code rather than comments. Only supported extensions
+are checked. Moving an existing suppression onto an added line counts as adding
+it. A hook error or timeout lets the call through and tells the human, as with
+other cagr hook errors; CI reports an error instead.

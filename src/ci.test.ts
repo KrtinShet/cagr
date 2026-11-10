@@ -1,10 +1,11 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { annotations, ci, ciReport, publish } from "./ci";
 import { resolveConfig } from "./config/load";
 import type { RawConfig } from "./config/presets";
+import * as runner from "./run";
 import { sync } from "./sync";
 import { tempRepo } from "./test/repo";
 
@@ -165,4 +166,73 @@ examples:
 	);
 	expect(layout?.output).not.toContain("ok-name");
 	expect(layout?.annotations.map((a) => a.file)).toEqual(["src/UserCard.ts"]);
+});
+
+test("CI catches committed suppressions relative to base and ignores worktree replacements", async () => {
+	const { repo, config } = await branch(
+		{ extends: ["recommended"], suppressions: { allow: ["generated/**"] } },
+		{ "a.ts": "// @ts-ignore\nx();\n", "generated/a.py": "# noqa\n" },
+		"feat: silence lint",
+	);
+	await repo.write("a.ts", "x();\n");
+	const result = await ci(config, { cwd: repo.root, base: "main", env: {} });
+	const check = result.checks.find(
+		(entry) => entry.name === "Lint suppressions",
+	);
+	expect(check?.ok).toBe(false);
+	expect(check?.annotations).toMatchObject([{ file: "a.ts", line: 1 }]);
+	expect(check?.output).not.toContain("generated/a.py");
+});
+
+test("CI leaves baseline suppressions alone", async () => {
+	const { repo, config } = await branch(
+		{ extends: ["recommended"] },
+		{ "a.py": "# noqa\nx()\n" },
+		"feat: baseline",
+	);
+	await repo.git("branch", "baseline");
+	await repo.commit("feat: add code", { "a.py": "# noqa\nx()\ny()\n" });
+	const result = await ci(config, {
+		cwd: repo.root,
+		base: "baseline",
+		env: {},
+	});
+	expect(
+		result.checks.find((entry) => entry.name === "Lint suppressions")?.ok,
+	).toBe(true);
+});
+
+test("a suppression git error fails its check and CI still reports the other checks", async () => {
+	const { repo, config } = await branch(
+		{ extends: ["recommended"] },
+		{ "a.ts": "// @ts-ignore\n" },
+		"feat: add a",
+	);
+	const original = runner.run;
+	const spy = spyOn(runner, "run").mockImplementation(
+		async (argv, cwd, options) => {
+			if (argv[0] === "git" && argv[1] === "show")
+				return {
+					ok: false,
+					output: "Could not read blob",
+					stdout: "",
+					ms: 1,
+					timedOut: false,
+				};
+			return original(argv, cwd, options);
+		},
+	);
+	try {
+		const result = await ci(config, { cwd: repo.root, base: "main", env: {} });
+		expect(result.ok).toBe(false);
+		expect(
+			result.checks.find((entry) => entry.name === "Lint suppressions"),
+		).toMatchObject({
+			ok: false,
+			output: expect.stringContaining("Could not read blob"),
+		});
+		expect(result.checks.find((entry) => entry.name === "Risk")).toBeDefined();
+	} finally {
+		spy.mockRestore();
+	}
 });

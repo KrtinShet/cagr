@@ -23,6 +23,7 @@ const lockfiles = [
 
 export const builtinPresets: Record<string, RawConfig> = {
 	recommended: {
+		suppressions: { enabled: true },
 		git: {
 			protected_branch: "main",
 			branch_name: "type/name",
@@ -51,6 +52,22 @@ export const builtinPresets: Record<string, RawConfig> = {
 		},
 		files: {
 			protected: [
+				...[
+					"biome.json",
+					"biome.jsonc",
+					"eslint.config.*",
+					".eslintrc*",
+					"ruff.toml",
+					".ruff.toml",
+					"mypy.ini",
+					".golangci.y*ml",
+					"clippy.toml",
+					".oxlintrc.json",
+				].map((glob) => ({
+					glob,
+					reason:
+						"Do not weaken the lint config. Tell the user which rule gets in the way and why.",
+				})),
 				{
 					glob: ".env*",
 					except: [".env.example", ".env.sample", ".env.template"],

@@ -102,3 +102,10 @@ The platform package was skipped, usually because of `--no-optional`. Reinstall 
 ### On Alpine, cagr does not start
 
 Install the C++ runtime: `apk add libstdc++ libgcc`.
+
+Lint suppression checks cover added lines in supported languages, not every way
+to weaken a tool. The recommended preset protects dedicated lint configs, but
+leaves `pyproject.toml`, `package.json` and `tsconfig.json` editable because agents
+need them for other work. Lint rules and type checking can still be weakened in
+those files. Review their changes. Suppressions already present at HEAD (or at
+the branch base in CI) are not audited. See `docs/guards.md` for lexical limits.

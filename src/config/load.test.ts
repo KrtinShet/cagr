@@ -96,6 +96,16 @@ describe("presets", () => {
 			files: { protected: [{ glob: "secrets/**", reason: "No." }] },
 		});
 		expect(config.files.protected.map((entry) => entry.glob)).toEqual([
+			"biome.json",
+			"biome.jsonc",
+			"eslint.config.*",
+			".eslintrc*",
+			"ruff.toml",
+			".ruff.toml",
+			"mypy.ini",
+			".golangci.y*ml",
+			"clippy.toml",
+			".oxlintrc.json",
 			".env*",
 			expect.stringContaining("bun.lock"),
 			"secrets/**",
@@ -250,6 +260,16 @@ describe("fragments in .cagr/", () => {
 		});
 		const config = loadConfig(dir);
 		expect(config?.files.protected.map((entry) => entry.glob)).toEqual([
+			"biome.json",
+			"biome.jsonc",
+			"eslint.config.*",
+			".eslintrc*",
+			"ruff.toml",
+			".ruff.toml",
+			"mypy.ini",
+			".golangci.y*ml",
+			"clippy.toml",
+			".oxlintrc.json",
 			".env*",
 			expect.stringContaining("bun.lock"),
 			"a/**",
