@@ -3,6 +3,7 @@ import { join } from "node:path";
 import type { Config } from "./config/schema";
 import { gitContext } from "./git";
 import { missingSections } from "./guards/github";
+import { checkSuppressions } from "./guards/lint-suppression";
 import { branchFinding, commitMessageFinding } from "./guards/names";
 import { stackFiles, tidy, withFiles } from "./hook/stack-files";
 import { resolveBase } from "./review/review";
@@ -74,6 +75,23 @@ export async function ci(
 		.map((path) => join(cwd, path))
 		.filter((file) => existsSync(file));
 	const checks: CiCheck[] = [];
+	const suppressions = await checkSuppressions(
+		config,
+		absolute,
+		mergeBase,
+		"HEAD",
+	);
+	checks.push(
+		check(
+			"Lint suppressions",
+			suppressions.map((finding) => finding.reason),
+			suppressions.map((finding) => ({
+				file: finding.file,
+				line: finding.line,
+				message: finding.reason,
+			})),
+		),
+	);
 
 	let drift: string[];
 	try {

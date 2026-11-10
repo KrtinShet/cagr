@@ -166,3 +166,37 @@ examples:
 	expect(layout?.output).not.toContain("ok-name");
 	expect(layout?.annotations.map((a) => a.file)).toEqual(["src/UserCard.ts"]);
 });
+
+test("CI catches committed suppressions relative to base and ignores worktree replacements", async () => {
+	const { repo, config } = await branch(
+		{ extends: ["recommended"], suppressions: { allow: ["generated/**"] } },
+		{ "a.ts": "// @ts-ignore\nx();\n", "generated/a.py": "# noqa\n" },
+		"feat: silence lint",
+	);
+	await repo.write("a.ts", "x();\n");
+	const result = await ci(config, { cwd: repo.root, base: "main", env: {} });
+	const check = result.checks.find(
+		(entry) => entry.name === "Lint suppressions",
+	);
+	expect(check?.ok).toBe(false);
+	expect(check?.annotations).toMatchObject([{ file: "a.ts", line: 1 }]);
+	expect(check?.output).not.toContain("generated/a.py");
+});
+
+test("CI leaves baseline suppressions alone", async () => {
+	const { repo, config } = await branch(
+		{ extends: ["recommended"] },
+		{ "a.py": "# noqa\nx()\n" },
+		"feat: baseline",
+	);
+	await repo.git("branch", "baseline");
+	await repo.commit("feat: add code", { "a.py": "# noqa\nx()\ny()\n" });
+	const result = await ci(config, {
+		cwd: repo.root,
+		base: "baseline",
+		env: {},
+	});
+	expect(
+		result.checks.find((entry) => entry.name === "Lint suppressions")?.ok,
+	).toBe(true);
+});

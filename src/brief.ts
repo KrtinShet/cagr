@@ -10,6 +10,10 @@ export function brief(
 	const lines = [
 		"cagr checks this repo. When it blocks something, its message says what to do instead.",
 	];
+	if (config.suppressions.enabled)
+		lines.push(
+			"- Do not add suppression comments or edit lint configs. Fix the cause, or tell the user which rule gets in the way and why.",
+		);
 	const managers = new Map<string, string[]>();
 	for (const stack of config.stack) {
 		if (!stack.package_manager) continue;

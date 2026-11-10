@@ -130,7 +130,7 @@ test("the written config loads and keeps what was found", async () => {
 		["javascript", "bun", []],
 		["python", "pip", ["pytest -q"]],
 	]);
-	expect(loaded.files.protected.length).toBe(2);
+	expect(loaded.files.protected.length).toBe(12);
 });
 
 test("the generated JSON files go through the repo's on_edit commands", async () => {

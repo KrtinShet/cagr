@@ -245,6 +245,7 @@ function applyDefaults(
 	const files = (raw.files ?? {}) as RawConfig;
 	const commands = (raw.commands ?? {}) as RawConfig;
 	const rules = (raw.rules ?? {}) as RawConfig;
+	const suppressions = (raw.suppressions ?? {}) as RawConfig;
 	const review = (raw.review ?? {}) as RawConfig;
 	const risk = (raw.risk ?? {}) as RawConfig;
 	const ci = (raw.ci ?? {}) as RawConfig;
@@ -311,6 +312,10 @@ function applyDefaults(
 					reason: entry.reason as string,
 				}),
 			),
+		},
+		suppressions: {
+			enabled: (suppressions.enabled as boolean | undefined) ?? false,
+			allow: (suppressions.allow as string[] | undefined) ?? [],
 		},
 		rules: {
 			dirs: (rules.dirs as string[] | undefined) ?? [".cagr/rules"],
