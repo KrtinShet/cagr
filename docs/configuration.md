@@ -180,6 +180,7 @@ One entry per language area of the repo. `language` is required.
 | `language`        | string                                                               | required    | `typescript`, `javascript`, `python`, `go`, `rust`, or any name.                                              |
 | `package_manager` | one of `bun`, `npm`, `pnpm`, `yarn`, `uv`, `pip`, `poetry`, `pipenv` | none        | The only package manager agents may use for this ecosystem. See [package-manager](guards.md#package-manager). |
 | `paths`           | list of globs                                                        | `["**"]`    | Globs, relative to the repo root, this stack covers.                                                          |
+| `exclude_paths` | list of globs | `[]` | Repo-relative paths this stack skips, including nested modules and crates detected by init. |
 | `extensions`      | list of strings                                                      | by language | File extensions this stack checks, without the dot.                                                           |
 | `on_edit`         | list of strings                                                      | `[]`        | Commands run after each edit, on the changed files only.                                                      |
 | `on_turn_end`     | list of strings                                                      | `[]`        | Commands run before the agent may end a turn that changed files in this stack.                                |
@@ -331,3 +332,5 @@ Only direct ESLint and `ruff check` commands with one `{files}` target are compa
 Scripts such as `bun run lint`, shell expressions, extra targets and other flags stay strict. Biome also stays strict in v1: Biome 2.6.6 does not emit JSON diagnostics in stdin mode, even with `--reporter json`. Turn-end commands, code rules and CI must still fully pass.
 
 Only identical rule, message and severity findings on unchanged, unambiguous lines are left out. Editing the error's line makes it new. This compares diagnostics, not semantic causality. Config and project dependencies are live, rather than a snapshot of the whole project. Cached reports are keyed by command, source, ancestor config and lockfile contents, and installed executable metadata. Imported config helpers and external plugin inputs are not tracked; start a new session after changing these inputs.
+
+Go and Rust stacks need no `package_manager` setting. `init` uses file-scoped gofmt and rustfmt after edits and toolchain checks at turn end. See [detected stacks](getting-started.md) for commands, workspace editions and golangci-lint handling. These commands stay strict in new-findings mode.

@@ -304,6 +304,7 @@ function applyDefaults(
 				package_manager:
 					(stack.package_manager as PackageManager | undefined) ?? null,
 				paths: (stack.paths as string[] | undefined) ?? ["**"],
+				exclude_paths: (stack.exclude_paths as string[] | undefined) ?? [],
 				extensions:
 					(stack.extensions as string[] | undefined) ??
 					defaultExtensions[language] ??

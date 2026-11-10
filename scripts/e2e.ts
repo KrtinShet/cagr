@@ -1,4 +1,4 @@
-// End to end check of the compiled binary on fresh TypeScript and Python projects.
+// End to end check of the compiled binary on fresh TypeScript, Python, Go and Rust projects.
 // Runs `init`, then calls each hook the way the generated agent and git hook files do.
 // Usage: bun scripts/e2e.ts [path to binary]   (default: dist/<host binary>)
 import {
@@ -682,6 +682,110 @@ fi
 	);
 	doctor(project);
 	gitChecks(project);
+}
+
+for (const language of ["go", "rust"] as const) {
+	const required =
+		language === "go" ? ["go", "gofmt"] : ["cargo", "rustfmt", "cargo-clippy"];
+	const missing = required.filter((tool) => !Bun.which(tool));
+	if (missing.length) {
+		console.log(
+			`SKIP ${language} e2e: install ${missing.join(", ")} and add them to PATH.`,
+		);
+		continue;
+	}
+	const project = join(work, `${language}-app`);
+	mkdirSync(project);
+	title(`${language} project`);
+	sh("git init -q", project);
+	const file = language === "go" ? "main.go" : "src/lib.rs";
+	if (language === "go")
+		writeFileSync(
+			join(project, "go.mod"),
+			"module example.com/e2e\n\ngo 1.22\n",
+		);
+	else {
+		mkdirSync(join(project, "src"));
+		writeFileSync(
+			join(project, "Cargo.toml"),
+			'[package]\nname = "e2e"\nversion = "0.1.0"\nedition = "2021"\n',
+		);
+	}
+	writeFileSync(join(project, ".gitignore"), "target/\n");
+	const clean =
+		language === "go"
+			? "package main\nfunc main() {}\n"
+			: "pub fn double(n: i32) -> i32 { n * 2 }\n";
+	writeFileSync(join(project, file), clean);
+	initAndDoctor(project);
+	hook(
+		project,
+		"claude",
+		"SessionStart",
+		{ source: "startup" },
+		"context",
+		"native stack brief",
+	);
+	hook(
+		project,
+		"claude",
+		"PostToolUse",
+		write(project, file, clean),
+		"allow",
+		"file formatter",
+	);
+	expect(
+		"formatter wrote clean source",
+		readFileSync(join(project, file), "utf8").includes(
+			language === "go" ? "func main() {}" : "n * 2",
+		),
+		"",
+	);
+	hook(
+		project,
+		"claude",
+		"Stop",
+		{ stop_hook_active: false },
+		"allow",
+		"toolchain checks pass",
+	);
+	const broken =
+		language === "go"
+			? "package main\nfunc main() { missing() }\n"
+			: "pub fn double(n: i32) -> i32 { missing(n) }\n";
+	hook(
+		project,
+		"claude",
+		"PostToolUse",
+		write(project, file, broken),
+		"allow",
+		"formatter leaves compiler errors for turn end",
+	);
+	hook(
+		project,
+		"claude",
+		"Stop",
+		{ stop_hook_active: false },
+		"block",
+		"toolchain errors block",
+	);
+	hook(
+		project,
+		"claude",
+		"PostToolUse",
+		write(project, file, clean),
+		"allow",
+		"fixed source",
+	);
+	hook(
+		project,
+		"claude",
+		"Stop",
+		{ stop_hook_active: true },
+		"allow",
+		"checks pass after fix",
+	);
+	doctor(project);
 }
 
 if (failures === 0) rmSync(work, { recursive: true, force: true });

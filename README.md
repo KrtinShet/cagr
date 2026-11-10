@@ -184,3 +184,5 @@ Do not use it to hold back an agent you do not trust. Use a sandbox for that.
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+`cagr init` detects JavaScript, TypeScript, Python, Go (`go.mod`) and Rust (`Cargo.toml`), including nested modules and workspace packages. Go and Rust use file formatters after edits and vet, tests or clippy at turn end. See [getting started](docs/getting-started.md).
