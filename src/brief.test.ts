@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import { brief } from "./brief";
+import { resolveConfig } from "./config/load";
 import { config, gerb } from "./test/config";
 
 test("the brief lists what the config enforces, briefly", () => {
@@ -69,4 +70,31 @@ test("Go and Rust briefs describe checks without inventing manager restrictions"
 	expect(text).toContain(
 		"All other commands, turn-end checks, CI and code rules still must fully pass",
 	);
+});
+
+test("new findings brief lists Biome comparison and its remaining limits", () => {
+	const config = resolveConfig(
+		{
+			findings: { mode: "new" },
+			stack: [
+				{
+					language: "typescript",
+					on_edit: [
+						"bunx biome check --write --no-errors-on-unmatched {files}",
+					],
+				},
+			],
+		},
+		"/repo",
+		"/repo/cagr.toml",
+	);
+	const text = brief(config, []);
+	expect(text).toContain(
+		"`bunx biome check --write --no-errors-on-unmatched {files}` compared against first-touch source",
+	);
+	expect(text).toContain(
+		"Biome lint findings use a temporary baseline workspace",
+	);
+	expect(text).toContain("uncertain reports stay strict");
+	expect(text).not.toContain("Biome stays strict");
 });
