@@ -239,21 +239,25 @@ test("collection retries one race, and repeated races are unchecked", async () =
 	await repo.write("src/a.ts", "changed");
 	const original = runner.run;
 	for (const persistent of [false, true]) {
-		let diffs = 0;
+		let snapshots = 0;
 		const spy = spyOn(runner, "run").mockImplementation(
 			async (argv, cwd, options) => {
 				const result = await original(argv, cwd, options);
-				if (cwd === repo.root && argv.includes("--numstat")) {
-					diffs++;
-					if (persistent || diffs === 2)
-						await repo.write("src/a.ts", `content ${diffs}`);
+				if (
+					cwd === repo.root &&
+					argv.includes("add") &&
+					argv.includes("--all")
+				) {
+					snapshots++;
+					if (persistent || snapshots === 1)
+						await repo.write("src/a.ts", `content ${snapshots}`);
 				}
 				return result;
 			},
 		);
 		try {
 			const result = await checkChanges(config);
-			expect(diffs).toBe(4);
+			expect(snapshots).toBe(4);
 			expect(result.unchecked).toBe(persistent);
 		} finally {
 			spy.mockRestore();
@@ -332,4 +336,23 @@ test("a parent symlink introduced during collection is captured without reading 
 	} finally {
 		spy.mockRestore();
 	}
+});
+
+test("custom Git clean filters are unchecked without executing their commands", async () => {
+	const { repo, config } = await setup();
+	const { existsSync } = await import("node:fs");
+	await repo.write(".gitattributes", "*.ts filter=external\n");
+	await repo.git(
+		"config",
+		"filter.external.clean",
+		'bun -e \'Bun.write("filter-ran","bad")\'',
+	);
+	await repo.write("src/a.ts", "changed");
+	const result = await checkChanges(config);
+	expect(result.unchecked).toBe(true);
+	expect(result.output).toContain("clean filters");
+	expect(existsSync(join(repo.root, "filter-ran"))).toBe(false);
+	expect((await checkChanges(config, { committed: true })).unchecked).toBe(
+		false,
+	);
 });

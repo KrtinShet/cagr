@@ -41,6 +41,24 @@ export async function collect(
 		return result.stdout;
 	};
 	const git = (...args: string[]) => execute(args);
+	if (!options.committed) {
+		const filters = await run(
+			[
+				"git",
+				"config",
+				"--null",
+				"--name-only",
+				"--get-regexp",
+				"^filter\\..*\\.(clean|process)$",
+			],
+			config.root,
+			{ timeoutMs: Math.max(1, deadline - performance.now()) },
+		);
+		if ((!filters.ok && filters.exitCode !== 1) || filters.stdout.length)
+			throw Error(
+				"custom Git clean filters make a read-only working-tree capture unavailable; use cagr rules check --committed and clean CI instead",
+			);
+	}
 	const name = options.base || config.git.protected_branch || "main";
 	let target: string;
 	try {

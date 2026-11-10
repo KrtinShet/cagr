@@ -82,6 +82,9 @@ identities, lets Git capture the working tree, and compares that tree to the mer
 base. This avoids cached timestamps and index flags hiding edits and records
 symlinks rather than reading their targets. It writes temporary index and Git
 object data, never the user's index, worktree or refs.
+Working-tree checks report unchecked when custom Git clean or process filters
+are configured, since capturing files could execute those commands. Use the
+committed check and clean CI in those repositories.
 
 Local base selection is `--base`, `git.protected_branch`, then `main`. CI also
 uses nonempty `GITHUB_BASE_REF` before the configured branch. Resolution tries
