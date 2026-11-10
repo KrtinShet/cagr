@@ -18,6 +18,12 @@ import { editFinding } from "./guards/edit";
 import { render } from "./guards/finding";
 import { editChecks } from "./hook/handlers";
 import { runHook } from "./hook/run-hook";
+import {
+	aggregateStats,
+	commandId,
+	readStats,
+	statsReport,
+} from "./hook/stats";
 import { type AgentEvent, agentEvents } from "./hook/types";
 import { init } from "./init";
 import { ReviewerError } from "./review/agent";
@@ -52,6 +58,7 @@ Usage: cagr <command>
   doctor [--github]            Check the wiring, the tools each check needs, and hook timings.
                                --github also checks branch protection through gh.
   review [...]                 Review this branch with a reviewer agent. \`cagr review help\` for more.
+  stats [--days N] [--json]    Local guard and rule decision counts.
   risk [--base <b>] [files]    The risk tier of this branch's change, the approvals it needs, the owners.
   ci [--base <branch>]         In CI: the same checks the hooks ran, on the branch's changed files.
   check <files...> | --all     Run the edit checks and code rules on files, or the
@@ -102,6 +109,7 @@ const options: Record<string, string[]> = {
 	sync: ["--check"],
 	"install-git-hooks": [],
 	doctor: ["--github"],
+	stats: ["--days", "--json"],
 	risk: ["--base"],
 	ci: ["--base"],
 	check: ["--all"],
@@ -251,6 +259,33 @@ async function main(argv: string[]): Promise<number> {
 			});
 			console.log(result.report);
 			return result.ok ? 0 : 1;
+		}
+		case "stats": {
+			const json = args.includes("--json");
+			const days = Number(flag(args, "--days") ?? "7");
+			if (
+				!Number.isInteger(days) ||
+				days < 1 ||
+				args.some((a) => a !== "--json")
+			)
+				throw new UsageError(
+					"Usage: cagr stats [--days N] [--json]; N must be a positive integer.",
+				);
+			const config = requireConfig();
+			const set = loadRuleSet(config);
+			const ids = [
+				...guards.filter((g) => g.summary(config)).map((g) => g.id),
+				...set.code.map((r) => r.id),
+				...set.layout.map((r) => r.id),
+				...config.changes.rules.map((r) => r.id),
+				...config.stack.flatMap((s) => [
+					...s.on_edit.map((c) => commandId("on_edit", c)),
+					...s.on_turn_end.map((c) => commandId("on_turn_end", c)),
+				]),
+			];
+			const stats = aggregateStats(readStats(config.root), ids, days);
+			console.log(json ? JSON.stringify(stats, null, 2) : statsReport(stats));
+			return 0;
 		}
 		case "check": {
 			if (args.includes("--all")) {

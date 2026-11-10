@@ -74,6 +74,12 @@ const changeFields = {
 };
 const changeRequired = ["id", "kind", "paths", "reason", "examples"];
 export const configSchema: Node = obj({
+	stats: obj({
+		enabled: bool({
+			description:
+				"Record local hook decision counts. Set false to turn recording off.",
+		}),
+	}),
 	$schema: str({
 		description: "Path or URL of this JSON schema, for editors.",
 	}),
@@ -413,6 +419,7 @@ export type Config = {
 	stack: Stack[];
 	files: { protected: ProtectedFile[] };
 	commands: { blocked: BlockedCommand[] };
+	stats: { enabled: boolean };
 	findings: { mode: "all" | "new" };
 	suppressions: { enabled: boolean; allow: string[] };
 	changes: { rules: import("../changes/rules").ChangeRule[] };

@@ -184,3 +184,9 @@ After an edit, the configured command runs as usual, including its fixes. A fail
 Missing baselines, malformed or incomplete reports, tool errors, stderr, timeouts, unsupported flags and unsupported commands retain the original failing result. Unexpected cagr errors still follow the normal fail-open policy. Comparison subprocesses each get at most 250 ms and share the remaining 900 ms edit-check deadline. A slow tool can therefore stay strict. Existing configured commands keep their existing timeout; this feature does not guarantee that arbitrary commands fit the 1 s budget.
 
 The session brief lists commands eligible for comparison. Biome stays strict in v1 because its stdin path does not provide JSON diagnostics in 2.6.6. Every turn-end command and CI check stays strict, even when edit checks allow inherited findings. This mode neither creates suppressions nor claims that the repo is clean.
+
+## Local decision counts
+
+Hooks record deny, block, stop-escape, fail-open and old-findings decisions, plus session starts, beside local timing data. Each rule and target counts once per decision per hook call, even if several lines match. Targets contain a short file path or only a program and known subcommand; file contents, command arguments and error text are never saved. Session IDs are hashed. The third failed stop records stop-escape for the failing checks rather than another block.
+
+Run `cagr stats [--days N] [--json]` for counts and retry hints. `[stats] enabled = false` turns recording off. Storage is bounded and best effort; write failures and concurrent writers never change the hook result. A busy writer can lose counts.

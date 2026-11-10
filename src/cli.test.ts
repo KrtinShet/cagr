@@ -166,3 +166,29 @@ test("init prints enforcement after detection for normal and dry runs", () => {
 		expect(existsSync(join(dir, "cagr.toml"))).toBe(args.length === 0);
 	}
 });
+
+test("stats accepts a days window and JSON, rejects invalid input", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "gw-cli-stats-"));
+	await Bun.write(join(dir, "cagr.toml"), "[stats]\nenabled = false\n");
+	const result = Bun.spawnSync(
+		["bun", cli, "stats", "--days", "30", "--json"],
+		{ cwd: dir },
+	);
+	expect(result.exitCode).toBe(0);
+	expect(JSON.parse(result.stdout.toString())).toMatchObject({
+		days: 30,
+		sessions: 0,
+		rows: expect.any(Array),
+	});
+	for (const args of [
+		["--days"],
+		["--days", "0"],
+		["--days", "-1"],
+		["--days", "bad"],
+		["--days", "1.5"],
+		["extra"],
+	]) {
+		const invalid = Bun.spawnSync(["bun", cli, "stats", ...args], { cwd: dir });
+		expect(invalid.exitCode).toBe(2);
+	}
+});

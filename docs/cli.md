@@ -18,6 +18,7 @@ An option a command does not take is an error that lists the options it does tak
 | [`init`](#init)                           | Detect the repo, write the config, the agent hooks and the git hooks. |
 | [`sync`](#sync)                           | Rewrite the generated files, or fail when they drift.                 |
 | [`install-git-hooks`](#install-git-hooks) | Write the git hooks and set `core.hooksPath`.                         |
+| [`stats`](#stats) | Show local guard and rule decision counts. |
 | [`doctor`](#doctor)                       | Check the config, the wiring, the tools, and hook timings.            |
 | [`review`](#review)                       | Review the branch with a reviewer agent.                              |
 | [`risk`](#risk)                           | The change's risk tier, the approvals it needs, and the owners.       |
@@ -72,6 +73,26 @@ cagr doctor [--github]
 Checks the config and code rules load (and lists the `.cagr/*.toml` fragments that joined the config), the generated files match, `core.hooksPath` is set and the hooks are executable, `cagr` and every command's program can be found, the review setup, and the median time of each hook against its budget. The Guards section lists every built-in guard id with its configured policy or an off note. Disabled guards do not fail the check. Prints `ok` or `FAIL` per line. Exits 1 if any line fails.
 
 - `--github`: also check the protected branch's settings on GitHub through `gh`. See [CI](ci.md#check-branch-protection).
+
+## stats
+
+```sh
+cagr stats
+cagr stats --days 30 --json
+```
+
+Shows each configured guard or rule, counts by decision, repeats, last seen, and the share of observed sessions it fired in, sorted by count. The default window is 7 days; `--days` takes a positive integer. Zero counts say "never fired in this window". At least two repeats and a repeat rate of 50% or more get a hint to clarify the block message. Command checks use `on_edit:<head>:<hash>` or `on_turn_end:<head>:<hash>` so different commands with the same redacted head stay distinct.
+
+Counts are local to this checkout, beside hook timings in the system temporary directory (`cagr/stats-<root hash>.jsonl` and `.jsonl.1`). Each log rotates at 512,000 bytes; reports read at most the last 5,000 events. Retention and temporary-directory cleanup can shorten the requested window. Session starts are recorded even when nothing fires; other recorded events also establish observed sessions. Shares describe sessions seen in retained history, not all past sessions. Repeats require an earlier deny or block in that retained history for the same session, event, id and target. Commands use a hash of the full command for repeat identity; the command itself is never stored.
+
+Recording is on by default. Turn it off in `cagr.toml`:
+
+```toml
+[stats]
+enabled = false
+```
+
+Turning recording off keeps existing history readable. Delete the two local log files to clear it. `cagr doctor` summarizes deny and block events in the last 7 days.
 
 ## review
 
