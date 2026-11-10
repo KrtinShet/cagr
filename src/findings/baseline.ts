@@ -55,6 +55,7 @@ export async function compareFindings(
 	const adapter = findingCommand(command);
 	if (!adapter) return null;
 	let old = 0;
+	let reported = 0;
 	const problems: string[] = [];
 	for (const path of paths) {
 		if (performance.now() >= deadline) return null;
@@ -79,7 +80,9 @@ export async function compareFindings(
 			await check(currentSource),
 			file,
 		);
-		if (!current || current.length === 0) return null;
+		if (!current) return null;
+		if (current.length === 0) continue;
+		reported += current.length;
 		// Cache only completed reports, tied to exact invocation and baseline bytes.
 		const cache = `${saved}.${hash(JSON.stringify(argv) + source + cacheIdentity(root, file, adapter.argv))}.json`;
 		let baseline: Finding[] | null;
@@ -104,7 +107,7 @@ export async function compareFindings(
 			),
 		);
 	}
-	return { old, problems };
+	return reported ? { old, problems } : null;
 }
 
 /** Config and installed-tool changes cannot reuse a completed diagnostic report. */

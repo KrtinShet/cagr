@@ -1,0 +1,20 @@
+[
+	{
+		"cell": null,
+		"code": "invalid-syntax",
+		"end_location": {
+			"column": 1,
+			"row": 2
+		},
+		"filename": "/fixture/sample.py",
+		"fix": null,
+		"location": {
+			"column": 1,
+			"row": 2
+		},
+		"message": "unexpected EOF while parsing",
+		"noqa_row": null,
+		"severity": "error",
+		"url": null
+	}
+]

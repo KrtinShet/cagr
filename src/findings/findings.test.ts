@@ -235,6 +235,13 @@ test("incomplete ESLint counts, fatal diagnostics and Ruff syntax errors stay st
 			"/fixture/sample.js",
 		),
 	).toBeNull();
+	expect(
+		parseFindings(
+			"ruff",
+			result(fixture("ruff-syntax.json")),
+			"/fixture/sample.py",
+		),
+	).toBeNull();
 	const ruff = JSON.parse(fixture("ruff-baseline.json"));
 	ruff[0].code = null;
 	expect(
@@ -266,4 +273,43 @@ test("all lines in a multiline finding must remain unchanged", () => {
 			[{ ...f, line: 2, endLine: 3 }],
 		),
 	).toHaveLength(0);
+});
+
+test("clean files do not disable other files, but a failure with no findings stays strict", async () => {
+	const { root, write } = await tempRepo();
+	const session = crypto.randomUUID();
+	await write("clean.py", "# clean\n");
+	await write("old.py", "import os\n");
+	for (const name of ["clean.py", "old.py"])
+		captureBaseline(root, session, join(root, name));
+	mkdirSync(join(root, "bin"));
+	await write(
+		"bin/ruff",
+		`#!/usr/bin/env bun
+const text = await Bun.stdin.text();
+const file = process.argv[process.argv.indexOf('--stdin-filename') + 1];
+const findings = text.includes('import os') ? JSON.parse(await Bun.file(${JSON.stringify(join(import.meta.dir, "fixtures/ruff-baseline.json"))}).text()) : [];
+for (const finding of findings) finding.filename = file;
+console.log(JSON.stringify(findings));
+process.exit(findings.length ? 1 : 0);
+`,
+	);
+	const { chmodSync } = await import("node:fs");
+	chmodSync(join(root, "bin/ruff"), 0o755);
+	const previous = process.env.PATH;
+	process.env.PATH = `${join(root, "bin")}:${previous}`;
+	try {
+		for (const paths of [
+			["clean.py", "old.py"],
+			["old.py", "clean.py"],
+		])
+			expect(
+				await compareFindings("ruff check {files}", paths, root, session),
+			).toEqual({ old: 1, problems: [] });
+		expect(
+			await compareFindings("ruff check {files}", ["clean.py"], root, session),
+		).toBeNull();
+	} finally {
+		process.env.PATH = previous;
+	}
 });

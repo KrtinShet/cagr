@@ -55,6 +55,8 @@ export function parseFindings(
 				if (
 					resolve(m.filename) !== resolve(file) ||
 					typeof m.code !== "string" ||
+					!/^[A-Z]+[0-9]+$/.test(m.code) ||
+					!["error", "warning"].includes(m.severity ?? "error") ||
 					!m.end_location
 				)
 					return null;
