@@ -68,6 +68,8 @@ test("doctor lists active guard summaries and disabled guards without failing th
 		"ok   package-manager: npm, npx, pnpm, pnpx, yarn (use bun for JavaScript)",
 	);
 	expect(section).toContain("protected-branch: pushes to main");
+	expect(section).toContain("ok   lint-suppression: new lint suppressions");
+	expect(section).toContain("edits to biome.json");
 	expect(section).toContain(
 		"force-push: off (configure [git] block_force_push)",
 	);
@@ -76,4 +78,19 @@ test("doctor lists active guard summaries and disabled guards without failing th
 		"review-gate: gh pr create, gh pr ready until reviewed",
 	);
 	expect(section).not.toContain("FAIL");
+});
+
+test("doctor names the setting to enable lint suppressions", async () => {
+	const root = await mkdtemp(join(tmpdir(), "gw-doctor-"));
+	const config = resolveConfig(
+		{ extends: ["recommended"], suppressions: { enabled: false } },
+		root,
+		join(root, "cagr.toml"),
+	);
+	const { report } = await doctor(config);
+	const section = report.split("Guards\n")[1]?.split("\n\n")[0];
+	expect(section).toContain(
+		"lint-suppression: off (configure [suppressions] enabled = true)",
+	);
+	expect(section).not.toContain("new lint suppressions");
 });

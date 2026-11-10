@@ -14,11 +14,16 @@ export type GuardInfo = {
 export const guards: GuardInfo[] = [
 	{
 		id: "lint-suppression",
+		group: "deny",
+		summary: (config) =>
+			config.suppressions.enabled
+				? `new lint suppressions (eslint-disable, @ts-ignore, # noqa, ...)${config.suppressions.allow.length > 0 ? ` (except ${config.suppressions.allow.join(", ")})` : ""}`
+				: null,
 		event: "file.after_edit, ci",
 		catches:
 			"Suppression comments on added lines, compared to HEAD in hooks or the branch base in CI.",
 		fix: "Fix the cause instead of silencing the linter. If the rule is wrong, tell the user which rule and why; a person adds the suppression.",
-		config: "[suppressions] enabled, allow",
+		config: "[suppressions] enabled = true",
 	},
 	{
 		id: "package-manager",

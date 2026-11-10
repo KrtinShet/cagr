@@ -43,7 +43,7 @@ test("package manager summaries follow the allowed ecosystem managers", () => {
 					package_manager,
 				})),
 			}),
-		)[0]?.summary;
+		).find((guard) => guard.id === "package-manager")?.summary;
 	expect(summaries(["bun", "uv"])).toBe(
 		"npm, npx, pnpm, pnpx, yarn (use bun for JavaScript); pip, pip3, poetry, pipenv (use uv for Python)",
 	);
@@ -79,4 +79,21 @@ test("custom guard settings appear in summaries without preset assumptions", () 
 	expect(summaries["pr-body"]).toBe("pull request body headings: Checks");
 	expect(summaries["agent-approval"]).toContain("resolving review threads");
 	expect(summaries["agent-approval"]).not.toContain("agent merges");
+});
+
+test("suppression summaries follow enabled and allowed paths", () => {
+	const summary = (raw: Parameters<typeof config>[0]) =>
+		configuredGuards(config(raw)).find(
+			(guard) => guard.id === "lint-suppression",
+		)?.summary;
+	expect(
+		summary({
+			suppressions: { enabled: true, allow: ["generated/**", "vendor/**"] },
+		}),
+	).toBe(
+		"new lint suppressions (eslint-disable, @ts-ignore, # noqa, ...) (except generated/**, vendor/**)",
+	);
+	expect(
+		summary({ extends: ["recommended"], suppressions: { enabled: false } }),
+	).toBeNull();
 });

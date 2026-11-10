@@ -6,6 +6,7 @@ Coding agents slip. They run `npm install` in a bun repo, push to `main`, edit `
 
 - **Commands**: it denies the wrong package manager, a push to the protected branch, a force push, hook skips, and any command you list, before the command runs.
 - **Files**: it denies edits to protected files such as `.env*` and lockfiles, before the edit happens.
+- **Lint suppressions**: the `lint-suppression` guard blocks new `eslint-disable`, `@ts-ignore`, `# noqa` and other suppression directives after edits and in CI. The recommended preset also protects lint config files. Fix the cause, or ask a person to review an exception.
 - **Edits**: after each edit it runs your formatters and linters (Biome, ESLint, Ruff) and your own ast-grep code rules, on the changed files only. Layout rules stop a new file from being created with the wrong name or in the wrong folder.
 - **End of turn**: the agent may not finish while your checks (tsc, mypy, pytest, `bun run lint`) fail. It blocks at most 2 stops in a row, then lets the agent go and tells the human, so it never traps the agent in a loop.
 - **Pull requests**: `gh pr create` is denied until a reviewer agent in a fresh context has reviewed the current commit and every Important finding is fixed or answered. Agents may not merge or approve. See [Review](#review).
@@ -72,7 +73,7 @@ protected = [{ glob = ".env*", except = [".env.example"], reason = "Tell the use
 blocked = [{ match = "prisma db push", reason = "Use `bun run db:migrate --name <change>`." }]
 ```
 
-- `recommended` turns on the git rules, blocks force pushes and hook skips, and protects `.env*` and lockfiles. Lists of tables (`stack`, `files.protected`, `commands.blocked`) add to the preset's. Other values replace them.
+- `recommended` turns on the git rules, blocks force pushes, hook skips and new lint suppressions, and protects `.env*`, lockfiles and lint configs. Lists of tables (`stack`, `files.protected`, `commands.blocked`) add to the preset's. Other values replace them.
 - `{files}` becomes the changed files that match the stack's `paths`. A turn-end command without `{files}` runs once for the whole repo.
 - After you change the config, run `cagr sync` to rewrite the hook files. `cagr sync --check` fails in CI when they drift.
 - `schema/cagr.schema.json` is the JSON schema, for editor completion.

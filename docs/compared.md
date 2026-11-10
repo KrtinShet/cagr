@@ -25,6 +25,7 @@ Most of what goes wrong with an agent leaves no trace in the code for a linter t
 - `npm install` in a bun repo. The lockfile changes, the code does not.
 - `git push origin main`, `git push --force`, `git commit --no-verify`.
 - An edit to `.env` or a lockfile.
+- Silencing the linter. A linter cannot stop an agent from silencing it with suppression comments or weaker config. cagr blocks new suppression directives with `lint-suppression` and protects lint config files in the recommended preset.
 - Stopping and saying "done" while `tsc` is still red.
 - Opening a pull request nobody has reviewed, or merging one.
 - `prisma db push` when the repo uses migrations.

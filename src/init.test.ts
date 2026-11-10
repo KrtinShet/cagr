@@ -222,6 +222,11 @@ test("init and dry-run describe resolved guards and commands, including fragment
 		"npm, npx, pnpm, pnpx, yarn (use bun for JavaScript)",
 	);
 	expect(preview.enforcement).toContain("pushes to main");
+	expect(preview.enforcement).toContain(
+		"Will deny: new lint suppressions (eslint-disable, @ts-ignore, # noqa, ...)",
+	);
+	expect(preview.enforcement).toContain("edits to biome.json");
+	expect(preview.enforcement).toContain("edits to eslint.config.*");
 	expect(preview.enforcement).not.toContain("force pushes");
 	expect(preview.enforcement).toContain("db push (Migrate instead.)");
 	expect(preview.enforcement).toContain(
@@ -271,6 +276,7 @@ test("enforcement summary includes pre-push commands and empty policy groups", a
 		"cagr.toml",
 	);
 	const summary = enforcementSummary(config);
+	expect(summary).not.toContain("new lint suppressions");
 	expect(summary).toContain("Will hold: none.");
 	expect(summary).toContain("Will require: none.");
 	expect(summary).toContain("Before a push: bun run verify.");

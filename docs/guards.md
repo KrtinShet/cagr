@@ -17,15 +17,17 @@ Guards run at these events (see [Hooks and events](hooks-and-events.md)):
 
 - `command.before`: before the agent runs a shell command.
 - `file.before_edit`: before the agent edits a file.
+- `file.after_edit` and `ci`: check new lint suppressions after edits and against the branch base in CI.
 - `git.pre_push` and `git.commit_msg`: in the git hooks, for agents and humans alike.
 
 | Guard                                 | Runs at                          | Config                                             | On by default?                               |
 | ------------------------------------- | -------------------------------- | -------------------------------------------------- | -------------------------------------------- |
+| [lint-suppression](#lint-suppression) | file.after_edit, ci | `[suppressions] enabled, allow` | With `recommended` |
 | [package-manager](#package-manager)   | command.before                   | `[[stack]] package_manager`                        | When a stack names a manager                 |
 | [protected-branch](#protected-branch) | command.before, pre-push         | `[git] protected_branch`                           | When a branch is set (`recommended`: `main`) |
 | [force-push](#force-push)             | command.before, pre-push         | `[git] block_force_push`                           | With `recommended`                           |
 | [hook-skip](#hook-skip)               | command.before                   | `[git] block_hook_skips`, `skip_env`, `hooks_path` | With `recommended`                           |
-| [protected-file](#protected-file)     | file.before_edit                 | `[files] protected`                                | With `recommended` (`.env*`, lockfiles)      |
+| [protected-file](#protected-file)     | file.before_edit                 | `[files] protected`                                | With `recommended` (`.env*`, lockfiles, lint configs)      |
 | [blocked-command](#blocked-command)   | command.before                   | `[commands] blocked`                               | When you list commands                       |
 | [worktree-only](#worktree-only)       | command.before, file.before_edit | `[git] worktree_only`, `worktree_dir`              | No                                           |
 | [branch-name](#branch-name)           | pre-push                         | `[git] branch_name`, `commit_types`                | With `recommended`                           |
