@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, realpath, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { resolveConfig } from "../config/load";
+import { tempRepo } from "../test/repo";
 import { readTurnState, stateFile } from "../turn-state";
 import { handle } from "./handlers";
 import type { HookInput } from "./types";
@@ -48,7 +48,7 @@ const write = async (path: string, text: string) => {
 };
 
 beforeEach(async () => {
-	root = await realpath(await mkdtemp(join(tmpdir(), "gw-handlers-")));
+	root = (await tempRepo("gw-handlers-")).root;
 	await mkdir(join(root, "src"));
 	session = `test-${crypto.randomUUID()}`;
 });
@@ -189,4 +189,18 @@ test("session.start returns the brief", async () => {
 	expect(decision.kind === "allow" && decision.context).toContain(
 		"Package managers: bun for JavaScript.",
 	);
+});
+
+test("after edit blocks a new suppression with file, line, comment and fix", async () => {
+	const file = await write("src/a.ts", "// @ts-ignore\nx();\n");
+	const decision = await handle(
+		input("file.after_edit", { files: [file] }),
+		config(),
+	);
+	expect(decision.kind).toBe("block");
+	if (decision.kind === "block") {
+		expect(decision.reason).toContain("src/a.ts:1: // @ts-ignore");
+		expect(decision.reason).toContain("Fix the cause instead");
+		expect(decision.reason).toContain("cagr: lint-suppression");
+	}
 });

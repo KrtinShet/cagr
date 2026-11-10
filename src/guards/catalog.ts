@@ -13,6 +13,14 @@ export type GuardInfo = {
 
 export const guards: GuardInfo[] = [
 	{
+		id: "lint-suppression",
+		event: "file.after_edit, ci",
+		catches:
+			"Suppression comments on added lines, compared to HEAD in hooks or the branch base in CI.",
+		fix: "Fix the cause instead of silencing the linter. If the rule is wrong, tell the user which rule and why; a person adds the suppression.",
+		config: "[suppressions] enabled, allow",
+	},
+	{
 		id: "package-manager",
 		group: "deny",
 		summary: packageManagerSummary,

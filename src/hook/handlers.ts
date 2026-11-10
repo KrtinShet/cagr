@@ -14,6 +14,7 @@ import {
 	isGateCommand,
 	prBodyFinding,
 } from "../guards/github";
+import { checkSuppressions } from "../guards/lint-suppression";
 import { insideRoot } from "../paths";
 import { gateResult } from "../review/gate";
 import { readRecord, recordPath } from "../review/store";
@@ -252,7 +253,9 @@ export async function editChecks(
 	config: Config,
 ): Promise<string[]> {
 	const existing = files.filter((file) => existsSync(file));
-	const problems: string[] = [];
+	const problems: string[] = (await checkSuppressions(config, existing)).map(
+		render,
+	);
 	const timings: { event: string; check: string; ms: number }[] = [];
 	for (const stack of config.stack) {
 		const paths = stackFiles(stack, existing, config);

@@ -283,6 +283,23 @@
 			},
 			"description": "Commands agents may not run."
 		},
+		"suppressions": {
+			"type": "object",
+			"additionalProperties": false,
+			"properties": {
+				"enabled": {
+					"type": "boolean",
+					"description": "Block new lint suppression comments."
+				},
+				"allow": {
+					"type": "array",
+					"items": {
+						"type": "string"
+					},
+					"description": "Globs where new suppressions are allowed."
+				}
+			}
+		},
 		"rules": {
 			"type": "object",
 			"additionalProperties": false,

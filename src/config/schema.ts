@@ -183,6 +183,10 @@ export const configSchema: Node = obj({
 		},
 		{ description: "Commands agents may not run." },
 	),
+	suppressions: obj({
+		enabled: bool({ description: "Block new lint suppression comments." }),
+		allow: strings("Globs where new suppressions are allowed."),
+	}),
 	rules: obj(
 		{
 			dirs: strings(
@@ -346,6 +350,7 @@ export type Config = {
 	stack: Stack[];
 	files: { protected: ProtectedFile[] };
 	commands: { blocked: BlockedCommand[] };
+	suppressions: { enabled: boolean; allow: string[] };
 	rules: { dirs: string[] };
 	review: {
 		enabled: boolean;
