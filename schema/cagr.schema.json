@@ -283,6 +283,20 @@
 			},
 			"description": "Commands agents may not run."
 		},
+		"findings": {
+			"type": "object",
+			"additionalProperties": false,
+			"properties": {
+				"mode": {
+					"type": "string",
+					"enum": [
+						"all",
+						"new"
+					],
+					"description": "Compare supported on_edit findings with first-touch source. Other checks stay strict."
+				}
+			}
+		},
 		"suppressions": {
 			"type": "object",
 			"additionalProperties": false,

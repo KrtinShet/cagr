@@ -3,6 +3,8 @@ export type RunResult = {
 	/** stdout and stderr together, for people to read. */
 	output: string;
 	stdout: string;
+	stderr?: string;
+	exitCode?: number | null;
 	ms: number;
 	timedOut: boolean;
 };
@@ -45,12 +47,22 @@ export async function run(
 		const output = timedOut
 			? `${stdout}${stderr}\nStopped after ${options.timeoutMs} ms. Make the check faster or narrow it with {files}.`
 			: `${stdout}${stderr}`;
-		return { ok: exitCode === 0, output, stdout, ms, timedOut };
+		return {
+			ok: exitCode === 0,
+			output,
+			stdout,
+			stderr,
+			exitCode,
+			ms,
+			timedOut,
+		};
 	} catch (error) {
 		return {
 			ok: false,
 			output: `Could not start \`${argv.join(" ")}\`: ${(error as Error).message}`,
 			stdout: "",
+			stderr: "",
+			exitCode: null,
 			ms: Math.round(performance.now() - started),
 			timedOut: false,
 		};

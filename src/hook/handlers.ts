@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { brief } from "../brief";
 import type { Config } from "../config/schema";
+import { captureBaseline, compareFindings } from "../findings/baseline";
 import { gitContext } from "../git";
 import { commandFinding, needsGitContext } from "../guards/command";
 import { editFinding } from "../guards/edit";
@@ -197,6 +198,9 @@ async function fileBeforeEdit(
 				}),
 			};
 	}
+	if (config.findings.mode === "new")
+		for (const file of input.files)
+			captureBaseline(config.root, input.sessionId, file);
 	return { kind: "allow" };
 }
 
@@ -237,8 +241,15 @@ async function fileAfterEdit(
 	);
 	if (files.length === 0) return { kind: "allow" };
 	await recordEdits(stateFile(input.sessionId), files);
-	const problems = await editChecks(files, config);
-	if (problems.length === 0) return { kind: "allow" };
+	const context: string[] = [];
+	const problems = await editChecks(files, config, {
+		session: input.sessionId,
+		context,
+	});
+	if (problems.length === 0)
+		return context.length
+			? { kind: "allow", context: context.join("\n") }
+			: { kind: "allow" };
 	return {
 		kind: "block",
 		reason: tidy(
@@ -251,7 +262,9 @@ async function fileAfterEdit(
 export async function editChecks(
 	files: string[],
 	config: Config,
+	comparison?: { session: string; context: string[] },
 ): Promise<string[]> {
+	const deadline = performance.now() + 900;
 	const existing = files.filter((file) => existsSync(file));
 	const problems: string[] = (await checkSuppressions(config, existing)).map(
 		render,
@@ -265,8 +278,39 @@ export async function editChecks(
 				timeoutMs: timeouts.onEditMs,
 			});
 			timings.push({ event: "file.after_edit", check: command, ms: result.ms });
-			if (!result.ok)
-				problems.push(`## ${command}\n${tidy(result.output, 2000)}`);
+			if (!result.ok) {
+				const started = performance.now();
+				const compared =
+					config.findings.mode === "new" &&
+					comparison &&
+					result.exitCode === 1 &&
+					!result.stderr?.trim() &&
+					!result.timedOut
+						? await compareFindings(
+								command,
+								paths,
+								config.root,
+								comparison.session,
+								deadline,
+							)
+						: null;
+				if (comparison && config.findings.mode === "new")
+					timings.push({
+						event: "file.after_edit",
+						check: `${command} comparison`,
+						ms: Math.round(performance.now() - started),
+					});
+				if (compared) {
+					if (compared.old)
+						comparison?.context.push(
+							`${compared.old} existing findings in this file were left out; they were there before you started.`,
+						);
+					if (compared.problems.length)
+						problems.push(
+							`## ${command}\n${compared.problems.join("\n")}\nFix the reported new findings and rerun ${command}.`,
+						);
+				} else problems.push(`## ${command}\n${tidy(result.output, 2000)}`);
+			}
 		}
 	}
 	const { rules, layout } = await ruleChecks(

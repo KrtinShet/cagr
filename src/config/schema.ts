@@ -183,6 +183,13 @@ export const configSchema: Node = obj({
 		},
 		{ description: "Commands agents may not run." },
 	),
+	findings: obj({
+		mode: str({
+			enum: ["all", "new"],
+			description:
+				"Compare supported on_edit findings with first-touch source. Other checks stay strict.",
+		}),
+	}),
 	suppressions: obj({
 		enabled: bool({ description: "Block new lint suppression comments." }),
 		allow: strings("Globs where new suppressions are allowed."),
@@ -350,6 +357,7 @@ export type Config = {
 	stack: Stack[];
 	files: { protected: ProtectedFile[] };
 	commands: { blocked: BlockedCommand[] };
+	findings: { mode: "all" | "new" };
 	suppressions: { enabled: boolean; allow: string[] };
 	rules: { dirs: string[] };
 	review: {

@@ -1,0 +1,7 @@
+let unused = 1;
+debugger;
+stdin ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  × The contents aren't fixed. Use the `--write` flag to fix them.
+  
+
