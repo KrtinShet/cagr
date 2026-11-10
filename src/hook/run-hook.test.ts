@@ -86,3 +86,27 @@ test("a protected glob from a .cagr/ fragment denies the edit", async () => {
 	);
 	expect(output).toContain("Infra changes go through the platform team.");
 });
+
+test("a suppression git error fails open and tells the human", async () => {
+	const dir = await mkdtemp(join(tmpdir(), "gw-suppression-error-"));
+	await writeFile(join(dir, "cagr.toml"), 'extends = ["recommended"]\n');
+	const file = join(dir, "a.ts");
+	await writeFile(file, "// @ts-ignore\n");
+	const output = JSON.parse(
+		await runHook(
+			"claude",
+			"file.after_edit",
+			JSON.stringify({
+				session_id: "suppression-error",
+				cwd: dir,
+				tool_name: "Write",
+				tool_input: { file_path: file },
+			}),
+			dir,
+		),
+	);
+	expect(output.systemMessage).toContain(
+		"off for this call because of an error",
+	);
+	expect(output.decision).toBeUndefined();
+});

@@ -75,23 +75,31 @@ export async function ci(
 		.map((path) => join(cwd, path))
 		.filter((file) => existsSync(file));
 	const checks: CiCheck[] = [];
-	const suppressions = await checkSuppressions(
-		config,
-		absolute,
-		mergeBase,
-		"HEAD",
-	);
-	checks.push(
-		check(
-			"Lint suppressions",
-			suppressions.map((finding) => finding.reason),
-			suppressions.map((finding) => ({
-				file: finding.file,
-				line: finding.line,
-				message: finding.reason,
-			})),
-		),
-	);
+	try {
+		const suppressions = await checkSuppressions(
+			config,
+			absolute,
+			mergeBase,
+			"HEAD",
+		);
+		checks.push(
+			check(
+				"Lint suppressions",
+				suppressions.map((finding) => finding.reason),
+				suppressions.map((finding) => ({
+					file: finding.file,
+					line: finding.line,
+					message: finding.reason,
+				})),
+			),
+		);
+	} catch (error) {
+		checks.push(
+			check("Lint suppressions", [
+				`Could not check suppressions: ${error instanceof Error ? error.message : String(error)}. Fix the check error and rerun cagr ci.`,
+			]),
+		);
+	}
 
 	let drift: string[];
 	try {
