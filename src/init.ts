@@ -12,12 +12,13 @@ import type { AgentName, Config, PackageManager } from "./config/schema";
 import { configuredGuards } from "./guards/catalog";
 import { stackFiles, withFiles } from "./hook/stack-files";
 import { toPosix } from "./paths";
-import { run, runShell } from "./run";
+import { run, runShell, shellQuote } from "./run";
 import { installGitHooks, keptNotes, sync } from "./sync";
 
 export type DetectedStack = {
 	dir: string;
-	language: "typescript" | "javascript" | "python";
+	exclude_paths?: string[];
+	language: "typescript" | "javascript" | "python" | "go" | "rust";
 	package_manager: PackageManager | null;
 	tools: string[];
 	on_edit: string[];
@@ -50,9 +51,14 @@ function projectDirs(root: string, depth = 3): string[] {
 	const found: string[] = [];
 	const walk = (dir: string, level: number) => {
 		if (
-			["package.json", "pyproject.toml", "requirements.txt", "setup.py"].some(
-				(file) => existsSync(join(dir, file)),
-			)
+			[
+				"package.json",
+				"pyproject.toml",
+				"requirements.txt",
+				"setup.py",
+				"go.mod",
+				"Cargo.toml",
+			].some((file) => existsSync(join(dir, file)))
 		)
 			found.push(dir);
 		if (level === depth) return;
@@ -284,6 +290,79 @@ function detectPython(dir: string, root: string): DetectedStack {
 	};
 }
 
+function detectGo(dir: string, root: string): DetectedStack {
+	const rel = toPosix(relative(root, dir));
+	const go = rel ? `cd ${shellQuote(rel)} && go` : "go";
+	const configured = anyExists(dir, [
+		".golangci.yml",
+		".golangci.yaml",
+		".golangci.toml",
+		".golangci.json",
+	]);
+	return {
+		dir: rel,
+		language: "go",
+		package_manager: null,
+		tools: ["go", "gofmt", ...(configured ? ["golangci-lint"] : [])],
+		on_edit: ["gofmt -w {files}"],
+		on_turn_end: [
+			`${go} vet ./...`,
+			`${go} test ./...`,
+			...(configured
+				? [
+						rel
+							? `cd ${shellQuote(rel)} && golangci-lint run ./...`
+							: "golangci-lint run ./...",
+					]
+				: []),
+		],
+		pre_push: null,
+	};
+}
+
+function detectRust(dir: string, root: string): DetectedStack | null {
+	const manifest = readToml(join(dir, "Cargo.toml"));
+	const pkg = manifest.package as Record<string, unknown> | undefined;
+	// Virtual workspaces have no source files; each package gets its own edition.
+	if (!pkg) return null;
+	let edition = pkg.edition;
+	if (
+		typeof edition === "object" &&
+		edition !== null &&
+		"workspace" in edition
+	) {
+		for (let at = dir; ; at = dirname(at)) {
+			const workspace = readToml(join(at, "Cargo.toml")).workspace as
+				| { package?: { edition?: unknown } }
+				| undefined;
+			if (workspace) {
+				edition = workspace.package?.edition;
+				break;
+			}
+			if (at === root || relative(root, at).startsWith("..")) break;
+		}
+	}
+	const year =
+		typeof edition === "string" && /^20(15|18|21|24)$/.test(edition)
+			? edition
+			: "2015";
+	const rel = toPosix(relative(root, dir));
+	const cargo = "cargo";
+	const path = `--manifest-path ${shellQuote(toPosix(join(rel, "Cargo.toml")))}`;
+	return {
+		dir: rel,
+		language: "rust",
+		package_manager: null,
+		tools: ["cargo", "rustfmt", "cargo-clippy"],
+		on_edit: [`rustfmt --edition ${year} --config skip_children=true {files}`],
+		on_turn_end: [
+			`${cargo} clippy ${path} --all-targets -- -D warnings`,
+			`${cargo} test ${path}`,
+		],
+		pre_push: null,
+	};
+}
+
 type Which = (program: string) => string | null;
 
 export async function detect(
@@ -299,6 +378,22 @@ export async function detect(
 			stacks.push(detectJs(dir, root));
 		if (anyExists(dir, ["pyproject.toml", "requirements.txt", "setup.py"]))
 			stacks.push(detectPython(dir, root));
+		if (existsSync(join(dir, "go.mod"))) stacks.push(detectGo(dir, root));
+		if (existsSync(join(dir, "Cargo.toml"))) {
+			const rust = detectRust(dir, root);
+			if (rust) stacks.push(rust);
+		}
+	}
+	for (const stack of stacks) {
+		if (stack.language !== "go" && stack.language !== "rust") continue;
+		const nested = stacks.filter(
+			(other) =>
+				other !== stack &&
+				other.language === stack.language &&
+				(stack.dir === "" || other.dir.startsWith(`${stack.dir}/`)),
+		);
+		if (nested.length)
+			stack.exclude_paths = nested.map((other) => `${other.dir}/**`);
 	}
 	const agents: AgentName[] = [];
 	if (anyExists(root, [".claude", "CLAUDE.md"]) || which("claude") !== null)
@@ -369,6 +464,8 @@ export function configToml(detection: Detection): string {
 		);
 	for (const stack of detection.stacks) {
 		lines.push("", "[[stack]]", `language = ${q(stack.language)}`);
+		if (stack.exclude_paths?.length)
+			lines.push(`exclude_paths = ${list(stack.exclude_paths)}`);
 		if (stack.package_manager)
 			lines.push(`package_manager = ${q(stack.package_manager)}`);
 		lines.push(

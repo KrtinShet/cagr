@@ -14,6 +14,7 @@ export function stackFiles(
 		if (path === null) continue;
 		if (stack.extensions.length > 0 && !hasExtension(path, stack.extensions))
 			continue;
+		if (stack.exclude_paths?.some((glob) => matchesGlob(glob, path))) continue;
 		if (stack.paths.some((glob) => matchesGlob(glob, path))) paths.push(path);
 	}
 	return paths;

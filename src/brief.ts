@@ -66,7 +66,7 @@ export function brief(
 			);
 		if (parts.length > 0)
 			lines.push(
-				`- ${stack.language} (${stack.paths.join(", ")}): ${parts.join("; ")}.`,
+				`- ${stack.language} (${stack.paths.join(", ")}${stack.exclude_paths?.length ? ` excluding ${stack.exclude_paths.join(", ")}` : ""}): ${parts.join("; ")}.`,
 			);
 	}
 	if (config.findings.mode === "new") {

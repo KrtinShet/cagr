@@ -189,6 +189,13 @@
 						},
 						"description": "Globs, relative to the repo root, this stack covers."
 					},
+					"exclude_paths": {
+						"type": "array",
+						"items": {
+							"type": "string"
+						},
+						"description": "Repo-relative globs excluded from this stack."
+					},
 					"extensions": {
 						"type": "array",
 						"items": {

@@ -281,3 +281,98 @@ test("enforcement summary includes pre-push commands and empty policy groups", a
 	expect(summary).toContain("Will require: none.");
 	expect(summary).toContain("Before a push: bun run verify.");
 });
+
+test("Go root and nested modules use file formatting and module checks", async () => {
+	for (const config of [
+		null,
+		".golangci.yml",
+		".golangci.yaml",
+		".golangci.toml",
+		".golangci.json",
+	]) {
+		const root = await project({
+			"go.mod": "module example.com/root\n",
+			"nested module/go.mod": "module example.com/nested\n",
+			...(config ? { [config]: "", [`nested module/${config}`]: "" } : {}),
+		});
+		const detection = await detect(root, none);
+		expect(detection.stacks).toHaveLength(2);
+		for (const stack of detection.stacks) {
+			expect(stack.package_manager).toBeNull();
+			expect(stack.on_edit).toEqual(["gofmt -w {files}"]);
+			const go = stack.dir ? "cd 'nested module' && go" : "go";
+			expect(stack.on_turn_end).toEqual([
+				`${go} vet ./...`,
+				`${go} test ./...`,
+				...(config
+					? [
+							stack.dir
+								? "cd 'nested module' && golangci-lint run ./..."
+								: "golangci-lint run ./...",
+						]
+					: []),
+			]);
+		}
+		const loaded = resolveConfig(
+			Bun.TOML.parse(configToml(detection)) as never,
+			root,
+			"cagr.toml",
+		);
+		expect(loaded.stack[0]?.extensions).toEqual(["go"]);
+		expect(loaded.stack[0]?.exclude_paths).toEqual(["nested module/**"]);
+		const preview = await init(root, { dryRun: true });
+		expect(preview.enforcement).toContain("gofmt -w {files}");
+		expect(preview.enforcement).toContain("go vet ./...");
+	}
+});
+
+test("Rust workspace packages resolve editions and keep formatting file scoped", async () => {
+	const root = await project({
+		"Cargo.toml":
+			'[workspace]\nmembers = ["crates/*"]\n[workspace.package]\nedition = "2024"\n',
+		"crates/old/Cargo.toml": '[package]\nname = "old"\nversion = "0.1.0"\n',
+		"crates/new/Cargo.toml":
+			'[package]\nname = "new"\nversion = "0.1.0"\nedition.workspace = true\n',
+		"standalone/Cargo.toml":
+			'[package]\nname = "standalone"\nedition = "2021"\n',
+	});
+	const found = await detect(root, none);
+	expect(found.stacks).toHaveLength(3);
+	for (const stack of found.stacks) {
+		const edition = stack.dir.endsWith("old")
+			? "2015"
+			: stack.dir.endsWith("new")
+				? "2024"
+				: "2021";
+		expect(stack.on_edit).toEqual([
+			`rustfmt --edition ${edition} --config skip_children=true {files}`,
+		]);
+		expect(stack.on_turn_end).toEqual([
+			`cargo clippy --manifest-path ${stack.dir}/Cargo.toml --all-targets -- -D warnings`,
+			`cargo test --manifest-path ${stack.dir}/Cargo.toml`,
+		]);
+	}
+});
+
+test("Rust root package and nested packages do not format each other's sources", async () => {
+	const { stackFiles } = await import("./hook/stack-files");
+	const root = await project({
+		"Cargo.toml": '[package]\nname="root"\nedition="2021"\n',
+		"child/Cargo.toml": '[package]\nname="child"\nedition="2024"\n',
+	});
+	const found = await detect(root, none);
+	const loaded = resolveConfig(
+		Bun.TOML.parse(configToml(found)) as never,
+		root,
+		"cagr.toml",
+	);
+	expect(found.stacks[0]?.on_edit[0]).toContain("--edition 2021");
+	expect(loaded.stack[0]?.extensions).toEqual(["rs"]);
+	expect(
+		stackFiles(
+			loaded.stack[0] as NonNullable<(typeof loaded.stack)[0]>,
+			[join(root, "child/src/lib.rs"), join(root, "src/lib.rs")],
+			loaded,
+		),
+	).toEqual(["src/lib.rs"]);
+});

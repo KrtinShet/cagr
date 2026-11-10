@@ -12,6 +12,7 @@ import { pickAgent } from "./review/agent";
 import type { Gh } from "./review/github";
 import { loadRuleSet } from "./rules/rules";
 import { run } from "./run";
+import { simpleCommands } from "./shell";
 import { isGitRepo, notGitRepo, sync } from "./sync";
 
 export const budgetsMs: Record<string, number> = {
@@ -39,9 +40,16 @@ const valueFlags = new Set([
 export function programsOf(
 	command: string,
 ): { name: string; dirs: string[] }[] {
-	const words = command.split(/\s+/).filter((word) => word !== "");
+	return simpleCommands(command)
+		.filter((words) => words[0] !== "cd")
+		.flatMap(programsOfWords);
+}
+
+function programsOfWords(words: string[]): { name: string; dirs: string[] }[] {
 	const runner = words[0] ?? "";
 	const needed = [{ name: runner, dirs: [] as string[] }];
+	if (runner === "cargo" && words[1] === "clippy")
+		needed.push({ name: "cargo-clippy", dirs: [] });
 	const viaNode =
 		runner === "bunx" ||
 		runner === "npx" ||
@@ -210,6 +218,24 @@ export async function doctor(
 						text: `${program} is not on PATH. Hooks call it; install it or set [agents] command.`,
 					},
 		);
+	const nativeTools = new Set(
+		config.stack.flatMap((stack) =>
+			stack.language === "go"
+				? ["go", "gofmt"]
+				: stack.language === "rust"
+					? ["cargo", "rustfmt", "cargo-clippy"]
+					: [],
+		),
+	);
+	for (const name of nativeTools)
+		tools.push(
+			Bun.which(name)
+				? { ok: true, text: `${name} is on PATH.` }
+				: {
+						ok: false,
+						text: `${name} is not on PATH. Install the toolchain component and add it to PATH.`,
+					},
+		);
 	const commands = [
 		...new Set([
 			...config.stack.flatMap((stack) => [
@@ -228,7 +254,7 @@ export async function doctor(
 				? { ok: true, text: `\`${command}\`` }
 				: {
 						ok: false,
-						text: `\`${command}\`: ${missing.join(", ")} not found.`,
+						text: `\`${command}\`: ${missing.join(", ")} not found. Install the missing tools and add them to PATH.`,
 					},
 		);
 	}

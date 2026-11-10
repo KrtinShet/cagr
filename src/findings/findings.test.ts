@@ -315,3 +315,64 @@ test("clean files do not disable other files, but a failure with no findings sta
 		),
 	).toBeNull();
 });
+
+test("Go and Rust failures stay strict in new findings mode", async () => {
+	const { chmodSync } = await import("node:fs");
+	for (const [language, ext, tool, command] of [
+		["go", "go", "gofmt", "gofmt -w {files}"],
+		[
+			"rust",
+			"rs",
+			"rustfmt",
+			"rustfmt --edition 2024 --config skip_children=true {files}",
+		],
+	] as const) {
+		expect(findingCommand(command)).toBeNull();
+		const { root, write } = await tempRepo();
+		mkdirSync(join(root, "bin"));
+		await write(
+			`bin/${tool}`,
+			'#!/bin/sh\necho "existing failure" >&2\nexit 1\n',
+		);
+		chmodSync(join(root, `bin/${tool}`), 0o755);
+		await write(`sample.${ext}`, "invalid source\n");
+		const config = resolveConfig(
+			{
+				findings: { mode: "new" },
+				stack: [{ language, on_edit: [command], on_turn_end: [command] }],
+			},
+			root,
+			"cagr.toml",
+		);
+		const event = (event: HookInput["event"]): HookInput => ({
+			event,
+			sessionId: crypto.randomUUID(),
+			cwd: root,
+			command: null,
+			files: [join(root, `sample.${ext}`)],
+		});
+		const previous = process.env.PATH;
+		process.env.PATH = `${join(root, "bin")}:${previous}`;
+		try {
+			const input = event("file.before_edit");
+			await handle(input, config);
+			expect(
+				(await handle({ ...input, event: "file.after_edit" }, config)).kind,
+			).toBe("block");
+			expect((await handle({ ...input, event: "turn.end" }, config)).kind).toBe(
+				"block",
+			);
+			expect(await editChecks(input.files, config)).toHaveLength(1);
+		} finally {
+			process.env.PATH = previous;
+		}
+	}
+	for (const command of [
+		"go vet ./...",
+		"go test ./...",
+		"golangci-lint run ./...",
+		"cargo clippy --all-targets -- -D warnings",
+		"cargo test",
+	])
+		expect(findingCommand(command)).toBeNull();
+});

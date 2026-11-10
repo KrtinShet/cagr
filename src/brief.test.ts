@@ -40,3 +40,33 @@ test("stacks, rules and extra lines appear when set", () => {
 	expect(text).toEndWith("- Ask before adding a dependency.");
 	expect(text).not.toContain("Git:");
 });
+
+test("Go and Rust briefs describe checks without inventing manager restrictions", () => {
+	const text = brief(
+		config({
+			findings: { mode: "new" },
+			stack: [
+				{
+					language: "go",
+					on_edit: ["gofmt -w {files}"],
+					on_turn_end: ["go vet ./...", "go test ./..."],
+				},
+				{
+					language: "rust",
+					on_edit: ["rustfmt --edition 2024 {files}"],
+					on_turn_end: [
+						"cargo clippy --all-targets -- -D warnings",
+						"cargo test",
+					],
+				},
+			],
+		}),
+		[],
+	);
+	expect(text).toContain("- go (**): after each edit `gofmt");
+	expect(text).toContain("- rust (**): after each edit `rustfmt");
+	expect(text).not.toContain("Package managers:");
+	expect(text).toContain(
+		"All other commands, turn-end checks, CI and code rules still must fully pass",
+	);
+});

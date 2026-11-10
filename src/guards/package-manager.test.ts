@@ -83,3 +83,23 @@ test("two stacks may allow two managers", () => {
 		"uses bun and npm for JavaScript",
 	);
 });
+
+test("Go and Rust add no manager restrictions and preserve mixed JS rules", () => {
+	const native = config({ stack: [{ language: "go" }, { language: "rust" }] });
+	for (const command of [
+		"go get example.com/a",
+		"cargo add serde",
+		"npm install",
+	])
+		expect(finding(command, native)).toBeNull();
+	const mixed = config({
+		stack: [
+			{ language: "go" },
+			{ language: "rust" },
+			{ language: "javascript", package_manager: "bun" },
+		],
+	});
+	expect(finding("npm install", mixed)?.id).toBe("package-manager");
+	expect(finding("cargo test", mixed)).toBeNull();
+	expect(finding("go test ./...", mixed)).toBeNull();
+});

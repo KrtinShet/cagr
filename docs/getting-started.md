@@ -69,6 +69,8 @@ cagr doctor    # lists guards and checks the wiring, tools and hook timings
 
 - **Stacks.** It looks at the repo and at project folders up to three levels deep, skipping folders like `node_modules`. Each project becomes a `[[stack]]` entry with its `paths`.
 - **JavaScript and TypeScript.** The package manager comes from `packageManager` in `package.json`, or from the lockfile. Biome, ESLint and Prettier become `on_edit` commands. The `lint` and `typecheck` scripts (or `tsc`) become `on_turn_end` commands. A `verify` script becomes `git.pre_push`.
+- **Go.** `go.mod` adds file-scoped `gofmt -w` after edits and module-scoped `go vet ./...` and `go test ./...` at turn end. A `.golangci.yml`, `.golangci.yaml`, `.golangci.toml` or `.golangci.json` in the module adds `golangci-lint run ./...` at turn end. Install golangci-lint yourself when configured. Package linting and its fixes stay out of edit hooks to keep them fast. Run `golangci-lint run --fix ./...` from the module directory when fixes are needed.
+- **Rust.** `Cargo.toml` packages add `rustfmt --edition <edition> --config skip_children=true {files}` after edits, then `cargo clippy --all-targets -- -D warnings` and `cargo test` with `--manifest-path` at turn end. Install the rustfmt and clippy toolchain components. Each workspace package gets its own stack and edition, including `edition.workspace = true`; an omitted edition defaults to 2015. `rustfmt` accepts individual files, while `cargo fmt` selects crate targets. `skip_children` keeps module traversal from formatting files outside the edit. Virtual workspace manifests have no stack of their own.
 - **Python.** The package manager is uv, Poetry, Pipenv or pip. Ruff becomes an `on_edit` command. mypy and pytest become `on_turn_end` commands.
 - **Agents.** Claude Code if there is a `.claude` folder or a `CLAUDE.md`, or `claude` is on `PATH`. Codex if there is a `.codex` folder or an `AGENTS.md`, or `codex` is on `PATH`. If it finds neither, it sets up both.
 - **Protected branch.** From `origin/HEAD`. Otherwise `main`, or `master` if you are on `master`.
@@ -122,3 +124,5 @@ Each failing line says what to fix.
 - Change `cagr.toml` or the files in `.cagr/`, then run `cagr sync`. See [Configuration](configuration.md).
 - Add code rules in `.cagr/rules/`. See [Code rules](code-rules.md).
 - Fill in `.cagr/review.md`. See [Review](review.md).
+
+Go modules and Rust packages are found within the same three-directory scan as JS and Python packages. Nested modules and crates are excluded from their parent stacks so each file uses its own commands and edition. Rerun init when the package layout changes. Go and Rust do not set `package_manager`; JS tooling in a mixed repo still uses the existing JS guard. All Go and Rust checks stay strict in `[findings] mode = "new"`.

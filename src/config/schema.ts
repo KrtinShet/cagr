@@ -152,6 +152,7 @@ export const configSchema: Node = obj({
 						"The only package manager agents may use for this ecosystem.",
 				}),
 				paths: strings("Globs, relative to the repo root, this stack covers."),
+				exclude_paths: strings("Repo-relative globs excluded from this stack."),
 				extensions: strings(
 					"File extensions this stack checks. Defaults depend on the language.",
 				),
@@ -376,6 +377,7 @@ export type Stack = {
 	language: string;
 	package_manager: PackageManager | null;
 	paths: string[];
+	exclude_paths?: string[];
 	extensions: string[];
 	on_edit: string[];
 	on_turn_end: string[];

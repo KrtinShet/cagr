@@ -94,3 +94,56 @@ test("doctor names the setting to enable lint suppressions", async () => {
 	);
 	expect(section).not.toContain("new lint suppressions");
 });
+
+test("Go and Rust tool commands check PATH, including the clippy component", async () => {
+	for (const command of [
+		"go -C service vet ./...",
+		"gofmt -w {files}",
+		"golangci-lint run ./...",
+		"rustfmt --edition 2024 {files}",
+		"cargo test --manifest-path Cargo.toml",
+	]) {
+		expect(programsOf(command)).toEqual([
+			{ name: command.split(" ")[0] ?? "", dirs: [] },
+		]);
+	}
+	expect(programsOf("cargo clippy --all-targets -- -D warnings")).toEqual([
+		{ name: "cargo", dirs: [] },
+		{ name: "cargo-clippy", dirs: [] },
+	]);
+	const root = await mkdtemp(join(tmpdir(), "cagr-doctor-native-"));
+	const config = resolveConfig(
+		{
+			stack: [
+				{
+					language: "go",
+					on_edit: ["gofmt -w {files}"],
+					on_turn_end: ["go vet ./...", "golangci-lint run ./..."],
+				},
+				{
+					language: "rust",
+					on_edit: ["rustfmt --edition 2024 {files}"],
+					on_turn_end: ["cargo clippy --all-targets -- -D warnings"],
+				},
+			],
+		},
+		root,
+		"cagr.toml",
+	);
+	const { report } = await doctor(config);
+	const section = report.split("Tools\n")[1]?.split("\n\n")[0];
+	for (const tool of [
+		"go vet",
+		"gofmt",
+		"golangci-lint",
+		"rustfmt",
+		"cargo clippy",
+	])
+		expect(section).toContain(tool);
+});
+
+test("doctor checks tools behind a scoped golangci command", () => {
+	expect(programsOf("cd 'nested module' && golangci-lint run ./...")).toEqual([
+		{ name: "golangci-lint", dirs: [] },
+	]);
+});
