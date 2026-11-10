@@ -48,6 +48,31 @@ const namePattern = (presets: string[], description: string) =>
 		},
 	);
 
+const changePath = obj(
+	{
+		path: str({ minLength: 1 }),
+		status: str({ enum: ["A", "M", "D", "T"] }),
+		before: str(),
+		after: str(),
+	},
+	{ required: ["path", "status"] },
+);
+const changeExamples = obj(
+	{
+		valid: arr(obj({ changes: arr(changePath) }, { required: ["changes"] })),
+		invalid: arr(obj({ changes: arr(changePath) }, { required: ["changes"] })),
+	},
+	{ required: ["valid", "invalid"] },
+);
+const changeFields = {
+	id: str({ minLength: 1 }),
+	paths: arr(str({ minLength: 1 })),
+	ignores: arr(str()),
+	reason: str({ minLength: 1 }),
+	note: str(),
+	examples: changeExamples,
+};
+const changeRequired = ["id", "kind", "paths", "reason", "examples"];
 export const configSchema: Node = obj({
 	$schema: str({
 		description: "Path or URL of this JSON schema, for editors.",
@@ -193,6 +218,37 @@ export const configSchema: Node = obj({
 	suppressions: obj({
 		enabled: bool({ description: "Block new lint suppression comments." }),
 		allow: strings("Globs where new suppressions are allowed."),
+	}),
+	changes: obj({
+		rules: arr(
+			oneOf(
+				[
+					obj(
+						{
+							...changeFields,
+							kind: str({ enum: ["requires"] }),
+							require: arr(str({ minLength: 1 })),
+						},
+						{ required: [...changeRequired, "require"] },
+					),
+					obj(
+						{ ...changeFields, kind: str({ enum: ["add_only"] }) },
+						{ required: changeRequired },
+					),
+					obj(
+						{
+							...changeFields,
+							kind: str({ enum: ["sibling"] }),
+							target: str({ minLength: 1 }),
+						},
+						{ required: [...changeRequired, "target"] },
+					),
+				],
+				{
+					hint: "must be a requires, add_only or sibling rule with its required fields and no unrelated keys.",
+				},
+			),
+		),
 	}),
 	rules: obj(
 		{
@@ -359,6 +415,7 @@ export type Config = {
 	commands: { blocked: BlockedCommand[] };
 	findings: { mode: "all" | "new" };
 	suppressions: { enabled: boolean; allow: string[] };
+	changes: { rules: import("../changes/rules").ChangeRule[] };
 	rules: { dirs: string[] };
 	review: {
 		enabled: boolean;

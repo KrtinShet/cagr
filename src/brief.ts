@@ -87,6 +87,8 @@ export function brief(
 		);
 	if (!config.review.agents_may_merge)
 		lines.push("- Do not merge or approve pull requests. A person does that.");
+	for (const rule of config.changes.rules)
+		lines.push(`- Change rule ${rule.id}: ${rule.reason}`);
 	lines.push(...config.brief.map((line) => `- ${line}`));
 	return lines.join("\n");
 }

@@ -40,6 +40,8 @@ cagr does not replace Biome, ESLint, Ruff, mypy or your tests. It runs them at t
 - **At the end of a turn**, your `on_turn_end` commands (type check, lint, tests) must pass before the agent may stop. It blocks at most 2 stops in a row, then lets the agent go and tells the human.
 - **In CI**, `cagr ci` runs the same checks on the branch's changed files, so a change made without the hooks cannot merge.
 
+cagr’s own [change rules](change-rules.md) judge the branch diff: files that must change together, existing files that must stay fixed, and new files that need companions. They run at turn end and in CI, including changes made through shell commands. They require tested examples and fixes.
+
 Keep a rule in your linter when your linter can express it. cagr's [code rules](code-rules.md) are for the rest: repo-specific patterns your linter has no rule for, written as ast-grep with a required `instead:` and tested examples. Layout rules check file names and folders, which most linters do not.
 
 ## Compared with other tools

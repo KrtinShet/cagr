@@ -1,0 +1,18 @@
+[[changes.rules]]
+id = "schema-companion"
+kind = "requires"
+paths = ["src/config/schema.ts"]
+require = ["schema/cagr.schema.json"]
+reason = "Run `bun run schema` and include schema/cagr.schema.json in this change."
+examples.invalid = [{ changes = [{ path = "src/config/schema.ts", status = "M" }] }]
+examples.valid = [{ changes = [{ path = "src/config/schema.ts", status = "M" }, { path = "schema/cagr.schema.json", status = "M" }] }]
+
+[[changes.rules]]
+id = "guard-tests"
+kind = "sibling"
+paths = ["src/guards/**/*.ts"]
+ignores = ["**/*.test.ts"]
+target = "{dir}/{name}.test.{ext}"
+reason = "Add or update the matching .test.ts file in this change."
+examples.invalid = [{ changes = [{ path = "src/guards/new-guard.ts", status = "A" }] }]
+examples.valid = [{ changes = [{ path = "src/guards/new-guard.ts", status = "A" }, { path = "src/guards/new-guard.test.ts", status = "A" }] }]

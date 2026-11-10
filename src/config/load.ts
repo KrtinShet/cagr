@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { resolveChangeRules } from "../changes/rules";
 import {
 	builtinResolver,
 	type PresetResolver,
@@ -88,7 +89,21 @@ export function resolveConfig(
 	validate(raw, source);
 	const { combined, sources } = withFragments(raw, root, source);
 	const merged = withPresets(combined, source, resolvers, []);
-	return applyDefaults(merged, root, source, sources);
+	try {
+		const config = applyDefaults(merged, root, source, sources);
+		const owners = new Map<string, string[]>();
+		for (const file of sources) {
+			const data = file === source ? raw : parseToml(file);
+			for (const rule of ((data.changes as RawConfig | undefined)?.rules ??
+				[]) as { id: string }[])
+				owners.set(rule.id, [...(owners.get(rule.id) ?? []), file]);
+		}
+		for (const rule of config.changes.rules)
+			rule.source = owners.get(rule.id)?.shift() ?? source;
+		return config;
+	} catch (error) {
+		throw new ConfigError((error as Error).message);
+	}
 }
 
 /**
@@ -125,6 +140,7 @@ function withFragments(
 
 /** The lists of tables that add up across files and presets, even when one is empty. */
 const listsThatAddUp = new Set([
+	"changes.rules",
 	"stack",
 	"files.protected",
 	"commands.blocked",
@@ -323,6 +339,13 @@ function applyDefaults(
 		suppressions: {
 			enabled: (suppressions.enabled as boolean | undefined) ?? false,
 			allow: (suppressions.allow as string[] | undefined) ?? [],
+		},
+		changes: {
+			rules: resolveChangeRules(
+				((raw.changes as RawConfig | undefined)?.rules ??
+					[]) as import("../changes/rules").ChangeRule[],
+				sources,
+			),
 		},
 		rules: {
 			dirs: (rules.dirs as string[] | undefined) ?? [".cagr/rules"],

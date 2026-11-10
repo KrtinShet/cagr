@@ -124,7 +124,7 @@ export function loadRuleSet(config: Config): RuleSet {
 	}
 	for (const rule of code) withShared(rule, shared);
 	const seen = new Map<string, string>();
-	for (const rule of [...code, ...layout]) {
+	for (const rule of [...code, ...layout, ...config.changes.rules]) {
 		if (guardIds.includes(rule.id))
 			problems.push(
 				`${rule.source}: id "${rule.id}" is a built-in guard. Pick another id.`,

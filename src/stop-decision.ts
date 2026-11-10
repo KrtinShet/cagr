@@ -34,7 +34,7 @@ export function stopDecision(
 	const details = failures
 		.map(
 			(failure) =>
-				`## ${failure.name}\n${truncate(failure.output.trim(), maxOutputPerCheck)}`,
+				`## ${failure.name}\n${failure.name === "Change rules" ? failure.output.trim() : truncate(failure.output.trim(), maxOutputPerCheck)}`,
 		)
 		.join("\n\n");
 	return {

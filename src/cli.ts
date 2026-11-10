@@ -1,4 +1,6 @@
 import { resolve } from "node:path";
+import { checkChanges } from "./changes/check";
+import { testChanges } from "./changes/rules";
 import { checkAll } from "./check-all";
 import { annotations, ci, ciReport, publish } from "./ci";
 import { jsonSchema } from "./config/json-schema";
@@ -55,6 +57,7 @@ Usage: cagr <command>
   check <files...> | --all     Run the edit checks and code rules on files, or the
                                code and layout rules on every file.
   explain <id>                 Explain a guard, a code rule or a layout rule.
+  rules check [--base <ref>] [--committed]  Check change rules against the merge base.
   rules test                   Check every rule's examples: invalid ones must fire, valid ones must not.
   schema                       Print the JSON schema for cagr.toml.
   hook <event> --agent <name>  Called by agent hooks: reads the agent's JSON on stdin.
@@ -103,7 +106,7 @@ const options: Record<string, string[]> = {
 	ci: ["--base"],
 	check: ["--all"],
 	explain: [],
-	rules: [],
+	rules: ["--base", "--committed"],
 	schema: [],
 	"post-status": ["--branch", "--wait", "--checks"],
 };
@@ -292,6 +295,15 @@ async function main(argv: string[]): Promise<number> {
 			const { code: rules, layout } = config
 				? loadRuleSet(config)
 				: { code: [], layout: [] };
+			const change = config?.changes.rules.find((rule) => rule.id === id);
+			if (change) {
+				console.log(JSON.stringify(change, null, 2));
+				console.log(
+					"Runs at turn end and CI. No PR command gate. Instead: " +
+						change.reason,
+				);
+				return 0;
+			}
 			const layoutRule = layout.find((entry) => entry.id === id);
 			if (layoutRule) {
 				console.log(explainLayout(layoutRule));
@@ -326,20 +338,33 @@ async function main(argv: string[]): Promise<number> {
 			return 0;
 		}
 		case "rules": {
+			if (args[0] === "check") {
+				const base = flag(args, "--base") ?? undefined;
+				const result = await checkChanges(requireConfig(), {
+					base,
+					committed: args.includes("--committed"),
+				});
+				console.log(result.output);
+				return result.ok ? 0 : 1;
+			}
 			if (args[0] !== "test") throw new UsageError("Usage: cagr rules test");
 			const config = requireConfig();
 			const { code, layout } = loadRuleSet(config);
 			const results = [
 				...(await testRules(code, config.root)),
 				...testLayoutRules(layout),
+				...testChanges(config.changes.rules),
 			];
 			for (const result of results.filter((entry) => !entry.ok))
 				console.log(
 					`FAIL ${result.rule}: ${result.kind} example${result.path ? ` at ${result.path}` : ""} ${result.kind === "invalid" ? `did not fire${result.skipped ? ` (${result.skipped})` : ""}` : result.skipped ? `was not checked (${result.skipped})` : `fired ${result.matches} time${result.matches === 1 ? "" : "s"}`}:\n  ${result.example.trim().replace(/\n/g, "\n  ")}`,
 				);
+			console.log(
+				`Kinds: ${code.length} code, ${layout.length} layout, ${config.changes.rules.filter((r) => r.kind === "requires").length} requires, ${config.changes.rules.filter((r) => r.kind === "add_only").length} add_only, ${config.changes.rules.filter((r) => r.kind === "sibling").length} sibling.`,
+			);
 			const failed = results.filter((entry) => !entry.ok).length;
 			console.log(
-				`${code.length + layout.length} rules, ${results.length} examples, ${failed} failed.`,
+				`${code.length + layout.length + config.changes.rules.length} rules, ${results.length} examples, ${failed} failed.`,
 			);
 			return failed === 0 ? 0 : 1;
 		}

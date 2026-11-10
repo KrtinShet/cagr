@@ -73,7 +73,12 @@ test("bad commit subjects, failing checks and edits that change files all fail",
 	const failed = result.checks
 		.filter((entry) => !entry.ok)
 		.map((entry) => entry.name);
-	expect(failed).toEqual(["Commit messages", "Edit checks", "Checks"]);
+	expect(failed).toEqual([
+		"Commit messages",
+		"Edit checks",
+		"Checks",
+		"Clean checkout after checks",
+	]);
 	const edits = result.checks.find((entry) => entry.name === "Edit checks");
 	expect(edits?.output).toContain("The edit checks changed files");
 });
@@ -87,7 +92,12 @@ test("the pull request body is checked against the sections", async () => {
 	const event = join(mkdtempSync(join(tmpdir(), "gw-ev-")), "event.json");
 	writeFileSync(
 		event,
-		JSON.stringify({ pull_request: { body: "## Testing\nran it" } }),
+		JSON.stringify({
+			pull_request: {
+				head: { sha: await repo.git("rev-parse", "HEAD") },
+				body: "## Testing\nran it",
+			},
+		}),
 	);
 	const result = await ci(config, {
 		cwd: repo.root,

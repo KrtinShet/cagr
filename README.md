@@ -7,6 +7,7 @@ Coding agents slip. They run `npm install` in a bun repo, push to `main`, edit `
 - **Commands**: it denies the wrong package manager, a push to the protected branch, a force push, hook skips, and any command you list, before the command runs.
 - **Files**: it denies edits to protected files such as `.env*` and lockfiles, before the edit happens.
 - **Lint suppressions**: the `lint-suppression` guard blocks new `eslint-disable`, `@ts-ignore`, `# noqa` and other suppression directives after edits and in CI. The recommended preset also protects lint config files. Fix the cause, or ask a person to review an exception.
+- **Changes**: cagr’s own change rules check companion changes, immutable existing files, and tests for new files at turn end and in CI.
 - **Edits**: after each edit it runs your formatters and linters (Biome, ESLint, Ruff) and your own ast-grep code rules, on the changed files only. Layout rules stop a new file from being created with the wrong name or in the wrong folder.
 - **End of turn**: the agent may not finish while your checks (tsc, mypy, pytest, `bun run lint`) fail. It blocks at most 2 stops in a row, then lets the agent go and tells the human, so it never traps the agent in a loop.
 - **Pull requests**: `gh pr create` is denied until a reviewer agent in a fresh context has reviewed the current commit and every Important finding is fixed or answered. Agents may not merge or approve. See [Review](#review).
@@ -28,7 +29,7 @@ The full docs are at [krtinshet.github.io/cagr](https://krtinshet.github.io/cagr
 - [Getting started](docs/getting-started.md): install, `cagr init`, `cagr doctor`.
 - [Configuration](docs/configuration.md): every key in `cagr.toml`.
 - [Guards](docs/guards.md): every built-in guard and its message.
-- [Hooks and events](docs/hooks-and-events.md), [Code rules](docs/code-rules.md), [Review](docs/review.md), [CI](docs/ci.md).
+- [Hooks and events](docs/hooks-and-events.md), [Change rules](docs/change-rules.md), [Code rules](docs/code-rules.md), [Review](docs/review.md), [CI](docs/ci.md).
 - [CLI reference](docs/cli.md), [Limits and troubleshooting](docs/limits.md) and [Releasing](docs/releasing.md).
 
 ## Quick start
@@ -78,9 +79,13 @@ blocked = [{ match = "prisma db push", reason = "Use `bun run db:migrate --name 
 - After you change the config, run `cagr sync` to rewrite the hook files. `cagr sync --check` fails in CI when they drift.
 - `schema/cagr.schema.json` is the JSON schema, for editor completion.
 
+## Change rules
+
+Change rules are cagr’s own rule type: require companion changes, keep existing migrations fixed, and require a test beside each new guard. Put `[[changes.rules]]` in `.cagr/changes.toml` with tested examples and a reason saying what to do instead. Turn end checks the merge base to the working tree, including shell edits; CI checks committed trees. Run `cagr rules check` locally. See [Change rules](docs/change-rules.md) for setup and limits.
+
 ## Code rules
 
-Put ast-grep rules in `.cagr/rules/*.yml`. Each rule must say what to use instead and carry examples, so it can be tested:
+Keep rules in your linter when it can express them. For the rest, put ast-grep rules in `.cagr/rules/*.yml`. Each rule must say what to use instead and carry examples, so it can be tested:
 
 ```yaml
 id: no-console-log
