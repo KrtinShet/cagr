@@ -7,11 +7,13 @@ import {
 	openSync,
 	readFileSync,
 	readlinkSync,
+	realpathSync,
 	rmSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Config } from "../config/schema";
+import { insideRoot } from "../paths";
 import { loadRuleSet } from "../rules/rules";
 import { run } from "../run";
 import { type Change, evaluate, formatChange } from "./rules";
@@ -28,6 +30,7 @@ export async function collect(
 	options: { base?: string; committed?: boolean; deadline?: number } = {},
 ): Promise<Snapshot> {
 	const deadline = options.deadline ?? performance.now() + 15_000;
+	const root = realpathSync(config.root);
 	let temporaryIndex: string | undefined;
 	const execute = async (args: string[], stdin?: string) => {
 		if (performance.now() >= deadline)
@@ -124,7 +127,15 @@ export async function collect(
 					if (performance.now() >= deadline)
 						throw Error("collection deadline exceeded");
 					if (change.status === "D") continue;
-					const path = join(config.root, change.path);
+					let parent = root;
+					for (const component of change.path.split("/").slice(0, -1)) {
+						parent = join(parent, component);
+						if (lstatSync(parent).isSymbolicLink())
+							throw Error(
+								"a changed path has a symlinked parent; restore real directories and retry",
+							);
+					}
+					const path = join(root, change.path);
 					const stat = lstatSync(path);
 					change.regular = stat.isFile();
 					if (stat.isFile()) {
@@ -136,6 +147,21 @@ export async function collect(
 						);
 						try {
 							const opened = fstatSync(descriptor);
+							const resolved = realpathSync(
+								process.platform === "darwin"
+									? `/dev/fd/${descriptor}`
+									: process.platform === "linux"
+										? `/proc/self/fd/${descriptor}`
+										: path,
+							);
+							if (
+								insideRoot(root, resolved) === null ||
+								opened.dev !== stat.dev ||
+								opened.ino !== stat.ino
+							)
+								throw Error(
+									"file identity or parent changed during snapshot; retry after writes stop",
+								);
 							if (!opened.isFile() || opened.size > 32_000_000)
 								throw Error("file changed during snapshot");
 							const content = readFileSync(descriptor);

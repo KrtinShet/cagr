@@ -293,3 +293,34 @@ test("turn commands share the deadline and a timeout is visibly unchecked", asyn
 		timeouts.onTurnEndMs = original;
 	}
 });
+
+test("a parent symlink introduced after Git collection is unchecked before reading content", async () => {
+	const runner = await import("../run");
+	const { spyOn } = await import("bun:test");
+	const { renameSync, mkdtempSync, writeFileSync } = await import("node:fs");
+	const { tmpdir } = await import("node:os");
+	const { repo, config } = await setup();
+	await repo.write("src/a.ts", "changed");
+	const outside = mkdtempSync(join(tmpdir(), "cagr-outside-"));
+	writeFileSync(join(outside, "a.ts"), "outside");
+	const original = runner.run;
+	let replaced = false;
+	const spy = spyOn(runner, "run").mockImplementation(
+		async (argv, cwd, options) => {
+			const result = await original(argv, cwd, options);
+			if (!replaced && cwd === repo.root && argv.includes("--numstat")) {
+				replaced = true;
+				renameSync(join(repo.root, "src"), join(repo.root, "saved-src"));
+				symlinkSync(outside, join(repo.root, "src"));
+			}
+			return result;
+		},
+	);
+	try {
+		const result = await checkChanges(config);
+		expect(result.unchecked).toBe(true);
+		expect(result.output).toContain("symlinked parent");
+	} finally {
+		spy.mockRestore();
+	}
+});
