@@ -1,11 +1,13 @@
 import { accessSync, constants, existsSync } from "node:fs";
 import { join, relative } from "node:path";
+import { checkChanges } from "./changes/check";
+import { testChanges } from "./changes/rules";
 import type { Config } from "./config/schema";
 import { githubLines } from "./doctor-github";
 import { gitHookNames } from "./git-hooks";
 import { configuredGuards } from "./guards/catalog";
 import { readTimings } from "./hook/timings";
-import { toPosix } from "./paths";
+import { matchesGlob, toPosix } from "./paths";
 import { pickAgent } from "./review/agent";
 import type { Gh } from "./review/github";
 import { loadRuleSet } from "./rules/rules";
@@ -95,6 +97,50 @@ export async function doctor(
 	} catch (error) {
 		configLines.push({ ok: false, text: (error as Error).message });
 	}
+	if (config.changes.rules.length) {
+		for (const example of testChanges(config.changes.rules))
+			if (!example.ok)
+				configLines.push({
+					ok: false,
+					text:
+						"Change rule " +
+						example.rule +
+						": fix the " +
+						example.kind +
+						" fixture.",
+				});
+		const tracked = await run(["git", "ls-files", "-z"], config.root);
+		if (tracked.ok)
+			for (const rule of config.changes.rules) {
+				if (
+					!tracked.stdout
+						.split("\0")
+						.filter(Boolean)
+						.some(
+							(path) =>
+								rule.paths.some((pattern) => matchesGlob(pattern, path)) &&
+								!rule.ignores.some((pattern) => matchesGlob(pattern, path)),
+						)
+				)
+					configLines.push({
+						ok: true,
+						text: `Advice: ${rule.id} selects no tracked paths; keep it if it is for future files.`,
+					});
+			}
+		const result = await checkChanges(config);
+		configLines.push({
+			ok: result.ok,
+			text: !result.ok
+				? result.output
+				: "Change baseline: " +
+					result.snapshot?.base +
+					"; collection " +
+					result.collectionMs.toFixed(1) +
+					" ms, evaluation " +
+					result.evaluationMs.toFixed(1) +
+					" ms.",
+		});
+	}
 	sections.push(["Config", configLines]);
 	sections.push([
 		"Guards",
@@ -104,6 +150,13 @@ export async function doctor(
 		})),
 	]);
 
+	sections.push([
+		"Change rules",
+		config.changes.rules.map((rule) => ({
+			ok: true,
+			text: `${rule.id} (${rule.kind}): ${rule.reason}`,
+		})),
+	]);
 	const wiring: Line[] = [];
 	try {
 		const result = sync(config, { check: true });

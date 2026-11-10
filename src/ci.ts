@@ -1,12 +1,12 @@
 import { appendFileSync, existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, relative, resolve } from "node:path";
+import { checkChanges } from "./changes/check";
 import type { Config } from "./config/schema";
 import { gitContext } from "./git";
 import { missingSections } from "./guards/github";
 import { checkSuppressions } from "./guards/lint-suppression";
 import { branchFinding, commitMessageFinding } from "./guards/names";
 import { stackFiles, tidy, withFiles } from "./hook/stack-files";
-import { resolveBase } from "./review/review";
 import { classify, riskReport } from "./risk";
 import { type LayoutRule, layoutFindings } from "./rules/layout";
 import { findInFiles, loadRuleSet, RuleError } from "./rules/rules";
@@ -54,27 +54,67 @@ export async function ci(
 ): Promise<CiResult> {
 	const env = options.env ?? process.env;
 	const git = await gitContext(options.cwd);
-	const cwd = git.toplevel ?? options.cwd;
+	const cwd = config.root;
 	const baseName =
 		// Actions sets GITHUB_BASE_REF to "" outside pull requests, as on merge_group.
 		options.base ||
 		env.GITHUB_BASE_REF ||
 		config.git.protected_branch ||
 		"main";
-	const baseRef = await resolveBase(baseName, cwd);
-	const mergeBase = await out(["git", "merge-base", baseRef, "HEAD"], cwd);
-	const changed = (
-		await out(
-			["git", "diff", "--name-only", "--diff-filter=d", mergeBase, "HEAD"],
-			cwd,
-		)
-	)
-		.split("\n")
-		.filter(Boolean);
-	const absolute = changed
-		.map((path) => join(cwd, path))
-		.filter((file) => existsSync(file));
-	const checks: CiCheck[] = [];
+	const changeResult = await checkChanges(config, {
+		base: baseName,
+		committed: true,
+	});
+	const checks: CiCheck[] = [
+		check(
+			"Change rules",
+			changeResult.ok ? [] : [changeResult.output],
+			changeResult.findings.map((f) => ({
+				file: f.path,
+				message: `${f.message} Instead: ${f.reason}`,
+			})),
+		),
+	];
+	if (!changeResult.snapshot)
+		return { ok: false, checks, tier: config.risk.default };
+	const mergeBase = changeResult.snapshot.base;
+	const changed = changeResult.snapshot.changes
+		.filter((c) => c.status !== "D")
+		.map((c) => c.path);
+	const absolute = changed.map((path) => join(cwd, path)).filter(existsSync);
+	const dirty = await out(["git", "status", "--porcelain", "-z"], cwd);
+	checks.push(
+		check(
+			"Clean checkout",
+			dirty
+				? [
+						"Checkout is dirty. Commit the intended files and rerun cagr ci in a clean checkout.",
+					]
+				: [],
+		),
+	);
+	if (env.GITHUB_EVENT_PATH) {
+		try {
+			const event = JSON.parse(readFileSync(env.GITHUB_EVENT_PATH, "utf8")) as {
+				pull_request?: { head: { sha: string } };
+			};
+			if (
+				event.pull_request &&
+				event.pull_request.head?.sha !== changeResult.snapshot.head
+			)
+				checks.push(
+					check("PR head", [
+						"Check out the exact pull request head SHA and rerun cagr ci.",
+					]),
+				);
+		} catch {
+			checks.push(
+				check("PR head", [
+					"Unchecked: could not read the GitHub event. Restore readable valid event JSON and rerun cagr ci.",
+				]),
+			);
+		}
+	}
 	try {
 		const suppressions = await checkSuppressions(
 			config,
@@ -243,6 +283,20 @@ export async function ci(
 			),
 		);
 	}
+	if (await out(["git", "status", "--porcelain", "-z"], cwd))
+		checks.push(
+			check("Clean checkout after checks", [
+				"Checks changed the checkout. Commit fixes and rerun cagr ci from a clean checkout.",
+			]),
+		);
+	for (const entry of checks)
+		for (const note of entry.annotations) {
+			if (note.file)
+				note.file = relative(
+					git.toplevel ?? config.root,
+					resolve(config.root, note.file),
+				).replaceAll("\\", "/");
+		}
 	return { ok: checks.every((entry) => entry.ok), checks, tier: risk.tier };
 }
 

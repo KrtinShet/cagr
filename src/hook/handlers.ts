@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { brief } from "../brief";
+import { checkChanges } from "../changes/check";
 import type { Config } from "../config/schema";
 import { captureBaseline, compareFindings } from "../findings/baseline";
 import { gitContext } from "../git";
@@ -375,9 +376,14 @@ async function ruleChecks(
 }
 
 async function turnEnd(input: HookInput, config: Config): Promise<Decision> {
+	const deadline = performance.now() + Math.min(timeouts.onTurnEndMs, 55_000);
 	const file = stateFile(input.sessionId);
 	const state = await readTurnState(file);
-	if (!needsCheck(state, config.root)) return { kind: "allow" };
+	if (!needsCheck(state, config.root) && !config.changes.rules.length)
+		return { kind: "allow" };
+	const changeResult = config.changes.rules.length
+		? await checkChanges(config, { deadline })
+		: null;
 	const changed = state.files.filter(
 		(path) => insideRoot(config.root, path) !== null,
 	);
@@ -393,44 +399,89 @@ async function turnEnd(input: HookInput, config: Config): Promise<Decision> {
 				...new Set([...(commands.get(command) ?? []), ...present]),
 			]);
 	}
+	let commandTimedOut = false;
 	const checks = [...commands]
 		.filter(
 			([command, paths]) => !command.includes("{files}") || paths.length > 0,
 		)
 		.map(async ([command, paths]): Promise<CheckResult> => {
 			const result = await runShell(withFiles(command, paths), config.root, {
-				timeoutMs: timeouts.onTurnEndMs,
+				timeoutMs: Math.max(1, Math.floor(deadline - performance.now())),
 			});
 			timings.push({ event: "turn.end", check: command, ms: result.ms });
+			if (result.timedOut) commandTimedOut = true;
 			return {
 				name: `\`${command}\``,
-				ok: result.ok,
+				ok: result.ok || result.timedOut,
 				output: tidy(focusOnChanged(result.output, paths)),
 			};
 		});
 	const results = await Promise.all(checks);
-	const { rules, layout } = await ruleChecks(
-		config,
-		existing,
-		"turn.end",
-		timings,
-	);
+	const remaining = Math.max(1, deadline - performance.now());
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	let rulesTimedOut = false;
+	const { rules, layout } = await Promise.race([
+		ruleChecks(config, existing, "turn.end", timings),
+		new Promise<{ rules: CheckResult | null; layout: CheckResult | null }>(
+			(resolve) => {
+				timer = setTimeout(() => {
+					rulesTimedOut = true;
+					resolve({ rules: null, layout: null });
+				}, remaining);
+			},
+		),
+	]).finally(() => clearTimeout(timer));
+	if (changeResult) {
+		timings.push(
+			{
+				event: "turn.end",
+				check: "change collection",
+				ms: changeResult.collectionMs,
+			},
+			{
+				event: "turn.end",
+				check: "change evaluation",
+				ms: changeResult.evaluationMs,
+			},
+		);
+		if (!changeResult.unchecked)
+			results.push({
+				name: "Change rules",
+				ok: changeResult.ok,
+				output: changeResult.output,
+			});
+	}
 	if (rules) results.push(rules);
 	if (layout) results.push(layout);
 	recordTimings(config.root, timings);
+	const uncheckedNotice = [
+		changeResult?.unchecked ? changeResult.output : "",
+		commandTimedOut || rulesTimedOut
+			? "Unchecked: turn-end checks exceeded the whole-hook deadline. Run the configured checks and cagr rules check before merging."
+			: "",
+	]
+		.filter(Boolean)
+		.join("\n");
 	const decision = stopDecision(state, results);
 	if (decision.action === "block") {
 		await writeTurnState(file, {
 			...state,
 			failedStops: state.failedStops + 1,
 		});
-		return { kind: "block", reason: decision.reason };
+		return {
+			kind: "block",
+			reason: decision.reason,
+			...(uncheckedNotice ? { notice: uncheckedNotice } : {}),
+		};
 	}
 	await clearTurnState(file);
 	if (decision.action === "give-up")
 		return {
 			kind: "allow",
-			notice: `cagr: ${decision.message} The agent was let go so it does not loop. Run the checks yourself before you merge.`,
+			notice:
+				`cagr: ${decision.message} The agent was let go so it does not loop. Run the checks yourself before you merge. ${uncheckedNotice}`.trim(),
 		};
-	return { kind: "allow" };
+	return uncheckedNotice
+		? { kind: "allow", notice: uncheckedNotice }
+		: { kind: "allow" };
 }

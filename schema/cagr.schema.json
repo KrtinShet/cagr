@@ -314,6 +314,455 @@
 				}
 			}
 		},
+		"changes": {
+			"type": "object",
+			"additionalProperties": false,
+			"properties": {
+				"rules": {
+					"type": "array",
+					"items": {
+						"anyOf": [
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"properties": {
+									"id": {
+										"type": "string",
+										"minLength": 1
+									},
+									"paths": {
+										"type": "array",
+										"items": {
+											"type": "string",
+											"minLength": 1
+										}
+									},
+									"ignores": {
+										"type": "array",
+										"items": {
+											"type": "string"
+										}
+									},
+									"reason": {
+										"type": "string",
+										"minLength": 1
+									},
+									"note": {
+										"type": "string"
+									},
+									"examples": {
+										"type": "object",
+										"additionalProperties": false,
+										"properties": {
+											"valid": {
+												"type": "array",
+												"items": {
+													"type": "object",
+													"additionalProperties": false,
+													"properties": {
+														"changes": {
+															"type": "array",
+															"items": {
+																"type": "object",
+																"additionalProperties": false,
+																"properties": {
+																	"path": {
+																		"type": "string",
+																		"minLength": 1
+																	},
+																	"status": {
+																		"type": "string",
+																		"enum": [
+																			"A",
+																			"M",
+																			"D",
+																			"T"
+																		]
+																	},
+																	"before": {
+																		"type": "string"
+																	},
+																	"after": {
+																		"type": "string"
+																	}
+																},
+																"required": [
+																	"path",
+																	"status"
+																]
+															}
+														}
+													},
+													"required": [
+														"changes"
+													]
+												}
+											},
+											"invalid": {
+												"type": "array",
+												"items": {
+													"type": "object",
+													"additionalProperties": false,
+													"properties": {
+														"changes": {
+															"type": "array",
+															"items": {
+																"type": "object",
+																"additionalProperties": false,
+																"properties": {
+																	"path": {
+																		"type": "string",
+																		"minLength": 1
+																	},
+																	"status": {
+																		"type": "string",
+																		"enum": [
+																			"A",
+																			"M",
+																			"D",
+																			"T"
+																		]
+																	},
+																	"before": {
+																		"type": "string"
+																	},
+																	"after": {
+																		"type": "string"
+																	}
+																},
+																"required": [
+																	"path",
+																	"status"
+																]
+															}
+														}
+													},
+													"required": [
+														"changes"
+													]
+												}
+											}
+										},
+										"required": [
+											"valid",
+											"invalid"
+										]
+									},
+									"kind": {
+										"type": "string",
+										"enum": [
+											"requires"
+										]
+									},
+									"require": {
+										"type": "array",
+										"items": {
+											"type": "string",
+											"minLength": 1
+										}
+									}
+								},
+								"required": [
+									"id",
+									"kind",
+									"paths",
+									"reason",
+									"examples",
+									"require"
+								]
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"properties": {
+									"id": {
+										"type": "string",
+										"minLength": 1
+									},
+									"paths": {
+										"type": "array",
+										"items": {
+											"type": "string",
+											"minLength": 1
+										}
+									},
+									"ignores": {
+										"type": "array",
+										"items": {
+											"type": "string"
+										}
+									},
+									"reason": {
+										"type": "string",
+										"minLength": 1
+									},
+									"note": {
+										"type": "string"
+									},
+									"examples": {
+										"type": "object",
+										"additionalProperties": false,
+										"properties": {
+											"valid": {
+												"type": "array",
+												"items": {
+													"type": "object",
+													"additionalProperties": false,
+													"properties": {
+														"changes": {
+															"type": "array",
+															"items": {
+																"type": "object",
+																"additionalProperties": false,
+																"properties": {
+																	"path": {
+																		"type": "string",
+																		"minLength": 1
+																	},
+																	"status": {
+																		"type": "string",
+																		"enum": [
+																			"A",
+																			"M",
+																			"D",
+																			"T"
+																		]
+																	},
+																	"before": {
+																		"type": "string"
+																	},
+																	"after": {
+																		"type": "string"
+																	}
+																},
+																"required": [
+																	"path",
+																	"status"
+																]
+															}
+														}
+													},
+													"required": [
+														"changes"
+													]
+												}
+											},
+											"invalid": {
+												"type": "array",
+												"items": {
+													"type": "object",
+													"additionalProperties": false,
+													"properties": {
+														"changes": {
+															"type": "array",
+															"items": {
+																"type": "object",
+																"additionalProperties": false,
+																"properties": {
+																	"path": {
+																		"type": "string",
+																		"minLength": 1
+																	},
+																	"status": {
+																		"type": "string",
+																		"enum": [
+																			"A",
+																			"M",
+																			"D",
+																			"T"
+																		]
+																	},
+																	"before": {
+																		"type": "string"
+																	},
+																	"after": {
+																		"type": "string"
+																	}
+																},
+																"required": [
+																	"path",
+																	"status"
+																]
+															}
+														}
+													},
+													"required": [
+														"changes"
+													]
+												}
+											}
+										},
+										"required": [
+											"valid",
+											"invalid"
+										]
+									},
+									"kind": {
+										"type": "string",
+										"enum": [
+											"add_only"
+										]
+									}
+								},
+								"required": [
+									"id",
+									"kind",
+									"paths",
+									"reason",
+									"examples"
+								]
+							},
+							{
+								"type": "object",
+								"additionalProperties": false,
+								"properties": {
+									"id": {
+										"type": "string",
+										"minLength": 1
+									},
+									"paths": {
+										"type": "array",
+										"items": {
+											"type": "string",
+											"minLength": 1
+										}
+									},
+									"ignores": {
+										"type": "array",
+										"items": {
+											"type": "string"
+										}
+									},
+									"reason": {
+										"type": "string",
+										"minLength": 1
+									},
+									"note": {
+										"type": "string"
+									},
+									"examples": {
+										"type": "object",
+										"additionalProperties": false,
+										"properties": {
+											"valid": {
+												"type": "array",
+												"items": {
+													"type": "object",
+													"additionalProperties": false,
+													"properties": {
+														"changes": {
+															"type": "array",
+															"items": {
+																"type": "object",
+																"additionalProperties": false,
+																"properties": {
+																	"path": {
+																		"type": "string",
+																		"minLength": 1
+																	},
+																	"status": {
+																		"type": "string",
+																		"enum": [
+																			"A",
+																			"M",
+																			"D",
+																			"T"
+																		]
+																	},
+																	"before": {
+																		"type": "string"
+																	},
+																	"after": {
+																		"type": "string"
+																	}
+																},
+																"required": [
+																	"path",
+																	"status"
+																]
+															}
+														}
+													},
+													"required": [
+														"changes"
+													]
+												}
+											},
+											"invalid": {
+												"type": "array",
+												"items": {
+													"type": "object",
+													"additionalProperties": false,
+													"properties": {
+														"changes": {
+															"type": "array",
+															"items": {
+																"type": "object",
+																"additionalProperties": false,
+																"properties": {
+																	"path": {
+																		"type": "string",
+																		"minLength": 1
+																	},
+																	"status": {
+																		"type": "string",
+																		"enum": [
+																			"A",
+																			"M",
+																			"D",
+																			"T"
+																		]
+																	},
+																	"before": {
+																		"type": "string"
+																	},
+																	"after": {
+																		"type": "string"
+																	}
+																},
+																"required": [
+																	"path",
+																	"status"
+																]
+															}
+														}
+													},
+													"required": [
+														"changes"
+													]
+												}
+											}
+										},
+										"required": [
+											"valid",
+											"invalid"
+										]
+									},
+									"kind": {
+										"type": "string",
+										"enum": [
+											"sibling"
+										]
+									},
+									"target": {
+										"type": "string",
+										"minLength": 1
+									}
+								},
+								"required": [
+									"id",
+									"kind",
+									"paths",
+									"reason",
+									"examples",
+									"target"
+								]
+							}
+						]
+					}
+				}
+			}
+		},
 		"rules": {
 			"type": "object",
 			"additionalProperties": false,

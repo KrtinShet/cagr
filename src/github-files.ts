@@ -90,6 +90,7 @@ const checkout = [
 	"      - uses: actions/checkout@v4",
 	"        with:",
 	"          fetch-depth: 0",
+	`          ref: ${expr("github.event.pull_request.head.sha || github.sha")}`,
 ];
 const installClaude = [
 	"      - uses: actions/setup-node@v4",
@@ -140,7 +141,6 @@ export function workflowYaml(config: Config): string {
 			"    steps:",
 			// Without a ref, checkout gives the merge commit, which is not in the pull request.
 			...checkout,
-			`          ref: ${expr("github.event.pull_request.head.sha")}`,
 			...installClaude,
 			...installSteps(config),
 			"      - run: cagr review --ci",

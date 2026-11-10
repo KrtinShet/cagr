@@ -212,3 +212,20 @@ test("sync keeps a .github/PULL_REQUEST_TEMPLATE.md that differs from its own na
 		readFileSync(join(root, ".github/PULL_REQUEST_TEMPLATE.md"), "utf8"),
 	).toBe(mine);
 });
+
+test("CI checks the exact PR head with full merge-base history", () => {
+	const config = resolveConfig({}, "/repo", "cagr.toml");
+	const yaml = workflowYaml(config);
+	expect(yaml).toContain("fetch-depth: 0");
+	expect(yaml).toContain(
+		"ref: $" + "{{ github.event.pull_request.head.sha || github.sha }}",
+	);
+});
+
+test("every generated checkout has exactly one ref", () => {
+	const yaml = workflowYaml(bun);
+	const steps = yaml.split("      - uses: actions/checkout@v4").slice(1);
+	expect(steps.length).toBeGreaterThan(1);
+	for (const step of steps)
+		expect(step.split("      - ")[0]?.match(/^ {10}ref:/gm)).toHaveLength(1);
+});
