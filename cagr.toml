@@ -29,9 +29,11 @@ on_turn_end = ["bun run lint", "bun run check-types"]
 # match = "prisma db push"
 # reason = "Use `bun run db:migrate --name <change>`."
 
-# The preset gates `gh pr create` on a review by a reviewer agent and keeps merging with people.
+# The preset gates `gh pr create` on a review by a reviewer agent.
 # REVIEW.md says what the reviewer should check. `cagr review help` shows the commands.
 [review]
+# The owner lets the orchestrating agent merge once CI is green.
+agents_may_merge = true
 effort = "standard"
 skip = ["schema/cagr.schema.json", "bun.lock"]
 
