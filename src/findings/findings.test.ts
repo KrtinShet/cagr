@@ -282,34 +282,36 @@ test("clean files do not disable other files, but a failure with no findings sta
 	await write("old.py", "import os\n");
 	for (const name of ["clean.py", "old.py"])
 		captureBaseline(root, session, join(root, name));
-	mkdirSync(join(root, "bin"));
-	await write(
-		"bin/ruff",
-		`#!/usr/bin/env bun
-const text = await Bun.stdin.text();
-const file = process.argv[process.argv.indexOf('--stdin-filename') + 1];
-const findings = text.includes('import os') ? JSON.parse(await Bun.file(${JSON.stringify(join(import.meta.dir, "fixtures/ruff-baseline.json"))}).text()) : [];
-for (const finding of findings) finding.filename = file;
-console.log(JSON.stringify(findings));
-process.exit(findings.length ? 1 : 0);
-`,
-	);
-	const { chmodSync } = await import("node:fs");
-	chmodSync(join(root, "bin/ruff"), 0o755);
-	const previous = process.env.PATH;
-	process.env.PATH = `${join(root, "bin")}:${previous}`;
-	try {
-		for (const paths of [
-			["clean.py", "old.py"],
-			["old.py", "clean.py"],
-		])
-			expect(
-				await compareFindings("ruff check {files}", paths, root, session),
-			).toEqual({ old: 1, problems: [] });
+	const execute: typeof import("../run").run = async (argv, _cwd, options) => {
+		const findings = options?.stdin?.includes("import os")
+			? JSON.parse(fixture("ruff-baseline.json"))
+			: [];
+		for (const finding of findings)
+			finding.filename = argv[argv.indexOf("--stdin-filename") + 1];
+		return result(JSON.stringify(findings), findings.length ? 1 : 0);
+	};
+	for (const paths of [
+		["clean.py", "old.py"],
+		["old.py", "clean.py"],
+	])
 		expect(
-			await compareFindings("ruff check {files}", ["clean.py"], root, session),
-		).toBeNull();
-	} finally {
-		process.env.PATH = previous;
-	}
+			await compareFindings(
+				"ruff check {files}",
+				paths,
+				root,
+				session,
+				performance.now() + 750,
+				execute,
+			),
+		).toEqual({ old: 1, problems: [] });
+	expect(
+		await compareFindings(
+			"ruff check {files}",
+			["clean.py"],
+			root,
+			session,
+			performance.now() + 750,
+			execute,
+		),
+	).toBeNull();
 });

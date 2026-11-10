@@ -51,6 +51,7 @@ export async function compareFindings(
 	root: string,
 	session: string,
 	deadline = performance.now() + 750,
+	execute: typeof run = run,
 ): Promise<{ old: number; problems: string[] } | null> {
 	const adapter = findingCommand(command);
 	if (!adapter) return null;
@@ -71,7 +72,7 @@ export async function compareFindings(
 				: ["--output-format", "json", "--stdin-filename", file, "-"]),
 		];
 		const check = (stdin: string) =>
-			run(argv, root, {
+			execute(argv, root, {
 				stdin,
 				timeoutMs: Math.max(1, Math.min(250, deadline - performance.now())),
 			});
