@@ -330,6 +330,10 @@ function applyDefaults(
 				}),
 			),
 		},
+		stats: {
+			enabled:
+				(raw.stats as { enabled?: boolean } | undefined)?.enabled ?? true,
+		},
 		findings: {
 			mode:
 				((raw.findings as RawConfig | undefined)?.mode as

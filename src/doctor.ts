@@ -6,6 +6,7 @@ import type { Config } from "./config/schema";
 import { githubLines } from "./doctor-github";
 import { gitHookNames } from "./git-hooks";
 import { configuredGuards } from "./guards/catalog";
+import { statsSummary } from "./hook/stats";
 import { readTimings } from "./hook/timings";
 import { matchesGlob, toPosix } from "./paths";
 import { pickAgent } from "./review/agent";
@@ -313,6 +314,7 @@ export async function doctor(
 		});
 	}
 	sections.push(["Timing", timing]);
+	sections.push(["Stats", [{ ok: true, text: statsSummary(config.root) }]]);
 
 	const ok = sections.every(([, lines]) => lines.every((line) => line.ok));
 	const report = sections

@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { brief } from "../brief";
 import { resolveConfig } from "../config/load";
 import { editChecks, handle } from "../hook/handlers";
+import { collectStats, type Observation } from "../hook/stats";
 import type { HookInput } from "../hook/types";
 import type { RunResult } from "../run";
 import { tempRepo } from "../test/repo";
@@ -177,10 +178,18 @@ test("hook integration: mode all and CI strict, new mode inherited allow, new an
 			"allow",
 		);
 		await write("sample.js", fixture("eslint-inserted.txt"));
-		expect(await handle(event("file.after_edit"), config)).toMatchObject({
+		const observations: Observation[] = [];
+		expect(
+			await collectStats(observations, () =>
+				handle(event("file.after_edit"), config),
+			),
+		).toMatchObject({
 			kind: "allow",
 			context: expect.stringContaining("1 existing findings"),
 		});
+		expect(observations).toMatchObject([
+			{ decision: "old-findings", target: "sample.js" },
+		]);
 		expect((await handle(event("turn.end"), config)).kind).toBe("block");
 		expect(await editChecks([file], config)).toHaveLength(1);
 		config.findings.mode = "all";

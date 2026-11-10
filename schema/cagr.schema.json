@@ -4,6 +4,16 @@
 	"type": "object",
 	"additionalProperties": false,
 	"properties": {
+		"stats": {
+			"type": "object",
+			"additionalProperties": false,
+			"properties": {
+				"enabled": {
+					"type": "boolean",
+					"description": "Record local hook decision counts. Set false to turn recording off."
+				}
+			}
+		},
 		"$schema": {
 			"type": "string",
 			"description": "Path or URL of this JSON schema, for editors."

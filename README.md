@@ -155,6 +155,7 @@ In CI, `cagr ci` runs the checks the agent ran (edit checks, turn-end checks, co
 | `init [--dry-run] [--force]`      | Detect the repo, write the config, the agent hooks and the git hooks.                                               |
 | `sync [--check]`                  | Rewrite the generated files, or fail when they drift.                                                               |
 | `install-git-hooks`               | Write the git hooks and set `core.hooksPath`.                                                                       |
+| `stats [--days N] [--json]`       | Show local guard and rule counts, repeats, and session shares.                                                      |
 | `doctor [--github]`               | Check the config, the wiring, the tools on PATH, and hook timings against the budgets.                              |
 | `review [...]`                    | Review the branch with a reviewer agent. `review help` lists `answer`, `status`, `stats`, `eval`, `--scan`, `--ci`. |
 | `risk [--base <b>]`               | The change's risk tier, the approvals it needs, and the owners.                                                     |

@@ -40,6 +40,7 @@ import {
 	writeTurnState,
 } from "../turn-state";
 import { focusOnChanged, stackFiles, tidy, withFiles } from "./stack-files";
+import { commandId, commandTarget, observe } from "./stats";
 import { recordTimings } from "./timings";
 import type { Decision, HookInput } from "./types";
 
@@ -178,14 +179,19 @@ async function fileBeforeEdit(
 	let layout: LayoutRule[] | undefined;
 	for (const file of input.files) {
 		const finding = editFinding(file, config, { mainCheckout });
-		if (finding) return { kind: "deny", reason: render(finding) };
+		if (finding) {
+			observe(finding.id, "deny", file);
+			return { kind: "deny", reason: render(finding) };
+		}
 		// Only a new file: an existing one in the wrong place is reported after the edit, not frozen.
 		const path = insideRoot(config.root, file);
 		if (path === null || existsSync(file)) continue;
 		// Every broken rule in one message, so a rename does not run into the next one.
 		layout ??= layoutRules(config);
 		const [first, ...rest] = layoutFindings(layout, [path]);
-		if (first)
+		if (first) {
+			for (const finding of [first, ...rest])
+				observe(finding.rule, "deny", path);
 			return {
 				kind: "deny",
 				reason: render({
@@ -198,6 +204,7 @@ async function fileBeforeEdit(
 						.join(" "),
 				}),
 			};
+		}
 	}
 	if (config.findings.mode === "new")
 		for (const file of input.files)
@@ -268,7 +275,10 @@ export async function editChecks(
 	const deadline = performance.now() + 900;
 	const existing = files.filter((file) => existsSync(file));
 	const problems: string[] = (await checkSuppressions(config, existing)).map(
-		render,
+		(f) => {
+			observe(f.id, "block", f.file);
+			return render(f);
+		},
 	);
 	const timings: { event: string; check: string; ms: number }[] = [];
 	for (const stack of config.stack) {
@@ -302,15 +312,19 @@ export async function editChecks(
 						ms: Math.round(performance.now() - started),
 					});
 				if (compared) {
-					if (compared.old)
+					if (compared.old) {
+						observe(commandId("on_edit", command), "old-findings", paths[0]);
 						comparison?.context.push(
 							`${compared.old} existing findings in this file were left out; they were there before you started.`,
 						);
+					}
 					if (compared.problems.length)
 						problems.push(
 							`## ${command}\n${compared.problems.join("\n")}\nFix the reported new findings and rerun ${command}.`,
 						);
 				} else problems.push(`## ${command}\n${tidy(result.output, 2000)}`);
+				if (!compared || compared.problems.length)
+					observe(commandId("on_edit", command), "block", paths[0]);
 			}
 		}
 	}
@@ -339,13 +353,20 @@ async function ruleChecks(
 		set = loadRuleSet(config);
 	} catch (error) {
 		// A broken rule file: Rules says so, and no layout rule runs.
-		if (error instanceof RuleError)
+		if (error instanceof RuleError) {
+			observe("rules", "block");
 			return {
 				rules: { name: "Rules", ok: false, output: error.message },
 				layout: null,
 			};
+		}
 		throw error;
 	}
+	for (const f of layoutFindings(
+		set.layout,
+		files.map((f) => insideRoot(config.root, f)).filter((f) => f !== null),
+	))
+		observe(f.rule, "block", f.path);
 	const layout = layoutCheck(config, set.layout, files);
 	if (set.code.length === 0) return { rules: null, layout };
 	let findings: RuleFinding[];
@@ -353,13 +374,16 @@ async function ruleChecks(
 		findings = await findInFiles(set.code, files, config.root);
 	} catch (error) {
 		// A rule that does not compile for its language is a rule file problem too.
-		if (error instanceof RuleError)
+		if (error instanceof RuleError) {
+			observe("rules", "block");
 			return {
 				rules: { name: "Rules", ok: false, output: error.message },
 				layout,
 			};
+		}
 		throw error;
 	}
+	for (const f of findings) observe(f.rule, "block", f.path);
 	timings.push({
 		event,
 		check: "rules",
@@ -410,6 +434,12 @@ async function turnEnd(input: HookInput, config: Config): Promise<Decision> {
 			});
 			timings.push({ event: "turn.end", check: command, ms: result.ms });
 			if (result.timedOut) commandTimedOut = true;
+			if (!result.ok)
+				observe(
+					commandId("on_turn_end", command),
+					result.timedOut ? "fail-open" : "block",
+					commandTarget(command),
+				);
 			return {
 				name: `\`${command}\``,
 				ok: result.ok || result.timedOut,
@@ -426,12 +456,15 @@ async function turnEnd(input: HookInput, config: Config): Promise<Decision> {
 			(resolve) => {
 				timer = setTimeout(() => {
 					rulesTimedOut = true;
+					observe("rules", "fail-open");
 					resolve({ rules: null, layout: null });
 				}, remaining);
 			},
 		),
 	]).finally(() => clearTimeout(timer));
 	if (changeResult) {
+		if (changeResult.unchecked) observe("change-rules", "fail-open");
+		for (const f of changeResult.findings) observe(f.rule, "block", f.path);
 		timings.push(
 			{
 				event: "turn.end",
@@ -475,12 +508,14 @@ async function turnEnd(input: HookInput, config: Config): Promise<Decision> {
 		};
 	}
 	await clearTurnState(file);
-	if (decision.action === "give-up")
+	if (decision.action === "give-up") {
+		observe("stop-escape", "stop-escape");
 		return {
 			kind: "allow",
 			notice:
 				`cagr: ${decision.message} The agent was let go so it does not loop. Run the checks yourself before you merge. ${uncheckedNotice}`.trim(),
 		};
+	}
 	return uncheckedNotice
 		? { kind: "allow", notice: uncheckedNotice }
 		: { kind: "allow" };
