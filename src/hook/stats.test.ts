@@ -33,7 +33,7 @@ function repo(raw = {}) {
 }
 afterEach(() => {
 	for (const root of roots.splice(0)) {
-		for (const suffix of ["", ".1", ".lock"])
+		for (const suffix of ["", ".1", ".lock", ".repeat", ".repeat.1"])
 			rmSync(statsFile(root) + suffix, { recursive: true, force: true });
 		rmSync(root, { recursive: true, force: true });
 	}
@@ -266,6 +266,12 @@ test("bounded append storage rotates, tolerates broken lines, and stays under re
 	times.sort((a, b) => a - b);
 	expect(times[27] ?? Infinity).toBeLessThan(5);
 	expect(readStats(config.root).length).toBeLessThan(6500);
+	expect(statSync(`${statsFile(config.root)}.repeat`).size).toBeLessThanOrEqual(
+		20_000,
+	);
+	expect(
+		statSync(`${statsFile(config.root)}.repeat.1`).size,
+	).toBeLessThanOrEqual(20_000);
 	writeFileSync(statsFile(config.root), "broken\n{}");
 	expect(() => readStats(config.root)).not.toThrow();
 });
@@ -348,4 +354,21 @@ examples:
 		),
 	).toHaveLength(1);
 	rmSync(stateFile(session), { force: true });
+});
+
+test("repeat lookup ignores forged or broken event lines and requires exact fixed-width keys", () => {
+	const config = repo();
+	const entry = { id: "guard", decision: "deny" as const, target: "git push" };
+	recordStats(config.root, "command.before", "claude", "s", [entry]);
+	const key = readStats(config.root)[0]?.key;
+	rmSync(`${statsFile(config.root)}.repeat`);
+	writeFileSync(statsFile(config.root), `not-json "key":"${key}"\n`);
+	recordStats(config.root, "command.before", "claude", "s", [entry]);
+	expect(readStats(config.root).at(-1)?.repeat).toBe(false);
+	recordStats(config.root, "command.before", "claude", "s", [entry]);
+	expect(readStats(config.root).at(-1)?.repeat).toBe(true);
+	recordStats(config.root, "command.before", "claude", "different-session", [
+		entry,
+	]);
+	expect(readStats(config.root).at(-1)?.repeat).toBe(false);
 });

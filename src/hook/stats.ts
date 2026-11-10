@@ -115,7 +115,18 @@ export function recordStats(
 		const lockPath = `${path}.lock`;
 		closeSync(openSync(lockPath, "wx", 0o600));
 		lock = lockPath;
-		const previous = `${readText(`${path}.1`)}${readText(path)}`;
+		const index = `${path}.repeat`;
+		const previous = [`${index}.1`, index].map((file) => {
+			try {
+				const size = statSync(file).size;
+				return size <= 20_000 && size % 8 === 0
+					? readFileSync(file)
+					: Buffer.alloc(0);
+			} catch {
+				return Buffer.alloc(0);
+			}
+		});
+		const keys: bigint[] = [];
 		const hashedSession = Bun.hash(session).toString(36);
 		const time = new Date().toISOString();
 		const seen = new Set<string>();
@@ -128,18 +139,28 @@ export function recordStats(
 		});
 		const lines = unique
 			.map((entry) => {
-				const key = Bun.hash(
+				const fingerprint = Bun.hash(
 					JSON.stringify([
 						hashedSession,
 						event,
 						entry.id,
 						entry.key ?? entry.target,
 					]),
-				).toString(36);
+				);
+				const key = fingerprint.toString(36);
 				const blocked = entry.decision === "deny" || entry.decision === "block";
 				const repeat =
-					blocked && (previous.includes(`"key":"${key}"`) || seen.has(key));
-				if (blocked) seen.add(key);
+					blocked &&
+					(previous.some((buffer) => {
+						for (let offset = 0; offset + 8 <= buffer.length; offset += 8)
+							if (buffer.readBigUInt64LE(offset) === fingerprint) return true;
+						return false;
+					}) ||
+						seen.has(key));
+				if (blocked) {
+					seen.add(key);
+					keys.push(fingerprint);
+				}
 				return JSON.stringify({
 					...entry,
 					key: blocked ? key : undefined,
@@ -169,6 +190,20 @@ export function recordStats(
 			size += bytes;
 		}
 		if (chunk) appendFileSync(path, chunk, { mode: 0o600 });
+		let indexSize = 0;
+		try {
+			indexSize = statSync(index).size;
+		} catch {}
+		for (const key of keys) {
+			if (indexSize >= 20_000) {
+				renameSync(index, `${index}.1`);
+				indexSize = 0;
+			}
+			const bytes = Buffer.alloc(8);
+			bytes.writeBigUInt64LE(key);
+			appendFileSync(index, bytes, { mode: 0o600 });
+			indexSize += 8;
+		}
 	} catch {
 	} finally {
 		if (lock) {
