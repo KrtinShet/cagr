@@ -229,3 +229,30 @@ test("every generated checkout has exactly one ref", () => {
 	for (const step of steps)
 		expect(step.split("      - ")[0]?.match(/^ {10}ref:/gm)).toHaveLength(1);
 });
+
+test("generated native stack CI installs Go and Rust components once alongside JS", () => {
+	const yaml = workflowYaml(
+		config({
+			stack: [
+				{ language: "go" },
+				{ language: "go", paths: ["service/**"] },
+				{ language: "rust" },
+				{ language: "rust", paths: ["crates/a/**"] },
+				{ language: "typescript", package_manager: "bun" },
+			],
+		}),
+	);
+	expect(yaml.split("uses: actions/setup-go@v5")).toHaveLength(2);
+	expect(yaml).toContain("go-version: stable");
+	expect(yaml.split("uses: dtolnay/rust-toolchain@stable")).toHaveLength(2);
+	expect(yaml).toContain("components: rustfmt, clippy");
+	expect(yaml).toContain("uses: oven-sh/setup-bun@v2");
+	expect(yaml.indexOf("components: rustfmt, clippy")).toBeLessThan(
+		yaml.indexOf("- run: cagr ci"),
+	);
+	const plain = workflowYaml(
+		config({ stack: [{ language: "typescript", package_manager: "bun" }] }),
+	);
+	expect(plain).not.toContain("setup-go");
+	expect(plain).not.toContain("rust-toolchain");
+});

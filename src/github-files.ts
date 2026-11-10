@@ -22,6 +22,18 @@ function setupSteps(config: Config): string[] {
 		steps.push(...lines);
 	};
 	for (const stack of config.stack) {
+		if (stack.language === "go")
+			once("setup-go", [
+				"      - uses: actions/setup-go@v5",
+				"        with:",
+				"          go-version: stable",
+			]);
+		if (stack.language === "rust")
+			once("setup-rust", [
+				"      - uses: dtolnay/rust-toolchain@stable",
+				"        with:",
+				"          components: rustfmt, clippy",
+			]);
 		const dir = stackDir(stack);
 		const where = dir === "." ? [] : [`        working-directory: ${dir}`];
 		switch (stack.package_manager) {

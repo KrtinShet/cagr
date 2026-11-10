@@ -292,7 +292,7 @@ function detectPython(dir: string, root: string): DetectedStack {
 
 function detectGo(dir: string, root: string): DetectedStack {
 	const rel = toPosix(relative(root, dir));
-	const go = rel ? `go -C ${shellQuote(rel)}` : "go";
+	const go = rel ? `cd ${shellQuote(rel)} && go` : "go";
 	const configured = anyExists(dir, [
 		".golangci.yml",
 		".golangci.yaml",

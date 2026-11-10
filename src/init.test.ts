@@ -300,7 +300,7 @@ test("Go root and nested modules use file formatting and module checks", async (
 		for (const stack of detection.stacks) {
 			expect(stack.package_manager).toBeNull();
 			expect(stack.on_edit).toEqual(["gofmt -w {files}"]);
-			const go = stack.dir ? "go -C 'nested module'" : "go";
+			const go = stack.dir ? "cd 'nested module' && go" : "go";
 			expect(stack.on_turn_end).toEqual([
 				`${go} vet ./...`,
 				`${go} test ./...`,
