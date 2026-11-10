@@ -10,6 +10,7 @@ import type { RunResult } from "../run";
 import { tempRepo } from "../test/repo";
 import { clearTurnState, stateFile } from "../turn-state";
 import { baselineFile, captureBaseline, compareFindings } from "./baseline";
+import { parseBiome } from "./biome";
 import { findingCommand } from "./command";
 import { newFindings } from "./match";
 import { parseFindings } from "./parse";
@@ -25,11 +26,14 @@ const result = (stdout: string, exitCode = 1): RunResult => ({
 	timedOut: false,
 	ms: 1,
 });
-for (const tool of ["eslint", "ruff"] as const)
+for (const tool of ["eslint", "ruff", "biome"] as const)
 	describe(tool, () => {
-		const file = `/fixture/sample.${tool === "eslint" ? "js" : "py"}`;
+		const file = `/fixture/sample.${tool === "ruff" ? "py" : "js"}`;
 		const findings = (name: string) =>
-			parseFindings(tool, result(fixture(`${tool}-${name}.json`)), file) ?? [];
+			(tool === "biome"
+				? parseBiome(result(fixture(`${tool}-${name}.json`)), file)
+				: parseFindings(tool, result(fixture(`${tool}-${name}.json`)), file)) ??
+			[];
 		const source = (name: string) => fixture(`${tool}-${name}.txt`);
 		for (const [name, count] of [
 			["inserted", 0],
@@ -55,7 +59,11 @@ for (const tool of ["eslint", "ruff"] as const)
 				{ ...result(fixture(`${tool}-baseline.json`)), stderr: "tool error" },
 				result(fixture(`${tool}-baseline.json`), 2),
 			])
-				expect(parseFindings(tool, value, file)).toBeNull();
+				expect(
+					tool === "biome"
+						? parseBiome(value, file)
+						: parseFindings(tool, value, file),
+				).toBeNull();
 		});
 		test("a baseline occurrence is consumed once", () => {
 			const old = findings("baseline");
@@ -83,19 +91,17 @@ test("recognizes direct tools through literal common launchers", () => {
 		"eslint --format json {files}",
 		"eslint {files} && false",
 		"ruff format {files}",
-		"biome lint {files}",
-		"biome check --write {files}",
 		"eslint {files} --config custom.js",
 	])
 		expect(findingCommand(command)).toBeNull();
 });
 
-test("Biome 2.6.6 stdin emits source and no JSON; keep strict", () => {
+test("Biome 2.6.6 stdin emits source and no JSON; use file reports", () => {
 	expect(
 		JSON.parse(fixture("biome-output.json")).diagnostics.length,
 	).toBeGreaterThan(0);
 	expect(() => JSON.parse(fixture("biome-stdin.txt"))).toThrow();
-	expect(findingCommand("bunx biome lint {files}")).toBeNull();
+	expect(findingCommand("bunx biome lint {files}")).not.toBeNull();
 });
 
 test("ambiguous lines, changed severity, and over-budget diffs remain new", () => {

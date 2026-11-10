@@ -12,6 +12,7 @@ import { dirname, join, resolve } from "node:path";
 import { insideRoot } from "../paths";
 import { type RunResult, run } from "../run";
 import { stateFile } from "../turn-state";
+import { compareBiome } from "./biome";
 import { findingCommand } from "./command";
 import { type Finding, newFindings } from "./match";
 import { parseFindings } from "./parse";
@@ -65,6 +66,26 @@ export async function compareFindings(
 		if (!existsSync(saved)) return null;
 		const source = readFileSync(saved, "utf8"),
 			currentSource = readFileSync(file, "utf8");
+		if (adapter.tool === "biome") {
+			const compared = await compareBiome(
+				adapter.argv,
+				root,
+				file,
+				source,
+				currentSource,
+				deadline,
+				execute,
+			);
+			if (!compared) return null;
+			reported += compared.current;
+			old += compared.current - compared.fresh.length;
+			problems.push(
+				...compared.fresh.map(
+					(f) => `${path}:${f.line}:${f.column} ${f.code}: ${f.message}`,
+				),
+			);
+			continue;
+		}
 		const argv = [
 			...adapter.argv,
 			...(adapter.tool === "eslint"

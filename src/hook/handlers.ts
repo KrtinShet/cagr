@@ -4,6 +4,7 @@ import { brief } from "../brief";
 import { checkChanges } from "../changes/check";
 import type { Config } from "../config/schema";
 import { captureBaseline, compareFindings } from "../findings/baseline";
+import { findingCommand } from "../findings/command";
 import { gitContext } from "../git";
 import { commandFinding, needsGitContext } from "../guards/command";
 import { editFinding } from "../guards/edit";
@@ -295,7 +296,8 @@ export async function editChecks(
 					config.findings.mode === "new" &&
 					comparison &&
 					result.exitCode === 1 &&
-					!result.stderr?.trim() &&
+					(!result.stderr?.trim() ||
+						findingCommand(command)?.tool === "biome") &&
 					!result.timedOut
 						? await compareFindings(
 								command,

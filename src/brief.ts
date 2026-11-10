@@ -74,7 +74,7 @@ export function brief(
 			...new Set(config.stack.flatMap((stack) => stack.on_edit)),
 		].filter((command) => findingCommand(command));
 		lines.push(
-			`- New findings mode: ${compared.length ? compared.map((command) => `\`${command}\``).join(", ") : "no configured commands"} compared against first-touch source when a baseline and complete JSON are available. All other commands, turn-end checks, CI and code rules still must fully pass. Biome stays strict because its stdin mode does not emit JSON.`,
+			`- New findings mode: ${compared.length ? compared.map((command) => `\`${command}\``).join(", ") : "no configured commands"} compared against first-touch source when a baseline and complete JSON are available. All other commands, turn-end checks, CI and code rules still must fully pass. Biome lint findings use a temporary baseline workspace; unsupported configs, ignored files and uncertain reports stay strict.`,
 		);
 	}
 	if (rules.length > 0)
