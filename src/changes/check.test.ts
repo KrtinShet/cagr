@@ -250,7 +250,7 @@ test("collection retries one race, and repeated races are unchecked", async () =
 				) {
 					snapshots++;
 					if (persistent || snapshots === 1)
-						await repo.write("src/a.ts", `content ${snapshots}`);
+						await repo.write("src/a.ts", `content ${persistent}-${snapshots}`);
 				}
 				return result;
 			},
@@ -355,4 +355,11 @@ test("custom Git clean filters are unchecked without executing their commands", 
 	expect((await checkChanges(config, { committed: true })).unchecked).toBe(
 		false,
 	);
+});
+
+test("unused configured filters do not disable working-tree checks", async () => {
+	const { repo, config } = await setup();
+	await repo.git("config", "filter.unused.clean", "false");
+	await repo.write("src/a.ts", "changed");
+	expect((await checkChanges(config)).unchecked).toBe(false);
 });

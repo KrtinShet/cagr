@@ -19,11 +19,12 @@ export async function collect(
 ): Promise<Snapshot> {
 	const deadline = options.deadline ?? performance.now() + 15_000;
 	let temporaryIndex: string | undefined;
+	let overrides: string[] = [];
 	const execute = async (args: string[], stdin?: string) => {
 		if (performance.now() >= deadline)
 			throw Error("collection deadline exceeded");
 		const result = await run(
-			["git", "-c", "core.filemode=true", ...args],
+			["git", "-c", "core.filemode=true", ...overrides, ...args],
 			config.root,
 			{
 				timeoutMs: Math.max(1, Math.floor(deadline - performance.now())),
@@ -52,9 +53,47 @@ export async function collect(
 				"^filter\\..*\\.(clean|process)$",
 			],
 			config.root,
-			{ timeoutMs: Math.max(1, deadline - performance.now()) },
+			{ timeoutMs: Math.max(1, Math.floor(deadline - performance.now())) },
 		);
-		if ((!filters.ok && filters.exitCode !== 1) || filters.stdout.length)
+		if (!filters.ok && filters.exitCode !== 1)
+			throw Error("could not inspect Git filter configuration");
+		const drivers = [
+			...new Set(
+				filters.stdout
+					.split("\0")
+					.filter(Boolean)
+					.map((key) =>
+						key.replace(/^filter\./, "").replace(/\.(clean|process)$/, ""),
+					),
+			),
+		];
+		overrides = drivers.flatMap((driver) => [
+			"-c",
+			`filter.${driver}.clean=`,
+			"-c",
+			`filter.${driver}.process=`,
+			"-c",
+			`filter.${driver}.required=false`,
+		]);
+		const paths = drivers.length
+			? await git(
+					"ls-files",
+					"--cached",
+					"--others",
+					"--exclude-standard",
+					"-z",
+				)
+			: "";
+		const attributes = paths
+			? (await execute(["check-attr", "-z", "--stdin", "filter"], paths)).split(
+					"\0",
+				)
+			: [];
+		if (
+			attributes.some(
+				(value, index) => index % 3 === 2 && drivers.includes(value),
+			)
+		)
 			throw Error(
 				"custom Git clean filters make a read-only working-tree capture unavailable; use cagr rules check --committed and clean CI instead",
 			);

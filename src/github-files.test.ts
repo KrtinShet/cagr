@@ -212,3 +212,12 @@ test("sync keeps a .github/PULL_REQUEST_TEMPLATE.md that differs from its own na
 		readFileSync(join(root, ".github/PULL_REQUEST_TEMPLATE.md"), "utf8"),
 	).toBe(mine);
 });
+
+test("CI checks the exact PR head with full merge-base history", () => {
+	const config = resolveConfig({}, "/repo", "cagr.toml");
+	const yaml = workflowYaml(config);
+	expect(yaml).toContain("fetch-depth: 0");
+	expect(yaml).toContain(
+		"ref: $" + "{{ github.event.pull_request.head.sha || github.sha }}",
+	);
+});
