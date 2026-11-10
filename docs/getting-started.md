@@ -1,6 +1,6 @@
 ---
 title: Getting started
-nav_order: 2
+nav_order: 3
 ---
 
 # Getting started
@@ -62,7 +62,7 @@ command = "{root}/node_modules/.bin/cagr"
 ```sh
 cd your-repo
 cagr init      # detects your stacks, writes cagr.toml and the hook files
-cagr doctor    # checks the wiring, the tools, and how long each hook takes
+cagr doctor    # lists guards and checks the wiring, tools and hook timings
 ```
 
 ### What `cagr init` detects
@@ -75,7 +75,9 @@ cagr doctor    # checks the wiring, the tools, and how long each hook takes
 
 The config it writes starts with `extends = ["recommended"]`. See [Configuration](configuration.md#presets) for what that turns on.
 
-`cagr init --dry-run` prints the config it would write and writes nothing. If `cagr.toml` already exists, `init` stops. Use `--force` to overwrite it.
+After `Found:`, init lists what the resolved config will deny, hold for review and require, then the commands it will run after edits, before the agent stops and before pushes. Empty command slots include instructions for adding checks. Existing `.cagr/` fragments are included.
+
+`cagr init --dry-run` prints the same enforcement summary and the config it would write, and writes nothing. If `cagr.toml` already exists, `init` stops. Use `--force` to overwrite it.
 
 ### What `cagr init` writes
 
@@ -104,6 +106,7 @@ Codex asks you to trust project hooks once. Open Codex in the repo and approve t
 `cagr doctor` prints one line per check, in these sections:
 
 - **Config**: the config and the code rules load. An `Also config:` line lists the `.cagr/*.toml` fragments that joined `cagr.toml`.
+- **Guards**: each built-in guard id and its configured policy, including guards turned off. An off guard is information, not a failed check.
 - **Wiring**: the generated files match the config, `core.hooksPath` points at the hooks folder, and the hooks are executable.
 - **Tools**: `cagr` is on `PATH`, and the program in every `on_edit`, `on_turn_end` and `pre_push` command can be found (including in `node_modules/.bin` and `.venv/bin`).
 - **Review** (when review is on): a reviewer agent is installed, and the guide and gate are set.

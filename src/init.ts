@@ -9,6 +9,7 @@ import { dirname, join, relative } from "node:path";
 import { configFileName, loadConfig, resolveConfig } from "./config/load";
 import type { RawConfig } from "./config/presets";
 import type { AgentName, Config, PackageManager } from "./config/schema";
+import { configuredGuards } from "./guards/catalog";
 import { stackFiles, withFiles } from "./hook/stack-files";
 import { toPosix } from "./paths";
 import { run, runShell } from "./run";
@@ -449,7 +450,34 @@ export type InitResult = {
 	config: string;
 	written: string[];
 	notes: string[];
+	enforcement: string;
 };
+
+export function enforcementSummary(config: Config): string {
+	const guards = configuredGuards(config);
+	const lines = (["deny", "hold", "require"] as const).map((group) => {
+		const summaries = guards
+			.filter((guard) => guard.group === group)
+			.flatMap((guard) => (guard.summary ? [guard.summary] : []));
+		return `Will ${group}: ${summaries.join("; ") || "none"}.`;
+	});
+	for (const stack of config.stack) {
+		const label = `${stack.language} (${stack.paths.join(", ")})`;
+		lines.push(
+			`Will run after each edit in ${label}: ${stack.on_edit.join("; ") || "none. Add commands to [[stack]].on_edit in cagr.toml"}.`,
+		);
+		lines.push(
+			`Before the agent stops after edits in ${label}: ${stack.on_turn_end.join("; ") || "no commands. Add commands to [[stack]].on_turn_end in cagr.toml"}.`,
+		);
+	}
+	if (config.stack.length === 0)
+		lines.push(
+			"No stacks configured. Add [[stack]] with on_edit and on_turn_end commands in cagr.toml.",
+		);
+	if (config.git.pre_push.length > 0)
+		lines.push(`Before a push: ${config.git.pre_push.join("; ")}.`);
+	return lines.join("\n");
+}
 
 export async function init(
 	root: string,
@@ -463,9 +491,11 @@ export async function init(
 	const detection = await detect(root);
 	const text = configToml(detection);
 	const notes: string[] = [];
-	if (options.dryRun) return { detection, config: text, written: [], notes };
 	// Check the new config against the .cagr/ files before replacing the old one.
-	resolveConfig(Bun.TOML.parse(text) as RawConfig, root, file);
+	const resolved = resolveConfig(Bun.TOML.parse(text) as RawConfig, root, file);
+	const enforcement = enforcementSummary(resolved);
+	if (options.dryRun)
+		return { detection, config: text, written: [], notes, enforcement };
 	writeFileSync(file, text);
 	const config = loadConfig(root);
 	if (!config) throw new Error(`Could not read back ${file}.`);
@@ -497,5 +527,11 @@ export async function init(
 		notes.push(
 			"Codex asks you to trust project hooks. Open Codex in this repo and approve them with /hooks.",
 		);
-	return { detection, config: text, written: [...new Set(written)], notes };
+	return {
+		detection,
+		config: text,
+		written: [...new Set(written)],
+		notes,
+		enforcement,
+	};
 }

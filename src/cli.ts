@@ -40,7 +40,7 @@ import {
 } from "./sync";
 import { version } from "./version";
 
-const help = `cagr ${version}: one config for every coding agent's guardrails.
+const help = `cagr ${version}: checks what a coding agent does (its commands, edits, stops and pull requests) and makes it run and obey your linters.
 
 Usage: cagr <command>
 
@@ -201,6 +201,7 @@ async function main(argv: string[]): Promise<number> {
 			console.log(
 				`Found:\n${found.length > 0 ? found.join("\n") : "  no JavaScript or Python projects"}\n  agents: ${result.detection.agents.join(", ")}\n  protected branch: ${result.detection.protectedBranch}\n`,
 			);
+			console.log(`${result.enforcement}\n`);
 			console.log(
 				`${dryRun ? "Would write" : "Wrote"} cagr.toml:\n\n${result.config}`,
 			);

@@ -1,6 +1,6 @@
 ---
 title: CLI reference
-nav_order: 9
+nav_order: 10
 ---
 
 # CLI reference
@@ -40,7 +40,9 @@ cagr init [--dry-run] [--force]
 
 Detects the stacks, package managers, tools, agents and protected branch, writes a short `cagr.toml` and starter `.cagr/guards.toml` and `.cagr/risk.toml` (each only when missing), runs `sync`, writes a starter `.cagr/review.md` when review is on and no guide exists, formats the JSON it wrote with your `on_edit` commands, and installs the git hooks. See [Getting started](getting-started.md).
 
-- `--dry-run`: print the config it would write. Write nothing.
+After detection, prints the resolved guard policies and per-stack edit and stop commands. Empty command slots say how to add checks.
+
+- `--dry-run`: print the enforcement summary and config it would write. Write nothing.
 - `--force`: overwrite an existing `cagr.toml`. Without it, `init` stops if the file exists. Files in `.cagr/` are never overwritten.
 
 ## sync
@@ -67,7 +69,7 @@ Writes the git hooks to `[git] hooks_path` and sets `git config core.hooksPath` 
 cagr doctor [--github]
 ```
 
-Checks the config and code rules load (and lists the `.cagr/*.toml` fragments that joined the config), the generated files match, `core.hooksPath` is set and the hooks are executable, `cagr` and every command's program can be found, the review setup, and the median time of each hook against its budget. Prints `ok` or `FAIL` per line. Exits 1 if any line fails.
+Checks the config and code rules load (and lists the `.cagr/*.toml` fragments that joined the config), the generated files match, `core.hooksPath` is set and the hooks are executable, `cagr` and every command's program can be found, the review setup, and the median time of each hook against its budget. The Guards section lists every built-in guard id with its configured policy or an off note. Disabled guards do not fail the check. Prints `ok` or `FAIL` per line. Exits 1 if any line fails.
 
 - `--github`: also check the protected branch's settings on GitHub through `gh`. See [CI](ci.md#check-branch-protection).
 

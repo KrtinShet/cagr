@@ -50,3 +50,30 @@ test("doctor lists the .cagr files that add to the config", async () => {
 	expect(report).toContain(`Config: ${join(root, "cagr.toml")}`);
 	expect(report).toContain("Also config: .cagr/guards.toml");
 });
+
+test("doctor lists active guard summaries and disabled guards without failing them", async () => {
+	const root = await mkdtemp(join(tmpdir(), "gw-doctor-"));
+	const config = resolveConfig(
+		{
+			extends: ["recommended"],
+			stack: [{ language: "typescript", package_manager: "bun" }],
+			git: { block_force_push: false },
+		},
+		root,
+		join(root, "cagr.toml"),
+	);
+	const { report } = await doctor(config);
+	const section = report.split("Guards\n")[1]?.split("\n\n")[0];
+	expect(section).toContain(
+		"ok   package-manager: npm, npx, pnpm, pnpx, yarn (use bun for JavaScript)",
+	);
+	expect(section).toContain("protected-branch: pushes to main");
+	expect(section).toContain(
+		"force-push: off (configure [git] block_force_push)",
+	);
+	expect(section).toContain("worktree-only: off");
+	expect(section).toContain(
+		"review-gate: gh pr create, gh pr ready until reviewed",
+	);
+	expect(section).not.toContain("FAIL");
+});

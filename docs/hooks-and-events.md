@@ -1,6 +1,6 @@
 ---
 title: Hooks and events
-nav_order: 5
+nav_order: 6
 ---
 
 # Hooks and events
