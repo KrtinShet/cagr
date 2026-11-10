@@ -174,3 +174,13 @@ CAGR_SKIP=1 git push
 ```
 
 Any value other than empty or `0` skips. `[git] skip_env` changes the variable name. With `block_hook_skips`, agents may not set it, and may not use `--no-verify` or change `core.hooksPath` either.
+
+## New findings mode
+
+With `[findings] mode = "new"`, `file.before_edit` saves first-touch source below the existing temp session directory, outside the repo. It runs no tools. Files absent before the edit have an empty baseline. The saved source never advances, including after clean stops or the stop escape. Each checkout and session has separate baseline storage. Temp storage may be removed after a session ends.
+
+After an edit, the configured command runs as usual, including its fixes. A failed supported ESLint or Ruff command gets read-only JSON checks of the final live source and the saved source, using stdin and the original filename. Baseline findings are cached. Findings match by rule, message, severity, column and unchanged lines from a bounded line diff. Repeated lines are treated conservatively as new; each baseline finding can match once. Only new findings block. An inherited-only allow tells the agent: "N existing findings in this file were left out; they were there before you started."
+
+Missing baselines, malformed or incomplete reports, tool errors, stderr, timeouts, unsupported flags and unsupported commands retain the original failing result. Unexpected cagr errors still follow the normal fail-open policy. Comparison subprocesses each get at most 250 ms and share the remaining 900 ms edit-check deadline. A slow tool can therefore stay strict. Existing configured commands keep their existing timeout; this feature does not guarantee that arbitrary commands fit the 1 s budget.
+
+The session brief lists commands eligible for comparison. Biome stays strict in v1 because its stdin path does not provide JSON diagnostics in 2.6.6. Every turn-end command and CI check stays strict, even when edit checks allow inherited findings. This mode neither creates suppressions nor claims that the repo is clean.

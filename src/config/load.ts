@@ -313,6 +313,13 @@ function applyDefaults(
 				}),
 			),
 		},
+		findings: {
+			mode:
+				((raw.findings as RawConfig | undefined)?.mode as
+					| "all"
+					| "new"
+					| undefined) ?? "all",
+		},
 		suppressions: {
 			enabled: (suppressions.enabled as boolean | undefined) ?? false,
 			allow: (suppressions.allow as string[] | undefined) ?? [],

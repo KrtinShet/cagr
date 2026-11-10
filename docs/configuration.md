@@ -316,3 +316,18 @@ cagr schema > cagr.schema.json
 "$schema" = "./cagr.schema.json"
 extends = ["recommended"]
 ```
+
+## Existing lint findings
+
+By default, every failed check blocks (`[findings] mode = "all"`). To compare supported edit checks with the file's source before this session first touched it:
+
+```toml
+[findings]
+mode = "new"
+```
+
+Only direct ESLint and `ruff check` commands with one `{files}` target are compared. Plain commands and the launchers `bunx`, `npx`, `pnpm exec`, `uv run` and `uvx` are recognized. Fixers still run on the live file. The read-only comparison removes fix flags and uses stdin with the original filename for config lookup. Supported flags are ESLint `--fix`, `--quiet`, `--no-ignore`, `--no-warn-ignored`, `--max-warnings`, and Ruff `--fix`, `--unsafe-fixes`, `--no-cache`, `--select`, `--ignore`, `--extend-select`, `--extend-ignore`, `--target-version`.
+
+Scripts such as `bun run lint`, shell expressions, extra targets and other flags stay strict. Biome also stays strict in v1: Biome 2.6.6 does not emit JSON diagnostics in stdin mode, even with `--reporter json`. Turn-end commands, code rules and CI must still fully pass.
+
+Only identical rule, message and severity findings on unchanged, unambiguous lines are left out. Editing the error's line makes it new. This compares diagnostics, not semantic causality. Config and project dependencies are live, rather than a snapshot of the whole project. Cached reports are keyed by command, source, ancestor config and lockfile contents, and installed executable metadata. Imported config helpers and external plugin inputs are not tracked; start a new session after changing these inputs.

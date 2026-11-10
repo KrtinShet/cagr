@@ -1,4 +1,5 @@
 import type { Config } from "./config/schema";
+import { findingCommand } from "./findings/command";
 import { ecosystemOf } from "./guards/package-manager";
 import { loadRules, type Rule, RuleError } from "./rules/rules";
 
@@ -67,6 +68,14 @@ export function brief(
 			lines.push(
 				`- ${stack.language} (${stack.paths.join(", ")}): ${parts.join("; ")}.`,
 			);
+	}
+	if (config.findings.mode === "new") {
+		const compared = [
+			...new Set(config.stack.flatMap((stack) => stack.on_edit)),
+		].filter((command) => findingCommand(command));
+		lines.push(
+			`- New findings mode: ${compared.length ? compared.map((command) => `\`${command}\``).join(", ") : "no configured commands"} compared against first-touch source when a baseline and complete JSON are available. All other commands, turn-end checks, CI and code rules still must fully pass. Biome stays strict because its stdin mode does not emit JSON.`,
+		);
 	}
 	if (rules.length > 0)
 		lines.push(

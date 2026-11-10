@@ -1,0 +1,26 @@
+[
+	{
+		"filePath": "/fixture/sample.js",
+		"messages": [
+			{
+				"ruleId": "no-undef",
+				"severity": 2,
+				"message": "'another' is not defined.",
+				"line": 2,
+				"column": 1,
+				"nodeType": "Identifier",
+				"messageId": "undef",
+				"endLine": 2,
+				"endColumn": 8
+			}
+		],
+		"suppressedMessages": [],
+		"errorCount": 1,
+		"fatalErrorCount": 0,
+		"warningCount": 0,
+		"fixableErrorCount": 0,
+		"fixableWarningCount": 0,
+		"source": "// fixed\nanother();\n",
+		"usedDeprecatedRules": []
+	}
+]
