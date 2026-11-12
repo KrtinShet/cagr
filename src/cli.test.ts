@@ -192,3 +192,12 @@ test("stats accepts a days window and JSON, rejects invalid input", async () => 
 		expect(invalid.exitCode).toBe(2);
 	}
 });
+
+test("update is in help and source runs refuse self replacement", () => {
+	const help = Bun.spawnSync(["bun", cli, "update", "--help"]);
+	expect(help.exitCode).toBe(0);
+	expect(help.stdout.toString()).toContain("update [--check] [--version <v>]");
+	const source = Bun.spawnSync(["bun", cli, "update", "--check"]);
+	expect(source.exitCode).toBe(1);
+	expect(source.stdout.toString()).toContain("compiled binary");
+});
