@@ -46,6 +46,7 @@ import {
 	SyncError,
 	sync,
 } from "./sync";
+import { update } from "./update";
 import { version } from "./version";
 
 const help = `cagr ${version}: checks what a coding agent does (its commands, edits, stops and pull requests) and makes it run and obey your linters.
@@ -53,6 +54,7 @@ const help = `cagr ${version}: checks what a coding agent does (its commands, ed
 Usage: cagr <command>
 
   init [--dry-run] [--force]   Detect the repo, write cagr.toml, the agent hooks and the git hooks.
+  update [--check] [--version <v>]  Update the binary. --check exits 1 when an update is available.
   sync [--check]               Rewrite the generated agent and git hook files. --check fails on drift.
   install-git-hooks            Write the git hooks and set core.hooksPath.
   doctor [--github]            Check the wiring, the tools each check needs, and hook timings.
@@ -107,6 +109,7 @@ function flag(args: string[], name: string) {
 const options: Record<string, string[]> = {
 	init: ["--dry-run", "--force"],
 	sync: ["--check"],
+	update: ["--check", "--version"],
 	"install-git-hooks": [],
 	doctor: ["--github"],
 	stats: ["--days", "--json"],
@@ -222,6 +225,11 @@ async function main(argv: string[]): Promise<number> {
 				);
 			for (const note of result.notes) console.log(note);
 			return 0;
+		}
+		case "update": {
+			const result = await update(args);
+			console.log(result.message);
+			return result.code;
 		}
 		case "sync": {
 			const check = args.includes("--check");

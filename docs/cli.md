@@ -46,6 +46,20 @@ After detection, prints the resolved guard policies and per-stack edit and stop 
 - `--dry-run`: print the enforcement summary and config it would write. Write nothing.
 - `--force`: overwrite an existing `cagr.toml`. Without it, `init` stops if the file exists. Files in `.cagr/` are never overwritten.
 
+## update
+
+```sh
+cagr update
+cagr update --check
+cagr update --version v0.3.0
+```
+
+Downloads the latest release, verifies its SHA256SUMS entry, and replaces the running compiled binary. Use --version to install a specific version, including a downgrade; the v prefix is optional. After updating, run `cagr sync` in each repo and commit the changed files.
+
+`--check` only reports the installed and latest versions: exit 0 when current, 1 when an update is available. Errors also exit 1. Source runs must use the installed compiled binary. Package manager installs must use `bun add -d @krtinshet/cagr@latest` or `npm i -D @krtinshet/cagr@latest` instead.
+
+The command honors CAGR_REPO and CAGR_DOWNLOAD_URL just like the install script. The download URL must hold the selected binary and SHA256SUMS. If the install directory is not writable, fix its permissions or re-run the install script with CAGR_INSTALL_DIR set to a writable directory. On Windows, the previous binary remains at the executable path with .old appended; a later update replaces that backup.
+
 ## sync
 
 ```

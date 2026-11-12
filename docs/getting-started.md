@@ -57,6 +57,12 @@ command = "{root}/node_modules/.bin/cagr"
 
 `{root}` becomes the repo root for each agent. `cagr doctor` tells you when the program is not on `PATH`.
 
+## Updating
+
+For a compiled binary install, run `cagr update`. It checks the release checksum before replacing the binary. Use `cagr update --check` to check without installing (exit 1 when an update is available, 0 when current), or `cagr update --version 0.3.0` to install a specific version, including a downgrade.
+
+For a package manager install, run `bun add -d @krtinshet/cagr@latest` or `npm i -D @krtinshet/cagr@latest`. After updating, run `cagr sync` in each repo and commit the changed files.
+
 ## Set up a repo
 
 ```sh
