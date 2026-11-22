@@ -160,7 +160,7 @@ export function workflowYaml(config: Config): string {
 		...installSteps(config),
 		"      - run: cagr ci",
 	];
-	if (config.ci.review)
+	if (config.ci.review) {
 		lines.push(
 			"  review:",
 			// The review job runs on every event, edited too: a job skipped by its `if` counts as a passing required check.
@@ -169,7 +169,23 @@ export function workflowYaml(config: Config): string {
 			"    permissions:",
 			"      contents: read",
 			"      pull-requests: write",
+			"      statuses: read",
 			"    steps:",
+			"      - name: Check existing review status",
+			"        id: review-status",
+			"        env:",
+			`          REPO: ${expr("github.repository")}`,
+			`          SHA: ${expr("github.event.pull_request.head.sha")}`,
+			`          GH_TOKEN: ${expr("github.token")}`,
+			"        run: |",
+			`          if ! status=$(gh api "repos/$REPO/commits/$SHA/status?per_page=100" --paginate --jq '.statuses[] | select((.context | ascii_downcase) == "cagr/review") | .state'); then`,
+			'            echo "Could not read the commit status for $SHA. Running review."',
+			'          elif [ "$status" = success ]; then',
+			'            echo "Skipping review for $SHA. cagr/review already passed."',
+			'            echo "skip=true" >> "$GITHUB_OUTPUT"',
+			"          fi",
+		);
+		const reviewSteps = [
 			// Without a ref, checkout gives the merge commit, which is not in the pull request.
 			...checkout,
 			...installClaude,
@@ -177,7 +193,13 @@ export function workflowYaml(config: Config): string {
 			"      - run: cagr review --ci",
 			"        env:",
 			...secretEnv,
-		);
+		];
+		for (const line of reviewSteps) {
+			lines.push(line);
+			if (line.startsWith("      - "))
+				lines.push("        if: steps.review-status.outputs.skip != 'true'");
+		}
+	}
 	if (nightly.length > 0)
 		lines.push(
 			"  nightly:",

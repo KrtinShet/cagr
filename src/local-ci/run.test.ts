@@ -81,7 +81,7 @@ function runtime(
 		details?: Record<string, unknown>;
 		permission?: string;
 		heads?: { number: number; headRefOid: string; isDraft?: boolean }[];
-		statuses?: Record<string, string>;
+		statuses?: Record<string, [context: string, state: string][]>;
 		installFails?: boolean;
 	} = {},
 ) {
@@ -125,7 +125,13 @@ function runtime(
 		if (args.includes("graphql")) return "{}";
 		if (args.includes(`repos/o/r/issues/3/comments`)) return "";
 		const sha = args.find((arg) => arg.includes("/commits/"))?.split("/")[4];
-		if (sha) return settings.statuses?.[sha] ?? "";
+		if (sha) {
+			const rows = settings.statuses?.[sha] ?? [];
+			if (args.includes(".[] | [(.context | ascii_downcase), .state] | @tsv"))
+				return rows
+					.map(([context, state]) => `${context.toLowerCase()}\t${state}`)
+					.join("\n");
+		}
 		if (
 			args.includes("-X") &&
 			args.some((arg) => arg.startsWith("repos/o/r/statuses/"))
@@ -173,23 +179,24 @@ const result = (ok: boolean, stdout: string) => ({
 	timedOut: false,
 });
 
-test("watch skips either existing status and drafts, and runs a new SHA once", async () => {
+test("watch skips both successful statuses and drafts, and runs a new SHA once", async () => {
 	const f = await fixture();
 	try {
-		const checks = "a".repeat(40);
-		const review = "b".repeat(40);
+		const complete = "a".repeat(40);
 		const r = runtime(f, {
 			heads: [
-				{ number: 1, headRefOid: checks },
-				{ number: 2, headRefOid: review },
+				{ number: 1, headRefOid: complete },
 				{ number: 3, headRefOid: f.head },
 				{ number: 4, headRefOid: f.head },
 				{ number: 5, headRefOid: "c".repeat(40), isDraft: true },
 			],
 			statuses: {
-				[checks]: "cagr/checks",
-				[review]: "cagr/review",
-				[f.head]: "someone/else",
+				[complete]: [
+					["cagr/checks", "success"],
+					["cagr/review", "success"],
+					["cagr/review", "failure"],
+				],
+				[f.head]: [["someone/else", "success"]],
 			},
 		});
 		expect(await localCi(f.config, f.paths, "watch", r)).toBe(true);
@@ -215,6 +222,93 @@ test("watch skips either existing status and drafts, and runs a new SHA once", a
 			/^\d{4}-\d{2}-\d{2}T/,
 		);
 		expect(await f.repo.git("status", "--porcelain")).toBe("");
+	} finally {
+		f.clean();
+	}
+});
+
+test.each<{
+	name: string;
+	statuses: [string, string][];
+	checks: boolean;
+	review: boolean;
+	listedStatuses?: [string, string][];
+}>([
+	{
+		name: "reviews a head left pending by pre-push",
+		statuses: [
+			["cagr/checks", "success"],
+			["cagr/review", "pending"],
+		],
+		checks: false,
+		review: true,
+	},
+	{
+		name: "retries a failed review after an older success",
+		statuses: [
+			["cagr/checks", "success"],
+			["CAGR/Review", "failure"],
+			["cagr/review", "success"],
+		],
+		checks: false,
+		review: true,
+	},
+	{
+		name: "runs pending checks with a successful review",
+		statuses: [
+			["cagr/checks", "pending"],
+			["cagr/review", "success"],
+		],
+		checks: true,
+		review: false,
+	},
+	{
+		name: "retries checks with an error after an older success",
+		statuses: [
+			["cagr/checks", "error"],
+			["cagr/checks", "success"],
+			["cagr/review", "success"],
+		],
+		checks: true,
+		review: false,
+	},
+	{
+		name: "uses the current head's statuses when the listed head has changed",
+		listedStatuses: [
+			["cagr/checks", "success"],
+			["cagr/review", "pending"],
+		],
+		statuses: [
+			["cagr/checks", "pending"],
+			["cagr/review", "success"],
+		],
+		checks: true,
+		review: false,
+	},
+])("watch $name and only posts the status it ran", async (row) => {
+	const f = await fixture();
+	try {
+		const listedHead = row.listedStatuses ? "a".repeat(40) : f.head;
+		const r = runtime(f, {
+			heads: [{ number: 3, headRefOid: listedHead }],
+			statuses: {
+				[listedHead]: row.listedStatuses ?? [],
+				[f.head]: row.statuses,
+			},
+		});
+		expect(await localCi(f.config, f.paths, "watch", r)).toBe(true);
+		expect(
+			r.commands.some((args) => args[2] === "bun install --frozen-lockfile"),
+		).toBe(row.checks);
+		expect(r.commands.some((args) => args[0] === "claude")).toBe(row.review);
+		const posts = r.calls.filter((args) =>
+			args.includes(`repos/o/r/statuses/${f.head}`),
+		);
+		expect(posts).toHaveLength(1);
+		expect(posts[0]).toContain(
+			row.checks ? "context=cagr/checks" : "context=cagr/review",
+		);
+		expect(posts[0]).toContain("state=success");
 	} finally {
 		f.clean();
 	}
@@ -262,8 +356,19 @@ test("a changed PR head is never checked out or given a status for stale metadat
 test("an install failure posts failed checks, still reviews, and cleans up both worktrees", async () => {
 	const f = await fixture({ install: "custom install" });
 	try {
-		const r = runtime(f, { installFails: true });
+		const r = runtime(f, {
+			installFails: true,
+			statuses: {
+				[f.head]: [
+					["cagr/checks", "success"],
+					["cagr/review", "success"],
+				],
+			},
+		});
 		expect(await localCi(f.config, f.paths, 3, r)).toBe(false);
+		expect(
+			r.calls.some((args) => args.some((arg) => arg.includes("/commits/"))),
+		).toBe(false);
 		expect(r.commands).toContainEqual(["sh", "-c", "custom install"]);
 		expect(r.reviewBodies[0]?.commit_id).toBe(f.head);
 		const statuses = r.calls.filter((args) =>

@@ -90,17 +90,23 @@ async function refusal(gh: Gh, repo: string, pr: PrDetails) {
 	return null;
 }
 
-async function hasStatus(gh: Gh, repo: string, sha: string) {
-	const statuses = await gh([
-		"api",
-		"--paginate",
-		`repos/${repo}/commits/${sha}/statuses?per_page=100`,
-		"--jq",
-		".[].context",
-	]);
-	return statuses
-		.split(/\r?\n/)
-		.some((context) => context === checksContext || context === reviewContext);
+async function pendingTasks(gh: Gh, repo: string, sha: string) {
+	const statuses = (
+		await gh([
+			"api",
+			"--paginate",
+			`repos/${repo}/commits/${sha}/statuses?per_page=100`,
+			"--jq",
+			".[] | [(.context | ascii_downcase), .state] | @tsv",
+		])
+	).split(/\r?\n/);
+	const succeeded = (context: string) =>
+		statuses.find((status) => status.startsWith(`${context}\t`)) ===
+		`${context}\tsuccess`;
+	return {
+		checks: !succeeded(checksContext),
+		review: !succeeded(reviewContext),
+	};
 }
 
 function installs(config: Config) {
@@ -121,6 +127,7 @@ async function checkPullRequest(
 	details: PrDetails,
 	cache: string,
 	runtime: Runtime,
+	tasks: { checks: boolean; review: boolean },
 ) {
 	const { gh, run: execute, log } = runtime;
 	makeCache(cache);
@@ -181,62 +188,70 @@ async function checkPullRequest(
 			);
 			return false;
 		}
-		await git("worktree", "add", "--detach", worktree, pr.head);
-		let checksOk = false;
-		try {
-			const config = readConfig(worktree);
-			for (const { command, cwd } of installs(config))
-				await checked(shellArgv(command), cwd, 900_000);
-			const result = await ci(config, {
-				cwd: worktree,
-				base: pr.base,
-				pr: {
-					head: { sha: pr.head },
-					branch: details.headRefName,
-					body: pr.body,
-					title: details.title,
-				},
-				env: {},
-				runCheck: (command, cwd, options) =>
-					execute(shellArgv(command), cwd, options),
-			});
-			log(ciReport(result));
-			checksOk = result.ok;
-		} catch (error) {
-			log((error as Error).message);
+		let ok = true;
+		if (tasks.checks) {
+			let checksOk = false;
+			try {
+				await git("worktree", "add", "--detach", worktree, pr.head);
+				const config = readConfig(worktree);
+				for (const { command, cwd } of installs(config))
+					await checked(shellArgv(command), cwd, 900_000);
+				const result = await ci(config, {
+					cwd: worktree,
+					base: pr.base,
+					pr: {
+						head: { sha: pr.head },
+						branch: details.headRefName,
+						body: pr.body,
+						title: details.title,
+					},
+					env: {},
+					runCheck: (command, cwd, options) =>
+						execute(shellArgv(command), cwd, options),
+				});
+				log(ciReport(result));
+				checksOk = result.ok;
+			} catch (error) {
+				log((error as Error).message);
+			}
+			const sent = await post(
+				checksContext,
+				checksOk,
+				checksOk
+					? "Local CI checks passed."
+					: "Local CI checks failed. See the watch log or rerun cagr ci --pr.",
+			);
+			ok = checksOk && sent;
 		}
-		const checksSent = await post(
-			checksContext,
-			checksOk,
-			checksOk
-				? "Local CI checks passed."
-				: "Local CI checks failed. See the watch log or rerun cagr ci --pr.",
-		);
-		let reviewOk = false;
-		try {
-			// Checks can change files. Review a fresh checkout of the exact head.
-			await git("worktree", "add", "--detach", reviewTree, pr.head);
-			const login = (await gh(["api", "user", "--jq", ".login"])).trim();
-			if (!login) throw new LocalCiError("Run gh auth login before local CI.");
-			const result = await ciReview(readConfig(reviewTree), reviewTree, {
-				local: { pr, login },
-				gh,
-				agent: claudeAgent(execute),
-				progress: log,
-			});
-			log(result.report);
-			reviewOk = result.ok && result.complete;
-		} catch (error) {
-			log((error as Error).message);
+		if (tasks.review) {
+			let reviewOk = false;
+			try {
+				// Checks can change files. Review a fresh checkout of the exact head.
+				await git("worktree", "add", "--detach", reviewTree, pr.head);
+				const login = (await gh(["api", "user", "--jq", ".login"])).trim();
+				if (!login)
+					throw new LocalCiError("Run gh auth login before local CI.");
+				const result = await ciReview(readConfig(reviewTree), reviewTree, {
+					local: { pr, login },
+					gh,
+					agent: claudeAgent(execute),
+					progress: log,
+				});
+				log(result.report);
+				reviewOk = result.ok && result.complete;
+			} catch (error) {
+				log((error as Error).message);
+			}
+			const sent = await post(
+				reviewContext,
+				reviewOk,
+				reviewOk
+					? "Local CI review passed."
+					: "Local CI review failed. See the PR and the watch log.",
+			);
+			ok = ok && reviewOk && sent;
 		}
-		const reviewSent = await post(
-			reviewContext,
-			reviewOk,
-			reviewOk
-				? "Local CI review passed."
-				: "Local CI review failed. See the PR and the watch log.",
-		);
-		return checksOk && reviewOk && checksSent && reviewSent;
+		return ok;
 	} finally {
 		// The worktrees and their private Git metadata are all under scratch.
 		rmSync(scratch, { recursive: true, force: true });
@@ -288,12 +303,12 @@ export async function localCi(
 		for (const { number, isDraft, headRefOid } of prs) {
 			if (mode === "watch" && isDraft) continue;
 			try {
-				if (
-					mode === "watch" &&
-					/^[a-f0-9]{40}$/.test(headRefOid) &&
-					(seen.has(headRefOid) || (await hasStatus(gh, repo, headRefOid)))
-				)
-					continue;
+				let tasks = { checks: true, review: true };
+				if (mode === "watch" && /^[a-f0-9]{40}$/.test(headRefOid)) {
+					if (seen.has(headRefOid)) continue;
+					tasks = await pendingTasks(gh, repo, headRefOid);
+					if (!tasks.checks && !tasks.review) continue;
+				}
 				const details = JSON.parse(
 					await gh([
 						"pr",
@@ -318,12 +333,11 @@ export async function localCi(
 					throw new LocalCiError(
 						`PR #${number} has no valid head. Check its head on GitHub and retry.`,
 					);
-				if (
-					mode === "watch" &&
-					head !== headRefOid &&
-					(seen.has(head) || (await hasStatus(gh, repo, head)))
-				)
-					continue;
+				if (mode === "watch" && head !== headRefOid) {
+					if (seen.has(head)) continue;
+					tasks = await pendingTasks(gh, repo, head);
+					if (!tasks.checks && !tasks.review) continue;
+				}
 				const reason = await refusal(gh, repo, details);
 				if (reason) {
 					log(`Refused PR #${number}. ${reason}`);
@@ -342,6 +356,7 @@ export async function localCi(
 					details,
 					paths.cache,
 					runtime,
+					tasks,
 				);
 				if (!passed) ok = false;
 				// A second PR can point at the same SHA before GitHub returns a posted status.
