@@ -109,6 +109,10 @@ A cycle starts with a full round. If the last reviewed commit is not an ancestor
 
 `cagr review --full` forces a full round of the whole branch, even at a commit already reviewed. It also starts a new cycle. More review never weakens the gate.
 
+An open finding gets a new verdict only when the commits since its last verdict (or since the round that reported it) changed its file, or changed a reviewed file (one not in `[review] skip`) and one of the branch's own commits (not a merge, and not a commit from the base) names its id, such as `f1`, in its message. A verdict on unchanged code would only reroll the model, so an empty commit, or a commit for another finding, leaves it open with no model call, and `cagr review` says so: "f1 is still open: no commit since the last check touched src/deals.ts. Fix it, or answer it with `cagr review answer f1 ...`." If the fix is in another file (a new test, a check in a caller), name the finding in the commit message, for example `fix(deals): check the session in the caller (f1)`. The check is on the whole file, not the finding's lines, since lines move between commits. A finding with no file is judged again after any reviewed change. A diff round with an empty diff runs no finders either.
+
+An open finding gets at most 3 verdicts on the branch, counting rechecks, so many small edits cannot reroll it forever. The count does not reset with a new cycle, so `--full` and rebases cannot reset it either. Past that, `cagr review` does not judge it again: "f1 is still open: the verifier judged it 3 times, the most it may." Answer it. Verdicts on fixed findings (rechecks of a fix) do not count, and a finding the verifier reopens starts its count again, since it needs a new fix.
+
 If the verifier judged an earlier finding not fixed and you think it was wrong, run `cagr review` again at the same commit: it runs the verifier once more on the findings from earlier rounds. That recheck runs once per finding per commit. After it, `cagr review` at that commit does nothing and says to commit a fix or answer the finding (`cagr review answer <id> --wrong "<why>"`). `--full` still runs a full round there, but the verifier does not judge a finding a third time at the same commit, and never judges a finding at the commit that reported it. A finding reported at this commit needs a fix or an answer.
 
 With `[review] status = true`, the pre-push hook and `cagr review answer` send `cagr/review` for the commit:
@@ -284,6 +288,7 @@ It also lists the owners of the files. cagr does not enforce the approval counts
 When the reviewer cannot run (not installed, a timeout, bad output), the round is recorded as an error, `cagr review` prints the error and exits 2, and:
 
 - If no finding is open, the gate lets the pull request through and tells the human: "cagr: the review of ... could not run (...), so this pull request goes out unreviewed. Review it yourself before you approve it."
-- If findings from an earlier round are still open, the gate still denies.
+- If findings from an earlier round are still open, the gate still denies. So does a finding fixed on a commit the head does not contain when the fix's files (those its fix round covered, and the finding's own) differ at the head, for example after `git reset` to before the fix.
+- A finding fixed on history that a rebase replaced, whose fix's files the rebase left as the fix had them, does not hold the gate: the failed round would only have checked it again.
 
 So a broken reviewer never blocks work, and never hides findings that were already there.

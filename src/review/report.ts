@@ -67,6 +67,7 @@ export function reviewReport(
 		sections.push(
 			`Still open from earlier rounds:\n${older.map(block).join("\n")}`,
 		);
+	if (outcome.held.length > 0) sections.push(outcome.held.join("\n"));
 	if (open.length === 0)
 		sections.push(
 			"Passed. No Important finding is open. Push the reviewed commits, then open or mark the pull request ready.",
