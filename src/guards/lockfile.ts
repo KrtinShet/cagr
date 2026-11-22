@@ -225,7 +225,9 @@ async function regenerate(
 	try {
 		await copyInputs(root, path, folder, deadline);
 		const file = join(folder, path);
+		// A local ref to the project folder copies the lockfile under check, so replace or remove it.
 		if (lockfile) await writeFile(file, lockfile);
+		else await rm(file, { force: true });
 		const timeoutMs = Math.floor(deadline - performance.now());
 		if (timeoutMs <= 0) throw new Error("No time was left to run it.");
 		const result = await run(spec.argv, dirname(file), {
