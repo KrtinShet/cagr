@@ -111,7 +111,7 @@ Turning recording off keeps existing history readable. Delete the local log and 
 ## review
 
 ```
-cagr review [--base <branch>] [--full] [--effort quick|standard|deep]
+cagr review [--base <branch>] [--effort quick|standard|deep]
 cagr review --scan <globs...> [--issue]
 cagr review --ci
 cagr review answer <id> --wrong|--intentional|--minor "<why>"
@@ -125,7 +125,6 @@ cagr review help
 | ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
 | `review`                                              | Review this branch's commits. After round 1, only the new ones.                                         |
 | `--base <branch>`                                     | Compare with this base instead of the protected branch.                                                 |
-| `--full`                                              | Review the whole branch, even if the commit was reviewed or earlier rounds exist.                       |
 | `--effort <level>`                                    | Use this effort for this run.                                                                           |
 | `--scan <globs...>`                                   | Review the tracked files that match, instead of the branch's commits.                                   |
 | `--issue`                                             | With `--scan`: open a GitHub issue with the findings.                                                   |

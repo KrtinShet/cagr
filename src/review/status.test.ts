@@ -173,6 +173,58 @@ test("after a push it waits for GitHub to have the commit, then sends both statu
 	expect(lines).toHaveLength(2);
 });
 
+test("post-status requires evidence for the pushed SHA, including after the cap", async () => {
+	const repo = await tempRepo();
+	const first = await repo.git("rev-parse", "HEAD");
+	const second = await repo.commit("fix: first review finding", {
+		"src/a.ts": "first fix\n",
+	});
+	const third = await repo.commit("fix: second review finding", {
+		"src/a.ts": "second fix\n",
+	});
+	const file = recordPath(join(repo.root, ".git"), "feat/x");
+	const saved = record(
+		[
+			round({ head: first }),
+			round({ n: 2, head: second, from: first, scope: "diff" }),
+		],
+		[finding()],
+	);
+	const state = async (sha: string) => {
+		const { gh, calls } = fakeGh();
+		writeRecord(file, saved);
+		await postStatusAfterPush(
+			settings,
+			repo.root,
+			{ sha, branch: "feat/x", checks: null, waitSeconds: 0 },
+			gh,
+		);
+		return field(
+			calls.find((args) => args[2] === "POST"),
+			"state",
+		);
+	};
+	expect(await state(third)).toBe("pending");
+	expect(await state(second)).toBe("pending");
+	saved.rounds.push(
+		round({ n: 3, head: third, from: second, scope: "verify" }),
+	);
+	expect(await state(third)).toBe("pending");
+	const issue = saved.findings[0];
+	if (!issue) throw new Error("Missing fixture finding");
+	issue.status = "fixed";
+	issue.fixedIn = third;
+	expect(await state(third)).toBe("success");
+	const extra = await repo.commit("feat: unrelated", {
+		"src/b.ts": "unreviewed\n",
+	});
+	expect(await state(extra)).toBe("pending");
+	saved.rounds.push(
+		round({ n: 4, head: extra, scope: "verify", error: "timeout" }),
+	);
+	expect(await state(extra)).toBe("pending");
+});
+
 test("after a push, gh that is not logged in stops the wait and the note says so", async () => {
 	const repo = await tempRepo();
 	const sha = await repo.git("rev-parse", "HEAD");

@@ -4,8 +4,9 @@ import { join } from "node:path";
 import { resolveConfig } from "../config/load";
 import { tempRepo } from "../test/repo";
 import { type AgentRequest, type ReviewAgent, ReviewerError } from "./agent";
-import { finderSchema } from "./prompt";
-import { reviewReport } from "./report";
+import { gateResult } from "./gate";
+import { finderSchema, verifierSchema } from "./prompt";
+import { answerFinding, reviewReport } from "./report";
 import {
 	findersFor,
 	mergeCandidates,
@@ -63,9 +64,12 @@ function fakeAgent(replies: {
 async function branchRepo() {
 	const repo = await tempRepo();
 	await repo.git("checkout", "-q", "-b", "feat/login");
-	await repo.commit("feat(auth): add login", {
-		"src/a.ts": "export const login = (user) => user.name;\n",
-	});
+	await repo.commit(
+		"feat(auth): add login\n\nDeliberately use an optional display name.",
+		{
+			"src/a.ts": "export const login = (user) => user.name;\n",
+		},
+	);
 	const config = resolveConfig(
 		{ review: { enabled: true } },
 		repo.root,
@@ -100,6 +104,22 @@ describe("review", () => {
 		expect(calls[1]?.prompt).toContain("Security");
 		expect(calls[0]?.prompt).toContain("feat(auth): add login");
 		expect(calls[0]?.prompt).toContain("+export const login");
+		for (const call of calls) {
+			expect(call.prompt).toContain(
+				"requires a concrete failing input or state and its consequence",
+			);
+			expect(call.prompt).toContain(
+				"Do not report a choice the commit body names as deliberate",
+			);
+			expect(call.prompt).toContain(
+				"Deliberately use an optional display name.",
+			);
+		}
+		expect(calls[0]?.prompt).toContain(
+			"This is the only full review. Later rounds see only fix commits",
+		);
+		expect(reviewReport(outcome, 2)).toContain("covering the whole bug class");
+		expect(reviewReport(outcome, 2)).toContain("Run the targeted tests");
 		expect(outcome.found.map((entry) => entry.title)).toEqual([
 			"Null user crashes the handler",
 		]);
@@ -125,9 +145,12 @@ describe("review", () => {
 			agent: first.agent,
 		});
 		const head1 = round1.round?.head ?? "";
-		await repo.commit("fix(auth): handle a missing user", {
-			"src/a.ts": "export const login = (user) => user?.name;\n",
-		});
+		await repo.commit(
+			"fix(auth): handle a missing user\n\nReturn undefined for an expired session.",
+			{
+				"src/a.ts": "export const login = (user) => user?.name;\n",
+			},
+		);
 		const second = fakeAgent({
 			finder: () => ({ summary: "0 findings.", findings: [], fixed: ["f1"] }),
 			verifier: () => ({
@@ -149,6 +172,121 @@ describe("review", () => {
 		expect(round2.fixed.map((entry) => entry.id)).toEqual(["f1"]);
 		expect(round2.passed).toBe(true);
 		expect(reviewReport(round2, 3)).toContain("Fixed since the last round");
+	});
+
+	test.each([true, false])(
+		"past the cap runs just the verifier and uses its fix verdict (%s)",
+		async (fixed) => {
+			const repo = await branchRepo();
+			expect(repo.config.review.max_rounds).toBe(2);
+			const discovery = fakeAgent({
+				finder: (_, call) => ({
+					findings:
+						call === 0
+							? [candidate()]
+							: call === 1
+								? [candidate({ severity: "nit", file: "src/b.ts" })]
+								: [],
+					fixed: ["f1"],
+				}),
+			});
+			const options = { cwd: repo.root, effort: "quick" as const };
+			await review(repo.config, { ...options, agent: discovery.agent });
+			await repo.commit("fix: first attempt", { "src/a.ts": "still broken\n" });
+			const second = await review(repo.config, {
+				...options,
+				agent: discovery.agent,
+			});
+			expect(second.passed).toBe(false);
+			expect(second.fixed).toEqual([]);
+			expect(discovery.calls.map((call) => call.schema)).toEqual([
+				finderSchema,
+				finderSchema,
+				verifierSchema,
+			]);
+			const sha = await repo.commit(
+				"fix: second attempt\n\nHandle an expired session.",
+				{
+					"src/a.ts": fixed ? "user?.name\n" : "user.name\n",
+				},
+			);
+			const verify = fakeAgent({
+				finder: () => {
+					throw new Error("The cap forbids finders");
+				},
+				verifier: () => ({
+					previous: [{ id: "f1", fixed, reason: "checked the session path" }],
+				}),
+			});
+			const progress: string[] = [];
+			const outcome = await review(repo.config, {
+				...options,
+				agent: verify.agent,
+				progress: (line) => progress.push(line),
+			});
+			expect(outcome.passed).toBe(fixed);
+			expect(outcome.round?.scope).toBe("verify");
+			expect(outcome.round?.from).toBe(second.round?.head ?? "");
+			expect(verify.calls.map((call) => call.schema)).toEqual([verifierSchema]);
+			expect(verify.calls[0]?.prompt).toContain("Handle an expired session.");
+			expect(verify.calls[0]?.prompt).toContain(
+				"requires a concrete failing input or state and its consequence",
+			);
+			expect(verify.calls[0]?.prompt).toContain(
+				"Do not report a choice the commit body names as deliberate",
+			);
+			expect(progress.join("\n")).toContain("Running only the verifier");
+			expect(reviewReport(outcome, 2)).toContain("Verifier-only check");
+			expect(gateResult(outcome.record, sha, repo.config).kind).toBe(
+				fixed ? "allow" : "deny",
+			);
+			if (!fixed) {
+				answerFinding(
+					outcome.record,
+					"f1",
+					"intentional",
+					"The handler requires an active session.",
+				);
+				expect(gateResult(outcome.record, sha, repo.config).kind).toBe("allow");
+			}
+		},
+	);
+
+	test("rechecking a later commit can reopen a regressed fix without changing the earlier passing head", async () => {
+		const repo = await branchRepo();
+		const { agent } = fakeAgent({
+			finder: (_, call) => ({ findings: call === 0 ? [candidate()] : [] }),
+			verifier: (_, call) => ({ previous: [{ id: "f1", fixed: call === 0 }] }),
+		});
+		const options = { cwd: repo.root, agent, effort: "quick" as const };
+		await review(repo.config, options);
+		const fixed = await repo.commit("fix: allow an expired session", {
+			"src/a.ts": "user?.name\n",
+		});
+		expect((await review(repo.config, options)).passed).toBe(true);
+		const reverted = await repo.commit(
+			"revert: restore the old session handling",
+			{ "src/a.ts": "user.name\n" },
+		);
+		const outcome = await review(repo.config, options);
+		expect(outcome.passed).toBe(false);
+		expect(gateResult(outcome.record, reverted, repo.config).kind).toBe("deny");
+		expect(gateResult(outcome.record, fixed, repo.config).kind).toBe("allow");
+	});
+
+	test("a review with only nits passes in one round", async () => {
+		const repo = await branchRepo();
+		const { agent, calls } = fakeAgent({
+			finder: () => ({ findings: [candidate({ severity: "nit" })] }),
+		});
+		const outcome = await review(repo.config, {
+			cwd: repo.root,
+			agent,
+			effort: "quick",
+		});
+		expect(outcome.passed).toBe(true);
+		expect(outcome.found.map((finding) => finding.severity)).toEqual(["nit"]);
+		expect(calls).toHaveLength(1);
 	});
 
 	test("an unchanged head is not reviewed twice", async () => {

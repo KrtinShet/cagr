@@ -9,9 +9,8 @@ test("--scan takes the globs up to the next option, wherever the options sit", (
 	expect(
 		parseReviewArgs(["--scan", "src/**", "lib/**", "--effort", "deep"]),
 	).toMatchObject({ scan: ["src/**", "lib/**"], effort: "deep" });
-	expect(parseReviewArgs(["--base", "dev", "--full"])).toMatchObject({
+	expect(parseReviewArgs(["--base", "dev"])).toMatchObject({
 		base: "dev",
-		full: true,
 		scan: undefined,
 	});
 });

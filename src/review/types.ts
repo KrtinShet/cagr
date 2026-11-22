@@ -37,12 +37,13 @@ export type Round = {
 	n: number;
 	head: string;
 	from: string;
-	scope: "full" | "diff" | "scan";
+	scope: "full" | "diff" | "verify" | "scan";
 	effort: Effort;
 	tier: RiskTier;
 	reviewer: string;
 	at: string;
 	summary: string;
+	passed?: boolean;
 	/** Set when the reviewer could not run. The gate then lets the PR through and tells the human. */
 	error: string | null;
 };
@@ -68,3 +69,7 @@ export const blocking = (record: ReviewRecord) =>
 	record.findings.filter(
 		(finding) => finding.status === "open" && finding.severity === "important",
 	);
+
+export const discoveryRounds = (record: ReviewRecord) =>
+	record.rounds.filter((round) => !round.error && round.scope !== "verify")
+		.length;

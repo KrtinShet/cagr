@@ -306,7 +306,7 @@ export const configSchema: Node = obj({
 			max_rounds: num({
 				min: 1,
 				description:
-					"After this many rounds the reviewer asks the author to step back and rethink the approach.",
+					"Maximum rounds that can report new findings (default 2). After that, reviews only verify earlier findings.",
 			}),
 			timeout_seconds: num({
 				min: 30,

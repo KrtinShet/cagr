@@ -16,6 +16,7 @@ import {
 	type Focus,
 	finderPrompt,
 	finderSchema,
+	findingsToVerify,
 	type ReviewContext,
 	type VerifierOutput,
 	verifierPrompt,
@@ -26,6 +27,7 @@ import {
 	blocking,
 	type Candidate,
 	categories,
+	discoveryRounds,
 	type ReviewFinding,
 	type ReviewRecord,
 	type Round,
@@ -39,7 +41,6 @@ export class ReviewInputError extends Error {}
 export type ReviewOptions = {
 	cwd: string;
 	base?: string;
-	full?: boolean;
 	effort?: Effort;
 	/** Review existing code in these globs instead of a branch's commits. */
 	scan?: string[];
@@ -86,9 +87,6 @@ export async function resolveBase(name: string, cwd: string) {
 	);
 }
 
-const isAncestor = async (older: string, newer: string, cwd: string) =>
-	(await run(["git", "merge-base", "--is-ancestor", older, newer], cwd)).ok;
-
 export async function review(
 	config: Config,
 	options: ReviewOptions,
@@ -126,30 +124,35 @@ export async function review(
 			: loadRecord("", branch, baseName));
 	const lastOk = record.rounds.findLast((round) => !round.error);
 
+	const capped = discoveryRounds(record) >= config.review.max_rounds;
 	let from = head;
+	let mergeBase = head;
 	let scope: Round["scope"] = "scan";
 	let branchFiles: string[] = [];
 	if (!scanning) {
 		const baseRef = await resolveBase(baseName, cwd);
-		const mergeBase = await gitOut(["merge-base", baseRef, head], cwd);
+		mergeBase = await gitOut(["merge-base", baseRef, head], cwd);
 		if (mergeBase === head)
 			return skippedOutcome(
 				record,
 				file,
 				`No commits on ${branch} beyond ${baseName}, so there is nothing to review.`,
 			);
-		if (lastOk?.head === head && !options.full)
+		if (lastOk?.head === head && record.rounds.at(-1) === lastOk)
 			return skippedOutcome(
 				record,
 				file,
 				`${head.slice(0, 7)} was already reviewed in round ${lastOk.n}.`,
 			);
-		const incremental =
-			!options.full &&
-			lastOk !== undefined &&
-			(await isAncestor(lastOk.head, head, cwd));
-		from = incremental && lastOk ? lastOk.head : mergeBase;
-		scope = incremental ? "diff" : "full";
+		from = lastOk?.head ?? mergeBase;
+		scope = capped ? "verify" : lastOk ? "diff" : "full";
+		if (
+			lastOk &&
+			!(await run(["git", "cat-file", "-e", `${from}^{commit}`], cwd)).ok
+		)
+			throw new ReviewInputError(
+				`The last reviewed commit ${from} is missing. Fetch it so cagr can compare the fixes against it.`,
+			);
 		branchFiles = (await gitOut(["diff", "--name-only", mergeBase, head], cwd))
 			.split("\n")
 			.filter(Boolean);
@@ -180,12 +183,10 @@ export async function review(
 		);
 		if (diff.length > maxDiff)
 			diff = `${diff.slice(0, maxDiff)}\n... (diff cut at ${maxDiff} characters; run \`git diff ${from.slice(0, 12)} ${head.slice(0, 12)}\` for the rest)\n\n${await gitOut(["diff", "--stat", from, head], cwd)}`;
-		log = (
-			await gitOut(
-				["log", "--no-merges", "--format=- %s%n%b", `${from}..${head}`],
-				cwd,
-			)
-		).slice(0, 6000);
+		log = await gitOut(
+			["log", "--format=- %s%n%b", `${from}..${head}`, `^${mergeBase}`],
+			cwd,
+		);
 	}
 	const guidePath = join(config.root, config.review.guide);
 	const context: ReviewContext = {
@@ -196,8 +197,6 @@ export async function review(
 		tier: risk.tier,
 		tierReasons: risk.reasons,
 		effort,
-		round: roundNumber,
-		maxRounds: config.review.max_rounds,
 		log,
 		diff,
 		guide: existsSync(guidePath) ? readFileSync(guidePath, "utf8") : null,
@@ -235,9 +234,12 @@ export async function review(
 		} satisfies AgentRequest);
 
 	try {
-		const focuses = findersFor(effort, config.review.security);
+		const focuses =
+			scope === "verify" ? [] : findersFor(effort, config.review.security);
 		progress(
-			`Reviewing ${scope === "diff" ? "the new commits" : scope === "scan" ? `${reviewed.length} files` : branch} with ${agent.name}: ${effort} effort, ${risk.tier} risk, ${focuses.length} finder${focuses.length === 1 ? "" : "s"}.`,
+			scope === "verify"
+				? `Reached the ${config.review.max_rounds}-round cap. Running only the verifier on the new commits.`
+				: `Reviewing ${scope === "diff" ? "the new commits" : scope === "scan" ? `${reviewed.length} files` : branch} with ${agent.name}: ${effort} effort, ${risk.tier} risk, ${focuses.length} finder${focuses.length === 1 ? "" : "s"}.`,
 		);
 		const outputs = await Promise.all(
 			focuses.map(async (focus) =>
@@ -248,18 +250,29 @@ export async function review(
 			outputs.flatMap((output) => output.findings),
 			record.findings,
 		);
-		const open = record.findings.filter((finding) => finding.status === "open");
-		const verifiers = effort === "deep" ? 3 : effort === "standard" ? 1 : 0;
+		const previous = findingsToVerify(context);
+		const verifiers =
+			effort === "deep"
+				? 3
+				: effort === "standard" || scope === "verify" || previous.length > 0
+					? 1
+					: 0;
 		let kept = candidates;
-		let fixedIds = new Set(outputs[0]?.fixed ?? []);
-		if (verifiers > 0 && (candidates.length > 0 || open.length > 0)) {
+		let fixedIds = new Set<string>();
+		if (
+			scope === "verify" ||
+			(verifiers > 0 &&
+				((effort !== "quick" && candidates.length > 0) || previous.length > 0))
+		) {
 			progress(
-				`Checking ${candidates.length} candidate finding${candidates.length === 1 ? "" : "s"} with ${verifiers} verifier${verifiers === 1 ? "" : "s"}.`,
+				`Checking ${candidates.length} candidate finding${candidates.length === 1 ? "" : "s"} and ${previous.length} earlier finding${previous.length === 1 ? "" : "s"} with ${verifiers} verifier${verifiers === 1 ? "" : "s"}.`,
 			);
-			const keyed = candidates.map((candidate, index) => ({
-				...candidate,
-				key: `C${index + 1}`,
-			}));
+			const keyed = (effort === "quick" ? [] : candidates).map(
+				(candidate, index) => ({
+					...candidate,
+					key: `C${index + 1}`,
+				}),
+			);
 			const votes = await Promise.all(
 				Array.from({ length: verifiers }, async () =>
 					normalizeVerifier(
@@ -267,20 +280,27 @@ export async function review(
 					),
 				),
 			);
-			const verdict = tally(keyed, votes, open);
-			kept = verdict.kept;
+			const verdict = tally(keyed, votes, previous);
+			if (effort !== "quick") kept = verdict.kept;
 			fixedIds = verdict.fixed;
 		}
 		const found = assignIds(capNits(kept), record, roundNumber);
 		const fixed: ReviewFinding[] = [];
-		for (const finding of record.findings)
+		for (const finding of previous) {
 			if (finding.status === "open" && fixedIds.has(finding.id)) {
 				finding.status = "fixed";
 				finding.fixedIn = head;
 				fixed.push(finding);
+			} else if (finding.status === "fixed" && !fixedIds.has(finding.id)) {
+				finding.status = "open";
+				finding.fixedIn = null;
 			}
+		}
 		record.findings.push(...found);
-		round.summary = countLine(found);
+		round.summary =
+			scope === "verify" ? "Checked earlier findings." : countLine(found);
+		const passed = blocking(record).length === 0;
+		round.passed = passed;
 		if (!scanning) record.rounds.push(round);
 		if (file) writeRecord(file, record);
 		return {
@@ -288,7 +308,7 @@ export async function review(
 			round,
 			found,
 			fixed,
-			passed: blocking(record).length === 0,
+			passed,
 			file,
 			skipped: null,
 		};
@@ -377,9 +397,6 @@ export function normalizeFinder(raw: unknown): FinderOutput {
 		findings: (Array.isArray(entry.findings) ? entry.findings : [])
 			.map(normalizeCandidate)
 			.filter((candidate): candidate is Candidate => candidate !== null),
-		fixed: (Array.isArray(entry.fixed) ? entry.fixed : []).filter(
-			(id): id is string => typeof id === "string",
-		),
 	};
 }
 

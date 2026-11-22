@@ -163,14 +163,20 @@ export async function postStatusAfterPush(
 	const record = git.commonDir
 		? readRecord(recordPath(git.commonDir, options.branch))
 		: null;
-	lines.push(
-		(
-			await postStatus(
-				gh,
-				options.sha,
-				reviewStatus(record, options.sha, config),
-			)
-		).message,
-	);
+	const gate = gateResult(record, options.sha, config);
+	const status: CommitStatus =
+		gate.kind === "allow" && !gate.notice
+			? {
+					context: reviewContext,
+					state: "success",
+					description: "Passed: no Important finding is open.",
+				}
+			: {
+					context: reviewContext,
+					state: "pending",
+					description:
+						"Run cagr review and fix or answer open Important findings.",
+				};
+	lines.push((await postStatus(gh, options.sha, status)).message);
 	return lines;
 }

@@ -12,8 +12,8 @@ With review on, the [review gate](guards.md#review-gate) denies `gh pr create` a
 1. Commit.
 2. Run `cagr review`. It takes a few minutes, so give the command a 15 minute timeout.
 3. Fix each Important finding and commit, or [answer](#answers) it.
-4. Run `cagr review` again. After round 1 it reviews only the new commits.
-5. Open the pull request when no Important finding is open.
+4. If you made another commit, run `cagr review` again to check it.
+5. Push once the review passes, then open the pull request.
 
 The `recommended` preset turns review on. Without a preset, set `[review] enabled = true`.
 
@@ -22,7 +22,6 @@ The `recommended` preset turns review on. Without a preset, set `[review] enable
 ```sh
 cagr review                      # review the branch's commits since its base
 cagr review --base develop       # compare with another base branch
-cagr review --full               # review the whole branch again, not just new commits
 cagr review --effort deep        # pick the effort for this run
 ```
 
@@ -31,9 +30,9 @@ Before it starts:
 - Tracked files must be committed. If not: "Commit your changes first. The review covers commits, and the gate checks the commit you open the pull request from."
 - The base is `--base`, else `[git] protected_branch`, else `main`. cagr uses `origin/<base>` if it exists, else the local `<base>`. If it finds neither: "Cannot find the base branch "develop". Fetch it, or pass --base <branch>."
 - If the branch has no commits beyond the base, there is nothing to review.
-- If the current commit was already reviewed, it says so and does not run again, unless you pass `--full`.
+- If the current commit was already reviewed, it says so and does not run again.
 
-The diff leaves out files that match `[review] skip`. A diff over 150,000 characters is cut, with a note and a `--stat` summary. The commit log is cut at 6,000 characters.
+The diff leaves out files that match `[review] skip`. A diff over 150,000 characters is cut, with a note and a `--stat` summary. The reviewer gets the commit subjects and bodies for the range.
 
 A report looks like this:
 
@@ -54,7 +53,7 @@ Nits (optional):
 Next: fix each Important finding, commit, and run `cagr review` again. It reviews only the new commits. ...
 ```
 
-When nothing Important is open, it ends with "Passed. No Important finding is open, so the gate lets the pull request through."
+When no Important finding is open, the report says the review passed and the branch is ready to push.
 
 Exit codes: 0 passed, 1 Important findings open, 2 error (including a reviewer that could not run, and bad arguments).
 
@@ -66,7 +65,7 @@ Effort sets how many agents look at the change.
 
 | Effort     | Finders                                               | Verifiers                                          |
 | ---------- | ----------------------------------------------------- | -------------------------------------------------- |
-| `quick`    | one bug finder                                        | none                                               |
+| `quick`    | one bug finder                                        | one for earlier findings, when there are any      |
 | `standard` | a bug finder and a security finder                    | one, which drops what it cannot confirm            |
 | `deep`     | a bug finder, a security finder and a behavior finder | three, and a finding stays when at least two agree |
 
@@ -94,11 +93,16 @@ Categories are bug, security, behavior, test, style and other. Style findings ar
 
 ## Rounds
 
-Every run of `cagr review` is a round. Round 1 reviews the whole branch. After that, if the last good round's commit is an ancestor of the current one, the next round sees only the new commits and the open findings. It marks the findings that were fixed and does not repeat itself. After a rebase, the next round reviews the whole branch again.
+Commit the change, run `cagr review` locally, fix the findings in one commit, re-check the fixes, then push. Before reviewing, add a test that fails without each new behavior or bug fix. Put intent and deliberate trade-offs in the commit body. Fix every instance of each reported bug class and run the targeted tests before the next check.
 
-A round that could not run is recorded with its error and does not count toward the round number.
+1. Round 1 reviews the whole branch with the configured finders. It is the only full review.
+2. Round 2 reviews the changes since round 1. The finders look for bugs in the fix diff, and the verifier checks each earlier open finding against the fixes.
 
-After `[review] max_rounds` rounds (default 3), the report and the gate add: "Step back: if findings keep coming, the approach may be wrong. Rethink it, or answer the findings and let a person decide."
+`[review] max_rounds` defaults to 2. It caps rounds that can report new findings. If you set a higher value, each extra round covers only the changes since the previous review. Failed runs do not count toward the cap.
+
+Past the cap, `cagr review` runs only the verifier against the new commits. It checks earlier Important findings, including whether previous fixes still hold. The pull request gate passes when every Important finding is verified fixed or answered on that reviewed head. Nits and pre-existing findings are optional and never require another round. After a rewrite, cagr compares the tree of the last reviewed commit with the current one. Keep the last reviewed commit available locally so cagr can make that comparison.
+
+With `[review] status = true`, the pre-push hook sends `cagr/review` as `success` for the pushed commit when its review or verifier-only check passed. It sends `pending` otherwise.
 
 The record for each branch lives in `<git common dir>/cagr/reviews/<branch>.json`, so every worktree of the repo shares it. Nothing is written to the working tree.
 
@@ -124,8 +128,11 @@ cagr review answer f4 --minor "the log line only runs in dev"
 
 - how many branches were reviewed and how many passed;
 - the mean rounds to pass, the share that passed in one round, and the share that took five or more;
+- the share of later-round findings on fix lines;
 - how many findings there were, how many were fixed, and how many were answered of each kind;
 - the noise: "Noise: X% of findings were answered as wrong."
+
+A fix line is a line added or replaced in the net diff from the first full review to the round that reported the finding. The share uses findings from later diff rounds with a file, a positive line number and both commits available locally. A line without a matching change counts as earlier code.
 
 A high noise rate means the reviewer flags things that are not problems. Tell it what to skip in the review guide.
 

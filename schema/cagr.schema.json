@@ -847,7 +847,7 @@
 				"max_rounds": {
 					"type": "integer",
 					"minimum": 1,
-					"description": "After this many rounds the reviewer asks the author to step back and rethink the approach."
+					"description": "Maximum rounds that can report new findings (default 2). After that, reviews only verify earlier findings."
 				},
 				"timeout_seconds": {
 					"type": "integer",

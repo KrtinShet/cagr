@@ -9,14 +9,14 @@ test("no review denies and says to run one", () => {
 	const result = gateResult(null, head, settings);
 	expect(result.kind).toBe("deny");
 	expect(result.kind === "deny" && result.reason).toContain(
-		"Run `cagr review`",
+		"Commit, run `cagr review`",
 	);
 });
 
 test("a commit after the review denies until the new commits are reviewed", () => {
 	const result = gateResult(record([round()]), "c".repeat(40), settings);
 	expect(result.kind === "deny" && result.reason).toContain(
-		"You committed after the last review",
+		"This commit differs from the last review",
 	);
 });
 
@@ -26,7 +26,7 @@ test("open Important findings deny and name each one with how to answer it", () 
 	const reason = result.kind === "deny" ? result.reason : "";
 	expect(reason).toContain("f1 src/a.ts:4  Crash on empty list");
 	expect(reason).toContain("cagr review answer f1 --wrong");
-	expect(reason).not.toContain("Step back");
+	expect(reason).not.toContain("round cap");
 });
 
 test("nits, answered and fixed findings do not hold the gate", () => {
@@ -40,10 +40,12 @@ test("nits, answered and fixed findings do not hold the gate", () => {
 	});
 });
 
-test("after max_rounds the denial tells the author to step back", () => {
-	const rounds = [round({ n: 1 }), round({ n: 2 }), round({ n: 3 })];
+test("after max_rounds the denial explains that only verification runs", () => {
+	const rounds = [round({ n: 1 }), round({ n: 2, scope: "diff" })];
 	const result = gateResult(record(rounds, [finding()]), head, settings);
-	expect(result.kind === "deny" && result.reason).toContain("Step back");
+	expect(result.kind === "deny" && result.reason).toContain(
+		"only verifies earlier findings",
+	);
 });
 
 test("a review that could not run lets the PR through and tells the human", () => {
@@ -82,15 +84,12 @@ test("after an earlier good round, a failed one says the newest commits go out u
 	);
 });
 
-test("the step-back message counts only rounds that ran", () => {
+test("failed rounds and verifier-only checks do not count toward the cap", () => {
 	const rounds = [
 		round({ n: 1 }),
 		round({ n: 2, error: "x" }),
-		round({ n: 3 }),
-		round({ n: 4 }),
+		round({ n: 2, scope: "verify" }),
 	];
 	const result = gateResult(record(rounds, [finding()]), head, settings);
-	expect(result.kind === "deny" && result.reason).toContain(
-		"has had 3 review rounds",
-	);
+	expect(result.kind === "deny" && result.reason).not.toContain("round cap");
 });
