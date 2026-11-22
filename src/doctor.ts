@@ -1,4 +1,4 @@
-import { accessSync, constants, existsSync } from "node:fs";
+import { accessSync, constants, existsSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { checkChanges } from "./changes/check";
 import { testChanges } from "./changes/rules";
@@ -8,6 +8,8 @@ import { gitHookNames } from "./git-hooks";
 import { configuredGuards } from "./guards/catalog";
 import { statsSummary } from "./hook/stats";
 import { readTimings } from "./hook/timings";
+import { watchPaths } from "./local-ci/cache";
+import { watchInstalled } from "./local-ci/watch";
 import { matchesGlob, toPosix } from "./paths";
 import { pickAgent } from "./review/agent";
 import type { Gh } from "./review/github";
@@ -288,6 +290,32 @@ export async function doctor(
 	}
 	if (options.github)
 		sections.push(["GitHub", await githubLines(config, options.github)]);
+	const schedule = await watchPaths(config.root);
+	const local: Line[] = [];
+	if (config.ci.local && config.ci.github)
+		local.push({
+			ok: false,
+			text: "[ci] local takes precedence over github. Set github = false for local CI.",
+		});
+	if (schedule) {
+		const installed = await watchInstalled(schedule, config.root);
+		local.push({
+			ok: installed || !config.ci.local,
+			text: installed
+				? `Local CI watch is installed. Log: ${schedule.log}.`
+				: `Local CI watch is not installed.${config.ci.local ? " Run `cagr ci --install-watch`." : ""}`,
+		});
+		const lastRun = existsSync(schedule.lastRun)
+			? readFileSync(schedule.lastRun, "utf8").trim()
+			: "";
+		local.push({
+			ok: true,
+			text: lastRun
+				? `Last watch pass: ${lastRun}.`
+				: "No watch pass recorded yet.",
+		});
+	}
+	if (local.length) sections.push(["Local CI", local]);
 
 	const timing: Line[] = [];
 	const recorded = readTimings(config.root);

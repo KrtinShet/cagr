@@ -143,3 +143,30 @@ With `[ci] github = false`, `cagr sync` deletes a `.github/workflows/cagr.yml` t
 ## Without GitHub
 
 `cagr ci` works in any CI. Install cagr, check out the full history so the base branch is there, and run `cagr ci --base <branch>`. `cagr review --ci` is GitHub only. Elsewhere, run `cagr review` against the base: it exits 1 when an Important finding is open.
+
+## No GitHub Actions
+
+Run checks and review from a checkout on your own machine. Install cagr, GitHub CLI, Claude Code, and the tools your stacks use. Sign in with `gh auth login` and sign in to Claude Code. The GitHub account needs to read collaborator permissions and post commit statuses and PR reviews.
+
+Set this in `cagr.toml`, then run `cagr sync` and commit the changes.
+
+```toml
+[ci]
+local = true
+```
+
+`local` takes precedence if `github` is also true. Sync removes the cagr workflow it generated. Doctor reports the conflict so you can set `github = false`. Any workflow you maintain yourself stays in place.
+
+From a checkout you plan to keep, run:
+
+```sh
+cagr ci --install-watch
+```
+
+This installs a launchd agent on macOS or a systemd user timer on Linux. The scheduler starts a pass every five minutes in your user session. Run `cagr doctor` for the install status, last pass time, and log path. Run `cagr ci --uninstall-watch` from the same repo to stop and remove the schedule.
+
+Use `cagr ci --watch` to run a pass now. It skips drafts and any commit that already has `cagr/checks` or `cagr/review`, including pending and failed statuses sent by the pre-push hook or review gate. Use `cagr ci --pr 42` to run or retry an open PR by number. A new commit SHA is eligible for the next pass.
+
+Each run fetches the exact PR head and base into a temporary Git worktree under `~/.cache/cagr/`. It uses the stack's dependency install commands or an explicit `[ci] install` override, and runs the existing checks and Claude review. It posts `cagr/checks` and `cagr/review` statuses and puts review findings on the PR. The worktree is removed when the run finishes. A scheduled pass runs one PR at a time, and an active pass holds a lock for the checkout.
+
+Local CI runs only while your machine is on and awake and the user scheduler is active. The work uses your machine's CPU, disk and the local Claude account. GitHub needs branch protection that requires the two statuses to block a merge. Local CI only runs same-repo PRs from authors with write access. The install and check commands execute code from those PRs with your user account's permissions, so use this only in repos whose writers you trust.

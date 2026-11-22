@@ -352,6 +352,10 @@ export const configSchema: Node = obj({
 	),
 	ci: obj(
 		{
+			local: bool({
+				description:
+					"Run CI on the owner’s machine. Takes precedence over `github`.",
+			}),
 			github: bool({
 				description:
 					"`cagr sync` writes the GitHub workflow, the pull request template and CODEOWNERS.",
@@ -443,6 +447,7 @@ export type Config = {
 	};
 	risk: { default: RiskTier; paths: RiskPath[] };
 	ci: {
+		local: boolean;
 		github: boolean;
 		review: boolean;
 		nightly: string[];

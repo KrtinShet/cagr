@@ -26,6 +26,9 @@ import {
 } from "./hook/stats";
 import { type AgentEvent, agentEvents } from "./hook/types";
 import { init } from "./init";
+import { LocalCiError, watchPaths } from "./local-ci/cache";
+import { localCi } from "./local-ci/run";
+import { configureWatch } from "./local-ci/watch";
 import { ReviewerError } from "./review/agent";
 import { reviewCommand, riskCommand } from "./review/cli";
 import { ghCli } from "./review/github";
@@ -63,6 +66,10 @@ Usage: cagr <command>
   stats [--days N] [--json]    Local guard and rule decision counts.
   risk [--base <b>] [files]    The risk tier of this branch's change, the approvals it needs, the owners.
   ci [--base <branch>]         In CI: the same checks the hooks ran, on the branch's changed files.
+  ci --pr <number>             Check and review a GitHub pull request from this machine.
+  ci --watch                   Run one pass over open pull requests without cagr statuses.
+  ci --install-watch | --uninstall-watch
+                               Install or remove the five-minute local CI schedule.
   check <files...> | --all     Run the edit checks and code rules on files, or the
                                code and layout rules on every file.
   explain <id>                 Explain a guard, a code rule or a layout rule.
@@ -114,7 +121,7 @@ const options: Record<string, string[]> = {
 	doctor: ["--github"],
 	stats: ["--days", "--json"],
 	risk: ["--base"],
-	ci: ["--base"],
+	ci: ["--base", "--pr", "--watch", "--install-watch", "--uninstall-watch"],
 	check: ["--all"],
 	explain: [],
 	rules: ["--base", "--committed"],
@@ -416,8 +423,56 @@ async function main(argv: string[]): Promise<number> {
 		case "risk":
 			return riskCommand(requireConfig(), args, process.cwd());
 		case "ci": {
-			const base = flag(args, "--base") ?? undefined;
-			const result = await ci(requireConfig(), { cwd: process.cwd(), base });
+			const [mode, value] = args;
+			const scheduler =
+				mode === "--install-watch" || mode === "--uninstall-watch";
+			if (mode === "--pr" || mode === "--watch" || scheduler) {
+				const number = Number(value);
+				if (
+					mode === "--pr"
+						? args.length !== 2 ||
+							!/^[1-9]\d*$/.test(value ?? "") ||
+							!Number.isSafeInteger(number)
+						: args.length !== 1
+				)
+					throw new UsageError(
+						"Use one local CI mode: cagr ci --pr <number>, --watch, --install-watch or --uninstall-watch.",
+					);
+				const config = requireConfig();
+				const paths = await watchPaths(config.root);
+				if (!paths) throw new LocalCiError("Run cagr ci from a Git checkout.");
+				if (scheduler) {
+					const install = mode === "--install-watch";
+					await configureWatch(paths, config.root, install);
+					console.log(
+						install
+							? `Local CI watch installed. Output goes to ${paths.log}.`
+							: "Local CI watch uninstalled.",
+					);
+					return 0;
+				}
+				return (await localCi(
+					config,
+					paths,
+					mode === "--watch" ? "watch" : number,
+				))
+					? 0
+					: 1;
+			}
+			if (
+				args.length &&
+				(mode !== "--base" ||
+					!value ||
+					value.startsWith("-") ||
+					args.length !== 2)
+			)
+				throw new UsageError(
+					"Use cagr ci [--base <branch>], or see cagr ci --help for local CI.",
+				);
+			const result = await ci(requireConfig(), {
+				cwd: process.cwd(),
+				base: value,
+			});
 			console.log(ciReport(result));
 			if (process.env.GITHUB_ACTIONS) {
 				for (const line of annotations(result)) console.log(line);
@@ -469,6 +524,7 @@ const expected = (error: unknown) =>
 	error instanceof RuleError ||
 	error instanceof ReviewInputError ||
 	error instanceof ReviewerError ||
+	error instanceof LocalCiError ||
 	error instanceof AnswerError;
 
 export function runCli(argv: string[]) {

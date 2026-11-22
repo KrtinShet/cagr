@@ -48,11 +48,11 @@ export function claudeArgv(request: AgentRequest) {
 	];
 }
 
-const claude: ReviewAgent = {
+export const claudeAgent = (runner = run): ReviewAgent => ({
 	name: "claude",
 	async ask(request) {
 		const argv = claudeArgv(request);
-		const result = await run(argv, request.cwd, {
+		const result = await runner(argv, request.cwd, {
 			stdin: request.prompt,
 			timeoutMs: request.timeoutMs,
 		});
@@ -69,7 +69,8 @@ const claude: ReviewAgent = {
 			);
 		return final.structured_output;
 	},
-};
+});
+const claude = claudeAgent();
 
 type ClaudeEvent = {
 	type?: string;

@@ -929,6 +929,10 @@
 			"type": "object",
 			"additionalProperties": false,
 			"properties": {
+				"local": {
+					"type": "boolean",
+					"description": "Run CI on the owner’s machine. Takes precedence over `github`."
+				},
 				"github": {
 					"type": "boolean",
 					"description": "`cagr sync` writes the GitHub workflow, the pull request template and CODEOWNERS."

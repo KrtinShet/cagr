@@ -232,12 +232,21 @@ function staleShims(
 		}));
 }
 
-/** The workflow sync wrote, left behind after `[ci] github` was turned off: it would keep spending Actions minutes. */
 function staleWorkflow(config: Config): { path: string; why: string }[] {
 	const path = workflowPath(config);
-	if (config.ci.github || isSymlink(path) || !existsSync(path)) return [];
+	if (
+		(config.ci.github && !config.ci.local) ||
+		isSymlink(path) ||
+		!existsSync(path)
+	)
+		return [];
 	return readFileSync(path, "utf8").includes(generatedMark)
-		? [{ path, why: "[ci] github is off." }]
+		? [
+				{
+					path,
+					why: config.ci.local ? "[ci] local is on." : "[ci] github is off.",
+				},
+			]
 		: [];
 }
 
@@ -267,7 +276,7 @@ function targets(config: Config, only?: "git"): Target[] {
 			desired: () => gitHookScript(config, hook),
 		});
 	if (only !== "git") list.push(...shimTargets(config));
-	if (only !== "git" && config.ci.github) {
+	if (only !== "git" && config.ci.github && !config.ci.local) {
 		list.push({
 			path: workflowPath(config),
 			executable: false,

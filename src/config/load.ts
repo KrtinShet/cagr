@@ -18,6 +18,9 @@ import {
 	type RiskTier,
 } from "./schema";
 
+export const defaultCiInstall =
+	"curl -fsSL https://github.com/krtinshet/cagr/releases/latest/download/install.sh | sh";
+
 export class ConfigError extends Error {}
 
 export const configFileName = "cagr.toml";
@@ -384,12 +387,11 @@ function applyDefaults(
 			})),
 		},
 		ci: {
+			local: (ci.local as boolean | undefined) ?? false,
 			github: (ci.github as boolean | undefined) ?? false,
 			review: (ci.review as boolean | undefined) ?? false,
 			nightly: (ci.nightly as string[] | undefined) ?? [],
-			install:
-				(ci.install as string | undefined) ??
-				"curl -fsSL https://github.com/krtinshet/cagr/releases/latest/download/install.sh | sh",
+			install: (ci.install as string | undefined) ?? defaultCiInstall,
 		},
 		brief: (raw.brief as string[] | undefined) ?? [],
 	};
