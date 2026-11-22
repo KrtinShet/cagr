@@ -1,5 +1,5 @@
 import { join, sep } from "node:path";
-import type { Config } from "../config/schema";
+import type { Config, ProtectedFile } from "../config/schema";
 import { insideRoot, matchesGlob } from "../paths";
 import { commandReasons } from "./command";
 import type { Finding } from "./finding";
@@ -9,6 +9,20 @@ export type EditContext = {
 	mainCheckout: string | null;
 };
 
+export function protectedEntries(files: Config["files"]) {
+	return process.env[files.gate_edit_env] === "1"
+		? files.protected.filter((entry) => !entry.gate)
+		: files.protected;
+}
+
+export function protectedEntry(entries: ProtectedFile[], path: string) {
+	return entries.find(
+		(entry) =>
+			matchesGlob(entry.glob, path) &&
+			!entry.except.some((glob) => matchesGlob(glob, path)),
+	);
+}
+
 export function editFinding(
 	file: string,
 	config: Config,
@@ -16,11 +30,7 @@ export function editFinding(
 ): Finding | null {
 	const path = insideRoot(config.root, file);
 	if (path !== null) {
-		const entry = config.files.protected.find(
-			(entry) =>
-				matchesGlob(entry.glob, path) &&
-				!entry.except.some((glob) => matchesGlob(glob, path)),
-		);
+		const entry = protectedEntry(protectedEntries(config.files), path);
 		if (entry) return { id: "protected-file", reason: entry.reason };
 	}
 	const main = context.mainCheckout;

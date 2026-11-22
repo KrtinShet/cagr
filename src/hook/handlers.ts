@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 import { brief } from "../brief";
 import { checkChanges } from "../changes/check";
 import type { Config } from "../config/schema";
@@ -18,6 +18,11 @@ import {
 	prBodyFinding,
 } from "../guards/github";
 import { checkSuppressions } from "../guards/lint-suppression";
+import {
+	checkoutOf,
+	checkProtected,
+	rememberProtected,
+} from "../guards/protected-turn";
 import { insideRoot } from "../paths";
 import { gateResult } from "../review/gate";
 import { readRecord, recordPath } from "../review/store";
@@ -38,6 +43,7 @@ import {
 	readTurnState,
 	recordEdits,
 	stateFile,
+	type TurnState,
 	writeTurnState,
 } from "../turn-state";
 import { focusOnChanged, stackFiles, tidy, withFiles } from "./stack-files";
@@ -49,19 +55,25 @@ export const timeouts = { onEditMs: 10_000, onTurnEndMs: 60_000 };
 
 export async function handle(
 	input: HookInput,
-	config: Config,
+	config: Config | null,
 ): Promise<Decision> {
+	if (input.event === "turn.end") return turnEnd(input, config);
+	if (!config) return { kind: "allow" };
 	switch (input.event) {
 		case "session.start":
 			return { kind: "allow", context: brief(config) };
 		case "command.before":
-			return commandBefore(input, config);
-		case "file.before_edit":
-			return fileBeforeEdit(input, config);
+		case "file.before_edit": {
+			const decision =
+				input.event === "command.before"
+					? await commandBefore(input, config)
+					: await fileBeforeEdit(input, config);
+			if (decision.kind === "allow")
+				await rememberProtected(stateFile(input.sessionId), input, config);
+			return decision;
+		}
 		case "file.after_edit":
 			return fileAfterEdit(input, config);
-		case "turn.end":
-			return turnEnd(input, config);
 	}
 }
 
@@ -71,7 +83,7 @@ async function commandBefore(
 ): Promise<Decision> {
 	if (!input.command) return { kind: "allow" };
 	let context = { branch: null as string | null, inMainCheckout: false };
-	if (needsGitContext(input.command)) {
+	if (needsGitContext(input.command, config)) {
 		const git = await gitContext(input.cwd);
 		context = {
 			branch: git.branch,
@@ -178,8 +190,11 @@ async function fileBeforeEdit(
 		? (await gitContext(input.cwd)).mainCheckout
 		: null;
 	let layout: LayoutRule[] | undefined;
+	const checkout = checkoutOf(config.root);
 	for (const file of input.files) {
-		const finding = editFinding(file, config, { mainCheckout });
+		const target = checkoutOf(dirname(file));
+		const root = target && target !== checkout ? target : config.root;
+		const finding = editFinding(file, { ...config, root }, { mainCheckout });
 		if (finding) {
 			observe(finding.id, "deny", file);
 			return { kind: "deny", reason: render(finding) };
@@ -401,12 +416,51 @@ async function ruleChecks(
 	};
 }
 
-async function turnEnd(input: HookInput, config: Config): Promise<Decision> {
+async function turnEnd(
+	input: HookInput,
+	config: Config | null,
+): Promise<Decision> {
 	const deadline = performance.now() + Math.min(timeouts.onTurnEndMs, 55_000);
 	const file = stateFile(input.sessionId);
-	const state = await readTurnState(file);
-	if (!needsCheck(state, config.root) && !config.changes.rules.length)
-		return { kind: "allow" };
+	const [state, protectedResult] = await Promise.all([
+		readTurnState(file),
+		checkProtected(file, Math.min(deadline, performance.now() + 5000)),
+	]);
+	const { results, uncheckedNotice } =
+		config && (needsCheck(state, config.root) || config.changes.rules.length)
+			? await turnChecks(state, config, deadline)
+			: { results: [], uncheckedNotice: "" };
+	if (protectedResult) {
+		observe("protected-file", "block");
+		results.unshift(protectedResult);
+	}
+	const decision = stopDecision(state, results);
+	if (decision.action === "block") {
+		await writeTurnState(file, {
+			...state,
+			failedStops: state.failedStops + 1,
+		});
+		return {
+			kind: "block",
+			reason: decision.reason,
+			...(uncheckedNotice ? { notice: uncheckedNotice } : {}),
+		};
+	}
+	await clearTurnState(file);
+	if (decision.action === "give-up") {
+		observe("stop-escape", "stop-escape");
+		return {
+			kind: "allow",
+			notice:
+				`cagr: ${decision.message} The agent was let go so it does not loop. Run the checks yourself before you merge. ${uncheckedNotice}`.trim(),
+		};
+	}
+	return uncheckedNotice
+		? { kind: "allow", notice: uncheckedNotice }
+		: { kind: "allow" };
+}
+
+async function turnChecks(state: TurnState, config: Config, deadline: number) {
 	const changeResult = config.changes.rules.length
 		? await checkChanges(config, { deadline })
 		: null;
@@ -497,28 +551,5 @@ async function turnEnd(input: HookInput, config: Config): Promise<Decision> {
 	]
 		.filter(Boolean)
 		.join("\n");
-	const decision = stopDecision(state, results);
-	if (decision.action === "block") {
-		await writeTurnState(file, {
-			...state,
-			failedStops: state.failedStops + 1,
-		});
-		return {
-			kind: "block",
-			reason: decision.reason,
-			...(uncheckedNotice ? { notice: uncheckedNotice } : {}),
-		};
-	}
-	await clearTurnState(file);
-	if (decision.action === "give-up") {
-		observe("stop-escape", "stop-escape");
-		return {
-			kind: "allow",
-			notice:
-				`cagr: ${decision.message} The agent was let go so it does not loop. Run the checks yourself before you merge. ${uncheckedNotice}`.trim(),
-		};
-	}
-	return uncheckedNotice
-		? { kind: "allow", notice: uncheckedNotice }
-		: { kind: "allow" };
+	return { results, uncheckedNotice };
 }

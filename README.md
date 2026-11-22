@@ -5,7 +5,7 @@ cagr checks what a coding agent does (its commands, edits, stops and pull reques
 Coding agents slip. They run `npm install` in a bun repo, push to `main`, edit `.env`, skip hooks with `--no-verify`, and stop while the type check is still red. cagr watches what the agent does and stops each slip at the earliest moment it can see it. Every block message says what to do instead, so the agent fixes it on the next try.
 
 - **Commands**: it denies the wrong package manager, a push to the protected branch, a force push, hook skips, and any command you list, before the command runs.
-- **Files**: it denies edits to protected files such as `.env*` and lockfiles, before the edit happens.
+- **Files**: it denies direct edits to protected files and catches shell writes to them at the end of the turn.
 - **Lint suppressions**: the `lint-suppression` guard blocks new `eslint-disable`, `@ts-ignore`, `# noqa` and other suppression directives after edits and in CI. The recommended preset also protects lint config files. Fix the cause, or ask a person to review an exception.
 - **Changes**: cagr’s own change rules check companion changes, immutable existing files, and tests for new files at turn end and in CI.
 - **Edits**: after each edit it runs your formatters and linters (Biome, ESLint, Ruff) and your own ast-grep code rules, on the changed files only. Layout rules stop a new file from being created with the wrong name or in the wrong folder.
@@ -74,7 +74,7 @@ protected = [{ glob = ".env*", except = [".env.example"], reason = "Tell the use
 blocked = [{ match = "prisma db push", reason = "Use `bun run db:migrate --name <change>`." }]
 ```
 
-- `recommended` turns on the git rules, blocks force pushes, hook skips and new lint suppressions, and protects `.env*`, lockfiles and lint configs. Lists of tables (`stack`, `files.protected`, `commands.blocked`) add to the preset's. Other values replace them.
+- `recommended` turns on the git rules, blocks force pushes, hook skips and new lint suppressions, and protects `.env*`, lockfiles, lint configs, cagr config, hooks, GitHub workflows and CODEOWNERS. Lists of tables (`stack`, `files.protected`, `commands.blocked`) add to the preset's. Other values replace them.
 - `{files}` becomes the changed files that match the stack's `paths`. A turn-end command without `{files}` runs once for the whole repo.
 - After you change the config, run `cagr sync` to rewrite the hook files. `cagr sync --check` fails in CI when they drift.
 - `schema/cagr.schema.json` is the JSON schema, for editor completion.

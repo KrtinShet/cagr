@@ -175,6 +175,11 @@ export const configSchema: Node = obj({
 	),
 	files: obj(
 		{
+			gate_edit_env: str({
+				minLength: 1,
+				description:
+					"A human sets this variable to 1 when starting a session to allow gate edits. Defaults to CAGR_ALLOW_GATE_EDIT.",
+			}),
 			protected: arr(
 				obj(
 					{
@@ -183,6 +188,10 @@ export const configSchema: Node = obj({
 								"A glob. Without a slash it matches the file name anywhere.",
 						}),
 						except: strings("Globs that stay editable."),
+						gate: bool({
+							description:
+								"Allow a human to open this file for the session. Defaults to false.",
+						}),
 						reason: str({
 							minLength: 1,
 							description: "What to do instead. Shown to the agent.",
@@ -388,7 +397,12 @@ export type Stack = {
 	on_edit: string[];
 	on_turn_end: string[];
 };
-export type ProtectedFile = { glob: string; except: string[]; reason: string };
+export type ProtectedFile = {
+	glob: string;
+	except: string[];
+	reason: string;
+	gate: boolean;
+};
 export type BlockedCommand = { match: string; reason: string };
 export type RiskPath = {
 	glob: string;
@@ -419,7 +433,7 @@ export type Config = {
 		worktree_dir: string;
 	};
 	stack: Stack[];
-	files: { protected: ProtectedFile[] };
+	files: { protected: ProtectedFile[]; gate_edit_env: string };
 	commands: { blocked: BlockedCommand[] };
 	stats: { enabled: boolean };
 	findings: { mode: "all" | "new" };

@@ -34,12 +34,12 @@ export function stopDecision(
 	const details = failures
 		.map(
 			(failure) =>
-				`## ${failure.name}\n${failure.name === "Change rules" ? failure.output.trim() : truncate(failure.output.trim(), maxOutputPerCheck)}`,
+				`## ${failure.name}\n${["Change rules", "Protected files"].includes(failure.name) ? failure.output.trim() : truncate(failure.output.trim(), maxOutputPerCheck)}`,
 		)
 		.join("\n\n");
 	return {
 		action: "block",
-		reason: `${failures.some((failure) => failure.name === "Change rules") ? "The branch change was checked" : "You changed code this turn"} and ${names} failed. Fix these before finishing.\n\n${details}`,
+		reason: `${failures.some((failure) => failure.name === "Change rules") ? "The branch change was checked" : "This turn changed files"} and ${names} failed. Fix these before finishing.\n\n${details}`,
 	};
 }
 

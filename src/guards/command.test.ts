@@ -229,9 +229,14 @@ test("names the guard that fired", () => {
 	).toBe("force-push");
 });
 
-test("needsGitContext only for git commands", () => {
-	expect(needsGitContext("cd a && git push")).toBe(true);
-	expect(needsGitContext("npm install && echo git")).toBe(false);
+test("only reads Git context when a command guard uses it", () => {
+	expect(needsGitContext("cd a && git push", gerb)).toBe(true);
+	expect(needsGitContext("npm install && echo git", gerb)).toBe(false);
+	expect(needsGitContext("git status", gerb)).toBe(false);
+	expect(needsGitContext("git commit", gerb)).toBe(false);
+	expect(
+		needsGitContext("git commit", config({ git: { worktree_only: true } })),
+	).toBe(true);
 });
 
 test("git and cd run by full path or as .exe are guarded the same", () => {
@@ -242,7 +247,7 @@ test("git and cd run by full path or as .exe are guarded the same", () => {
 	expect(onMain("/opt/homebrew/bin/git push origin main")).toBe(
 		reasons.pushMain,
 	);
-	expect(needsGitContext("C:/Git/bin/git.exe push")).toBe(true);
+	expect(needsGitContext("C:/Git/bin/git.exe push", gerb)).toBe(true);
 	const inMain = reasonOn("main", true);
 	expect(inMain("/usr/bin/git commit -m x")).toBe(reasons.mainCheckout);
 	expect(inMain("/usr/bin/cd ../wt && git commit -m x")).toBeNull();
@@ -275,4 +280,24 @@ describe("redirections", () => {
 		expect(reason("npm 2>&1 publish")).toBe("publish");
 		expect(reason("npm >/dev/null publish --tag x")).toBe("publish");
 	});
+});
+
+test.each([
+	"CAGR_ALLOW_GATE_EDIT=1 bun fix",
+	"export CAGR_ALLOW_GATE_EDIT=1",
+	"env CAGR_ALLOW_GATE_EDIT=1 bun fix",
+])("refuses the human gate edit switch in %s", (line) => {
+	expect(onFeature(line)).toContain("CAGR_ALLOW_GATE_EDIT is for humans only");
+});
+
+test("uses the configured gate edit switch independently of block_hook_skips", () => {
+	const check = reasonOn(
+		"feat/x",
+		false,
+		config({ files: { gate_edit_env: "TEAM_GATE_EDIT" } }),
+	);
+	expect(check("TEAM_GATE_EDIT=1 bun fix")).toContain(
+		"TEAM_GATE_EDIT is for humans only",
+	);
+	expect(check("CAGR_ALLOW_GATE_EDIT=1 bun fix")).toBeNull();
 });

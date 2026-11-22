@@ -155,7 +155,7 @@ describe("turn.end", () => {
 		await handle(input("file.after_edit", { files: [file] }), config());
 		const blocked = await handle(input("turn.end"), config());
 		expect(blocked.kind === "block" && blocked.reason).toContain(
-			"You changed code this turn and `! grep -n TODO {files}` failed",
+			"This turn changed files and `! grep -n TODO {files}` failed",
 		);
 		expect((await readTurnState(stateFile(session))).failedStops).toBe(1);
 		await write("src/a.ts", "// done\n");
