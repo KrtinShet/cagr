@@ -22,6 +22,12 @@ export type CiCheck = {
 };
 export type CiResult = { ok: boolean; checks: CiCheck[]; tier: string };
 
+type PullRequest = {
+	head?: { sha: string };
+	title?: unknown;
+	body?: string | null;
+};
+
 const check = (
 	name: string,
 	problems: string[],
@@ -93,15 +99,14 @@ export async function ci(
 				: [],
 		),
 	);
+	let pullRequest: PullRequest | undefined;
 	if (env.GITHUB_EVENT_PATH) {
 		try {
 			const event = JSON.parse(readFileSync(env.GITHUB_EVENT_PATH, "utf8")) as {
-				pull_request?: { head: { sha: string } };
+				pull_request?: PullRequest;
 			};
-			if (
-				event.pull_request &&
-				event.pull_request.head?.sha !== changeResult.snapshot.head
-			)
+			pullRequest = event.pull_request;
+			if (pullRequest && pullRequest.head?.sha !== changeResult.snapshot.head)
 				checks.push(
 					check("PR head", [
 						"Check out the exact pull request head SHA and rerun cagr ci.",
@@ -178,6 +183,28 @@ export async function ci(
 			}),
 		),
 	);
+	if (pullRequest && config.git.commit_message) {
+		const title = pullRequest.title;
+		if (typeof title !== "string") {
+			checks.push(
+				check("Pull request title", [
+					"Could not read the pull request title. Restore valid pull request event JSON and rerun cagr ci.",
+				]),
+			);
+		} else {
+			const finding = commitMessageFinding(title, config, "Pull request title");
+			checks.push(
+				check(
+					"Pull request title",
+					finding
+						? [
+								`${finding.reason} Set a title that matches the rule with \`gh pr edit --title "<new title>"\`.`,
+							]
+						: [],
+				),
+			);
+		}
+	}
 
 	const editProblems: string[] = [];
 	for (const stack of config.stack) {
@@ -269,9 +296,11 @@ export async function ci(
 		annotations: [],
 	});
 
-	const body = pullRequestBody(env);
-	if (body !== null && config.review.pr_sections.length > 0) {
-		const missing = missingSections(body, config.review.pr_sections);
+	if (pullRequest && config.review.pr_sections.length > 0) {
+		const missing = missingSections(
+			pullRequest.body ?? "",
+			config.review.pr_sections,
+		);
 		checks.push(
 			check(
 				"Pull request body",
@@ -298,20 +327,6 @@ export async function ci(
 				).replaceAll("\\", "/");
 		}
 	return { ok: checks.every((entry) => entry.ok), checks, tier: risk.tier };
-}
-
-function pullRequestBody(
-	env: Record<string, string | undefined>,
-): string | null {
-	if (!env.GITHUB_EVENT_PATH) return null;
-	try {
-		const event = JSON.parse(readFileSync(env.GITHUB_EVENT_PATH, "utf8")) as {
-			pull_request?: { body: string | null };
-		};
-		return event.pull_request ? (event.pull_request.body ?? "") : null;
-	} catch {
-		return null;
-	}
 }
 
 const escapeData = (text: string) =>

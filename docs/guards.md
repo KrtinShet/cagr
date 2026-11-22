@@ -207,7 +207,8 @@ Like every git hook failure, these end with "A human can skip this once with CAG
 
 **Configure:** `[git] commit_message = "conventional"`, `"off"`, or `{ pattern, example }`, plus `commit_types`.
 
-`cagr ci` checks the commit subjects on the branch too.
+`cagr ci` checks the commit subjects on the branch and, on pull request runs,
+the pull request title. A squash merge can use that title as the commit subject.
 
 ## review-gate
 
