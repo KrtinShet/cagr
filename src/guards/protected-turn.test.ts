@@ -1,5 +1,13 @@
-import { afterEach, expect, test } from "bun:test";
-import { copyFile, mkdir, rm } from "node:fs/promises";
+import { afterAll, afterEach, beforeAll, expect, test } from "bun:test";
+import {
+	copyFile,
+	mkdir,
+	mkdtemp,
+	realpath,
+	rm,
+	writeFile,
+} from "node:fs/promises";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { runHook } from "../hook/run-hook";
 import type { HookInput } from "../hook/types";
@@ -7,6 +15,17 @@ import { runShell } from "../run";
 import { localRegistry } from "../test/registry";
 import { tempRepo } from "../test/repo";
 import { clearTurnState, stateFile } from "../turn-state";
+import { snapshotBudget } from "./protected-turn";
+
+// The real budget is tight, and a loaded test machine can miss it and change what turn end reports.
+const budget = { ...snapshotBudget };
+beforeAll(() => {
+	snapshotBudget.commandMs = 10_000;
+	snapshotBudget.toolMs = 10_000;
+});
+afterAll(() => {
+	Object.assign(snapshotBudget, budget);
+});
 
 const policy = 'extends = ["recommended"]\n';
 const trash = new Set<string>();
@@ -337,7 +356,10 @@ const stackFor = (manager: string) =>
 	`[[stack]]\nlanguage = "typescript"\npackage_manager = "${manager}"\n`;
 
 /** A repo whose JavaScript stack uses `manager`, with pad@1.0.0 locked through a local registry. */
-async function lockedRepo(manager: "bun" | "pnpm" | "npm" | "yarn") {
+async function lockedRepo(
+	manager: "bun" | "pnpm" | "npm" | "yarn",
+	files: Record<string, string> = {},
+) {
 	const registry = await localRegistry({
 		pad: ["1.0.0", "1.1.0"],
 		zed: ["2.0.0"],
@@ -361,11 +383,13 @@ async function lockedRepo(manager: "bun" | "pnpm" | "npm" | "yarn") {
 			".gitignore": "node_modules\n",
 			"package.json": '{ "name": "app", "version": "1.0.0" }\n',
 			...config[manager],
+			...files,
 		},
 		stackFor(manager),
 	);
 	const add = async (spec: string) => {
-		const result = await runShell(`${manager} add ${spec}`, repo.root);
+		const root = files["pnpm-workspace.yaml"] ? "-w " : "";
+		const result = await runShell(`${manager} add ${root}${spec}`, repo.root);
 		if (!result.ok) throw new Error(result.output);
 	};
 	await add("pad@1.0.0");
@@ -545,4 +569,194 @@ test("a lockfile no stack covers names the missing stack", async () => {
 	expect(JSON.parse(await repo.stop()).reason).toContain(
 		"only when a [[stack]] with package_manager covers bun.lock",
 	);
+});
+
+const missing = (manager: string) =>
+	manager !== "bun" && Bun.which(manager) === null;
+
+async function withEnv(
+	vars: Record<string, string>,
+	action: () => Promise<void>,
+) {
+	const saved = Object.fromEntries(
+		Object.keys(vars).map((key) => [key, process.env[key]]),
+	);
+	Object.assign(process.env, vars);
+	try {
+		await action();
+	} finally {
+		for (const [key, value] of Object.entries(saved))
+			if (value === undefined) delete process.env[key];
+			else process.env[key] = value;
+	}
+}
+
+test("a snapshot that runs out of its budget gives the notice", async () => {
+	const repo = await setup();
+	snapshotBudget.commandMs = 0;
+	try {
+		expect(
+			JSON.parse(await repo.before("cat README.md")).systemMessage,
+		).toContain("protected files");
+	} finally {
+		snapshotBudget.commandMs = 10_000;
+	}
+});
+
+for (const manager of ["bun", "pnpm", "npm"] as const)
+	test.skipIf(missing(manager))(
+		`${manager} config under the home folder does not reach the check`,
+		async () => {
+			const evil = await localRegistry({ "@evil/zed": ["1.0.0"] });
+			stops.add(evil.stop);
+			const home = await realpath(await mkdtemp(join(tmpdir(), "gw-home-")));
+			trash.add(home);
+			const files =
+				manager === "bun"
+					? [".bunfig.toml", ".config/.bunfig.toml"]
+					: [".npmrc", ".config/pnpm/rc"];
+			for (const file of files) {
+				await mkdir(join(home, ".config/pnpm"), { recursive: true });
+				await writeFile(
+					join(home, file),
+					manager === "bun"
+						? `[install.scopes]\n"@evil" = "${evil.url}"\n`
+						: `@evil:registry=${evil.url}\n`,
+				);
+			}
+			const corepack =
+				process.env.COREPACK_HOME ?? join(homedir(), ".cache/node/corepack");
+			await withEnv(
+				{
+					HOME: home,
+					XDG_CONFIG_HOME: join(home, ".config"),
+					COREPACK_HOME: corepack,
+				},
+				async () => {
+					const repo = await lockedRepo(manager);
+					expect(await repo.before(`${manager} add @evil/zed`)).toBe("");
+					await repo.add("@evil/zed");
+					expect(await repo.read()).toContain("@evil/zed");
+					const { decision, reason } = JSON.parse(await repo.stop());
+					expect(decision).toBe("block");
+					expect(reason).toContain(`${manager} wrote this lockfile`);
+				},
+			);
+		},
+		30_000,
+	);
+
+for (const manager of ["bun", "pnpm", "npm", "yarn"] as const)
+	test.skipIf(missing(manager))(
+		`a workspace planted above the temp folder does not capture the ${manager} check`,
+		async () => {
+			const repo = await lockedRepo(manager);
+			const planted = await realpath(await mkdtemp(join(tmpdir(), "gw-tmp-")));
+			trash.add(planted);
+			await writeFile(
+				join(planted, "package.json"),
+				JSON.stringify({ name: "planted", private: true, workspaces: ["**"] }),
+			);
+			await writeFile(
+				join(planted, "pnpm-workspace.yaml"),
+				"packages:\n  - '**'\n",
+			);
+			// The check makes its temp folder under TMPDIR, so the planted files sit above it.
+			await withEnv({ TMPDIR: planted }, async () => {
+				expect(await repo.before(`${manager} add zed`)).toBe("");
+				await repo.add("zed");
+				expect(await repo.stop()).toBe("");
+			});
+		},
+		30_000,
+	);
+
+const pnpmfile =
+	"module.exports = { hooks: { readPackage(pkg) { pkg.description = 'seen'; return pkg } } }\n";
+
+test.skipIf(missing("pnpm"))(
+	"pnpm add in a repo with a pnpmfile passes turn end",
+	async () => {
+		const repo = await lockedRepo("pnpm", { ".pnpmfile.cjs": pnpmfile });
+		expect(await repo.read()).toContain("pnpmfileChecksum");
+		expect(await repo.before("pnpm add zed")).toBe("");
+		await repo.add("zed");
+		expect(await repo.stop()).toBe("");
+	},
+	30_000,
+);
+
+test.skipIf(missing("pnpm"))(
+	"a pnpmfile changed during the turn blocks the lockfile",
+	async () => {
+		const repo = await lockedRepo("pnpm", { ".pnpmfile.cjs": pnpmfile });
+		expect(await repo.before("pnpm add zed")).toBe("");
+		await repo.write(".pnpmfile.cjs", pnpmfile.replace("seen", "changed"));
+		await repo.add("zed");
+		const { decision, reason } = JSON.parse(await repo.stop());
+		expect(decision).toBe("block");
+		expect(reason).toContain(
+			".pnpmfile.cjs differs from the last commit. A pnpmfile runs inside pnpm",
+		);
+	},
+	30_000,
+);
+
+test.skipIf(missing("pnpm"))(
+	"a catalog entry added to pnpm-workspace.yaml passes turn end",
+	async () => {
+		const repo = await lockedRepo("pnpm", {
+			"pnpm-workspace.yaml": "packages:\n  - lib\n",
+			"lib/package.json": '{ "name": "lib", "version": "1.0.0" }\n',
+		});
+		expect(await repo.before("pnpm install")).toBe("");
+		await repo.write(
+			"pnpm-workspace.yaml",
+			"packages:\n  - lib\ncatalog:\n  zed: 2.0.0\n",
+		);
+		await repo.add("zed@catalog:");
+		expect(await repo.read()).toContain("zed");
+		expect(await repo.stop()).toBe("");
+	},
+	30_000,
+);
+
+test.skipIf(missing("pnpm"))(
+	"a repeated key in pnpm-lock.yaml blocks",
+	async () => {
+		const repo = await lockedRepo("pnpm");
+		expect(await repo.before("sed -i.bak s/x/y/ pnpm-lock.yaml")).toBe("");
+		await repo.add("zed");
+		const text = await repo.read();
+		await repo.write(
+			"pnpm-lock.yaml",
+			text.replace(
+				"\npackages:\n",
+				"\npackages:\n\n  zed@2.0.0:\n    resolution: {integrity: sha512-AAAA}\n",
+			),
+		);
+		expect(Bun.YAML.parse(await repo.read())).toEqual(Bun.YAML.parse(text));
+		const { decision, reason } = JSON.parse(await repo.stop());
+		expect(decision).toBe("block");
+		expect(reason).toContain("looks edited by hand");
+	},
+	30_000,
+);
+
+test("a repeated key in bun.lock blocks", async () => {
+	const repo = await lockedRepo("bun");
+	expect(await repo.before("sed -i.bak s/x/y/ bun.lock")).toBe("");
+	await repo.add("zed");
+	const text = await repo.read();
+	await repo.write(
+		"bun.lock",
+		text.replace(
+			'"packages": {',
+			'"packages": {\n    "zed": ["zed@2.0.0", "", {}, "sha512-AAAA"],',
+		),
+	);
+	expect(Bun.JSONC.parse(await repo.read())).toEqual(Bun.JSONC.parse(text));
+	const { decision, reason } = JSON.parse(await repo.stop());
+	expect(decision).toBe("block");
+	expect(reason).toContain("looks edited by hand");
 });

@@ -4,12 +4,23 @@ import {
 	lstat,
 	mkdir,
 	mkdtemp,
+	readdir,
 	readFile,
+	realpath,
 	rm,
+	symlink,
 	writeFile,
 } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { basename, dirname, isAbsolute, join, posix } from "node:path";
+import { homedir, tmpdir } from "node:os";
+import {
+	basename,
+	dirname,
+	isAbsolute,
+	join,
+	posix,
+	relative,
+	sep,
+} from "node:path";
 import type { Stack } from "../config/schema";
 import { insideRoot, matchesGlob } from "../paths";
 import { run, shellQuote } from "../run";
@@ -29,14 +40,25 @@ const writers: Record<string, Writer> = {
 	"yarn.lock": "yarn",
 };
 
-const manifests = new Set(["package.json", "pnpm-workspace.yaml"]);
+const workspaceFile = "pnpm-workspace.yaml";
+/** The pnpm-workspace.yaml keys a normal change edits. Every other key is a pnpm setting. */
+const workspaceKeys = new Set(["packages", "catalog", "catalogs"]);
+const pnpmfiles = [".pnpmfile.cjs", ".pnpmfile.mjs"];
 /** Config that picks the registry, the cache or code the manager runs. It comes from the starting commit, since the agent can write the working copy. */
 const configs = new Set([".npmrc", "bunfig.toml", ".yarnrc"]);
 const configDirs = [".yarn/releases/"];
-const corepackOffline = {
-	COREPACK_ENABLE_NETWORK: "0",
-	COREPACK_ENABLE_DOWNLOAD_PROMPT: "0",
-};
+/** Package caches under the home folder. The check links them into its own home, so offline resolution finds packages while config under the real home stays out. */
+const homeCaches = [
+	".bun/install/cache",
+	".npm",
+	".cache/pnpm",
+	".cache/yarn",
+	"Library/Caches/pnpm",
+	"Library/Caches/Yarn",
+	"Library/pnpm/store",
+];
+const localCaches = ["pnpm/store", "pnpm-cache", "npm-cache", "Yarn/Cache"];
+const tempPrefix = "cagr-lockfile-";
 const dependencyFields = [
 	"dependencies",
 	"devDependencies",
@@ -89,7 +111,6 @@ function command(manager: Writer, lockfile: Uint8Array): Command | null {
 					"--lockfile-only",
 					"--offline",
 					"--ignore-scripts",
-					"--ignore-pnpmfile",
 					"--no-frozen-lockfile",
 					"--config.manage-package-manager-versions=false",
 					"--config.package-manager-strict=false",
@@ -156,6 +177,87 @@ function localRefs(manifest: string, text: string): string[] {
 	return refs;
 }
 
+/** A verdict for a change a human must make. Its message is the whole reason. */
+class Refusal extends Error {}
+
+const unquote = (key: string) =>
+	key.startsWith('"')
+		? (JSON.parse(key) as string)
+		: key.startsWith("'")
+			? key.slice(1, -1).replaceAll("''", "'")
+			: key.trim();
+
+/** Splits YAML into its top-level keys with their lines, or null for a layout this cannot split, such as a flow mapping. */
+function topLevel(text: string) {
+	const sections: { key: string; text: string }[] = [];
+	for (const line of text.replace(/^\uFEFF/, "").split(/(?<=\n)/)) {
+		const current = sections.at(-1);
+		if (/^(\s|-(\s|$)|#)/.test(line) || line.trim() === "") {
+			if (current) current.text += line;
+			else if (line.trim() && !line.startsWith("#")) return null;
+			continue;
+		}
+		if (/^---\s*$/.test(line) && !current) continue;
+		const key =
+			/^("(?:[^"\\]|\\.)*"|'(?:[^']|'')*'|[^\s"'#:{}[\],&*!|>%@`][^:#]*?)\s*:(?:\s|$)/.exec(
+				line,
+			)?.[1];
+		if (key === undefined) return null;
+		sections.push({
+			key: unquote(key),
+			text: line,
+		});
+	}
+	return sections;
+}
+
+/** The pnpm settings in a pnpm-workspace.yaml: every key but the package list and catalogs. */
+function workspaceSettings(path: string, text: string | null) {
+	let data: unknown;
+	try {
+		data = text === null ? {} : (Bun.YAML.parse(text) ?? {});
+	} catch (error) {
+		throw new Error(`${path} is not valid YAML: ${(error as Error).message}`);
+	}
+	if (!data || typeof data !== "object" || Array.isArray(data))
+		throw new Error(`${path} is not a YAML mapping.`);
+	return JSON.stringify(
+		sortKeys(
+			Object.fromEntries(
+				Object.entries(data).filter(([key]) => !workspaceKeys.has(key)),
+			),
+		),
+	);
+}
+
+/**
+ * The pnpm-workspace.yaml the check runs with: the package list and catalogs
+ * from the working copy, every other key from the starting commit, which the
+ * working copy must not change.
+ */
+function workspaceFor(path: string, work: string | null, start: string | null) {
+	if (workspaceSettings(path, work) !== workspaceSettings(path, start))
+		throw new Refusal(
+			`${path} changes pnpm settings other than packages, catalog and catalogs. Those settings pick the store, overrides and which packages run build scripts, so a human makes that change. Restore the other settings to the last commit and ask the user to make the change.`,
+		);
+	if (work === null || work === start) return work;
+	const working = topLevel(work);
+	const starting = start === null ? [] : topLevel(start);
+	const keys = working?.map((section) => section.key) ?? [];
+	if (!working || !starting || new Set(keys).size !== keys.length)
+		throw new Refusal(
+			`cagr reads ${path} as one block of top-level keys, each once. Write it that way, or restore it and ask the user to make the change.`,
+		);
+	return [
+		...starting.filter((section) => !workspaceKeys.has(section.key)),
+		...working.filter((section) => workspaceKeys.has(section.key)),
+	]
+		.map((section) =>
+			section.text.endsWith("\n") ? section.text : `${section.text}\n`,
+		)
+		.join("");
+}
+
 /** Copies what the package manager reads for the lockfile at `path`: manifests, its config and local packages. */
 async function copyInputs(
 	root: string,
@@ -167,13 +269,42 @@ async function copyInputs(
 	const project = posix.dirname(path);
 	const inProject = (file: string) =>
 		project === "." ? file : file.slice(project.length + 1);
+	const timeoutMs = () => Math.max(1, Math.floor(deadline - performance.now()));
 	const gitRun = async (args: string[]) => {
 		const result = await run(["git", ...args], root, {
-			timeoutMs: Math.max(1, Math.floor(deadline - performance.now())),
+			timeoutMs: timeoutMs(),
 		});
 		if (!result.ok)
 			throw new Error(`git ${args[0]} failed: ${result.output.trim()}`);
 		return result.stdout;
+	};
+	const committed = head
+		? (
+				await gitRun([
+					"ls-tree",
+					"-r",
+					"-z",
+					"--name-only",
+					head,
+					"--",
+					project,
+				])
+			)
+				.split("\0")
+				.filter(Boolean)
+		: [];
+	const inHead = new Set(committed);
+	const fromHead = async (file: string) => {
+		if (!head) return null;
+		if (inHead.has(file)) return gitRun(["show", `${head}:${file}`]);
+		const outside = await run(
+			["git", "cat-file", "blob", `${head}:${file}`],
+			root,
+			{
+				timeoutMs: timeoutMs(),
+			},
+		);
+		return outside.ok ? outside.stdout : null;
 	};
 	const listed = await run(
 		[
@@ -187,14 +318,14 @@ async function copyInputs(
 			project,
 		],
 		root,
-		{ timeoutMs: Math.max(1, Math.floor(deadline - performance.now())) },
+		{ timeoutMs: timeoutMs() },
 	);
 	if (!listed.ok) throw new Error(`git ls-files failed: ${listed.output}`);
 	const files = listed.stdout
 		.split("\0")
 		.filter(
 			(file) =>
-				manifests.has(basename(file)) ||
+				basename(file) === "package.json" ||
 				inProject(file).startsWith(".yarn/patches/") ||
 				inProject(file).startsWith("patches/"),
 		);
@@ -208,6 +339,22 @@ async function copyInputs(
 			for (const ref of localRefs(file, await readFile(source, "utf8")))
 				refs.add(ref);
 	}
+	const workspaces = new Set(
+		[...listed.stdout.split("\0"), ...committed].filter(
+			(file) => basename(file) === workspaceFile,
+		),
+	);
+	for (const file of workspaces) {
+		const source = join(root, file);
+		const work =
+			existsSync(source) && !lstatSync(source).isSymbolicLink()
+				? await readFile(source, "utf8")
+				: null;
+		const text = workspaceFor(file, work, await fromHead(file));
+		if (text === null) continue;
+		await mkdir(dirname(join(target, file)), { recursive: true });
+		await writeFile(join(target, file), text);
+	}
 	for (const ref of refs) {
 		const source = join(root, ref);
 		if (insideRoot(root, source) === null || !existsSync(source)) continue;
@@ -218,42 +365,137 @@ async function copyInputs(
 					throw new Error(`Copying the local package ${ref} ran out of time.`);
 				// A copied symlink could send later writes outside the temp folder.
 				if (lstatSync(from).isSymbolicLink()) return false;
-				// Config and lockfiles come from the starting commit and the turn's baseline, never a local package copy.
+				// Config, lockfiles and pnpmfiles come from the starting commit and the turn's baseline, never a local package copy.
 				const name = basename(from).toLowerCase();
 				return !(
 					/^(node_modules|\.git|\.yarn)$/.test(name) ||
 					configs.has(name) ||
+					pnpmfiles.includes(name) ||
+					name === workspaceFile ||
 					Object.hasOwn(writers, name)
 				);
 			},
 		});
 	}
 	// Written last, so no copy above can replace it, even under another letter case.
-	if (head) {
-		const tree = await gitRun([
-			"ls-tree",
-			"-r",
-			"-z",
-			"--name-only",
-			head,
-			"--",
-			project,
-		]);
-		for (const file of tree.split("\0"))
-			if (
-				configs.has(basename(file)) ||
-				configDirs.some((dir) => inProject(file).startsWith(dir))
-			) {
-				await mkdir(dirname(join(target, file)), { recursive: true });
-				await writeFile(
-					join(target, file),
-					await gitRun(["show", `${head}:${file}`]),
-				);
-			}
+	for (const file of committed)
+		if (
+			configs.has(basename(file)) ||
+			configDirs.some((dir) => inProject(file).startsWith(dir))
+		) {
+			await mkdir(dirname(join(target, file)), { recursive: true });
+			await writeFile(
+				join(target, file),
+				await gitRun(["show", `${head}:${file}`]),
+			);
+		}
+	return fromHead;
+}
+
+/** The folder pnpm treats as the workspace root: the nearest one in the copy with a pnpm-workspace.yaml, else the lockfile's own. */
+function workspaceRoot(repo: string, project: string) {
+	for (let dir = project; dir.startsWith(repo); dir = dirname(dir)) {
+		if (existsSync(join(dir, workspaceFile))) return dir;
+		if (dir === repo) break;
+	}
+	return project;
+}
+
+/**
+ * A pnpmfile runs inside pnpm and changes the lockfile, so the check runs the
+ * one from the starting commit. A working copy that differs is refused.
+ */
+async function copyPnpmfiles(
+	root: string,
+	workspace: string,
+	target: string,
+	fromHead: (file: string) => Promise<string | null>,
+) {
+	for (const name of pnpmfiles) {
+		const file = posix.join(workspace, name);
+		const source = join(root, file);
+		const work = existsSync(source)
+			? new Uint8Array(await readFile(source))
+			: null;
+		const start = await fromHead(file);
+		const startBytes = start === null ? null : new TextEncoder().encode(start);
+		if (
+			(work === null) !== (startBytes === null) ||
+			(work && startBytes && !Buffer.from(work).equals(Buffer.from(startBytes)))
+		)
+			throw new Refusal(
+				`${file} differs from the last commit. A pnpmfile runs inside pnpm and can rewrite any dependency, so changing it is a gate change for a human. Restore ${file} and ask the user to make the change.`,
+			);
+		if (startBytes) await writeFile(join(target, file), startBytes);
 	}
 }
 
+/**
+ * Settings that keep the manager to the config of the starting commit: a home
+ * folder of its own holding links to the real package caches, empty user and
+ * global npm config, and no download of the manager itself.
+ */
+async function isolatedEnv(home: string) {
+	const env = process.env;
+	const real = env.HOME ?? homedir();
+	const local = env.LOCALAPPDATA ?? join(real, "AppData/Local");
+	const links = [
+		...homeCaches.map((path) => [join(real, path), join(home, path)]),
+		[
+			join(env.XDG_DATA_HOME ?? join(real, ".local/share"), "pnpm/store"),
+			join(home, ".local/share/pnpm/store"),
+		],
+		...localCaches.map((path) => [
+			join(local, path),
+			join(home, "AppData/Local", path),
+		]),
+	];
+	for (const [from = "", to = ""] of links)
+		if (existsSync(from)) {
+			await mkdir(dirname(to), { recursive: true });
+			await symlink(from, to, "junction");
+		}
+	await writeFile(join(home, ".npmrc"), "");
+	await writeFile(join(home, "npmrc"), "");
+	return {
+		HOME: home,
+		USERPROFILE: home,
+		XDG_CONFIG_HOME: join(home, ".config"),
+		XDG_DATA_HOME: join(home, ".local/share"),
+		APPDATA: join(home, "AppData/Roaming"),
+		LOCALAPPDATA: join(home, "AppData/Local"),
+		npm_config_userconfig: join(home, ".npmrc"),
+		npm_config_globalconfig: join(home, "npmrc"),
+		COREPACK_HOME:
+			env.COREPACK_HOME ??
+			join(
+				env.XDG_CACHE_HOME ??
+					(process.platform === "win32" ? local : join(real, ".cache")),
+				"node/corepack",
+			),
+		COREPACK_ENABLE_NETWORK: "0",
+		COREPACK_ENABLE_DOWNLOAD_PROMPT: "0",
+	};
+}
+
+/** Removes temp folders that a killed hook left behind. */
+async function removeStale() {
+	const cutoff = Date.now() - 3_600_000;
+	const names = await readdir(tmpdir()).catch(() => []);
+	await Promise.all(
+		names
+			.filter((name) => name.startsWith(tempPrefix))
+			.map(async (name) => {
+				const folder = join(tmpdir(), name);
+				const info = await lstat(folder).catch(() => null);
+				if (info?.isDirectory() && info.mtimeMs < cutoff)
+					await rm(folder, { recursive: true, force: true }).catch(() => {});
+			}),
+	);
+}
+
 async function regenerate(
+	manager: Writer,
 	spec: Command,
 	root: string,
 	head: string | null,
@@ -261,14 +503,38 @@ async function regenerate(
 	lockfile: Uint8Array | null,
 	deadline: number,
 ) {
-	const folder = await mkdtemp(join(tmpdir(), "cagr-lockfile-"));
+	await removeStale();
+	// The real path, since npm reads a --prefix through a symlinked tmpdir as another folder.
+	const folder = await realpath(await mkdtemp(join(tmpdir(), tempPrefix)));
 	try {
-		await copyInputs(root, head, path, folder, deadline);
-		const file = join(folder, path);
+		// Managers look in parent folders for a workspace root. bun and Yarn stop at this one, which has no packages.
+		await writeFile(
+			join(folder, "package.json"),
+			JSON.stringify({ private: true, workspaces: [] }),
+		);
+		const repo = join(folder, "repo");
+		const home = join(folder, "home");
+		await mkdir(home);
+		const fromHead = await copyInputs(root, head, path, repo, deadline);
+		const file = join(repo, path);
 		if (lockfile) await writeFile(file, lockfile);
 		const project = dirname(file);
 		const argv = [...spec.argv];
-		const env = { ...corepackOffline, ...spec.env };
+		const env: Record<string, string> = {
+			...(await isolatedEnv(home)),
+			...spec.env,
+		};
+		if (manager === "npm") argv.push("--prefix", project);
+		if (manager === "pnpm") {
+			const workspace = workspaceRoot(repo, project);
+			env.NPM_CONFIG_WORKSPACE_DIR = workspace;
+			await copyPnpmfiles(
+				root,
+				relative(repo, workspace).split(sep).join("/") || ".",
+				repo,
+				fromHead,
+			);
+		}
 		if (spec.yarnrc && existsSync(join(project, ".yarnrc")))
 			argv.push("--use-yarnrc", join(project, ".yarnrc"));
 		const timeoutMs = Math.floor(deadline - performance.now());
@@ -301,22 +567,47 @@ function sortKeys(value: unknown): unknown {
 	);
 }
 
+/** Whether JSON or JSONC repeats a key in one object. A parser keeps the last copy, so a repeat could hide a hand edit. */
+export function repeatsKey(text: string) {
+	const objects: (Set<string> | null)[] = [];
+	let previous = "";
+	for (const [token] of text.matchAll(
+		/"(?:[^"\\]|\\.)*"|\/\/[^\n]*|\/\*[\s\S]*?\*\/|[{}[\]:,]/g,
+	)) {
+		if (token.startsWith("//") || token.startsWith("/*")) continue;
+		if (token === "{") objects.push(new Set());
+		else if (token === "[") objects.push(null);
+		else if (token === "}" || token === "]") objects.pop();
+		else if (token === ":" && previous.startsWith('"')) {
+			const keys = objects.at(-1);
+			const key = JSON.parse(previous) as string;
+			if (keys?.has(key)) return true;
+			keys?.add(key);
+		}
+		previous = token;
+	}
+	return false;
+}
+
+/** bun.lock and package-lock.json compare as data, since `bun add` writes keys in an order `bun install` later sorts. */
 const parsers: Record<string, (text: string) => unknown> = {
 	"bun.lock": (text) => Bun.JSONC.parse(text),
 	"package-lock.json": (text) => JSON.parse(text),
-	"pnpm-lock.yaml": (text) => Bun.YAML.parse(text),
 };
 
-/** Equal bytes, or equal data with keys in any order, since `bun add` writes keys in an order `bun install` later sorts. */
+/** Equal bytes, or equal JSON data with keys in any order and none repeated. */
 function same(name: string, a: Uint8Array | null, b: Uint8Array | null) {
 	if (a === null || b === null) return false;
 	if (Buffer.from(a).equals(Buffer.from(b))) return true;
 	const parse = parsers[name];
 	if (!parse) return false;
 	try {
-		const decode = (bytes: Uint8Array) =>
-			JSON.stringify(sortKeys(parse(new TextDecoder().decode(bytes))));
-		return decode(a) === decode(b);
+		const texts = [a, b].map((bytes) => new TextDecoder().decode(bytes));
+		if (texts.some(repeatsKey)) return false;
+		const [left, right] = texts.map((text) =>
+			JSON.stringify(sortKeys(parse(text))),
+		);
+		return left === right;
 	} catch {
 		return false;
 	}
@@ -363,6 +654,7 @@ export async function checkLockfile(options: {
 				message: `cagr checks Yarn 1 lockfiles only. Yarn 2 and later can load plugins and releases from outside the repo, so cagr does not run them. Restore the file and ask the user to run the yarn command.`,
 			};
 		const rewritten = await regenerate(
+			writer,
 			spec,
 			root,
 			head,
@@ -375,6 +667,7 @@ export async function checkLockfile(options: {
 			message: `This is not what ${manager} writes from the current manifests and the lockfile at the start of the turn, so it looks edited by hand. Change dependencies with ${manager} add or remove instead. If an update command changed versions without changing package.json, ask the user to run that update.`,
 		};
 	} catch (error) {
+		if (error instanceof Refusal) return { message: error.message };
 		const project = posix.dirname(path);
 		return {
 			message: `cagr could not check that ${manager} wrote this lockfile. ${(error as Error).message} The check copies the manifests to a temp folder and runs ${manager} offline with scripts off. Make it pass: install ${manager}, or run \`${manager} install\` in ${shellQuote(join(root, project))} so its cache has every package, then stop again. If it cannot pass, restore the file with the steps that follow and ask the user to make the dependency change.`,

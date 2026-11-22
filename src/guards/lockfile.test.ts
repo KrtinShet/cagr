@@ -1,5 +1,8 @@
 import { afterEach, expect, test } from "bun:test";
-import { rm } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { mkdir, mkdtemp, realpath, rm, utimes } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { tempRepo } from "../test/repo";
 import { checkLockfile, isLockfile, type LockfileStack } from "./lockfile";
 
@@ -104,4 +107,68 @@ test("a Yarn 2 or later lockfile is not rebuilt", async () => {
 
 test("other files are left to the plain protected-file check", async () => {
 	expect(await check("Cargo.lock", [stack("bun")])).toBeNull();
+});
+
+const workspace = "packages:\n  - lib\noverrides:\n  pad: 1.0.0\n";
+
+/** A pnpm repo with `workspace` committed, then `edited` written as the working pnpm-workspace.yaml. */
+async function workspaceCheck(edited: string) {
+	const repo = await tempRepo();
+	roots.add(repo.root);
+	const lockfile = "lockfileVersion: '9.0'\n";
+	const head = await repo.commit("chore: add workspace", {
+		"package.json": '{ "name": "app" }\n',
+		"lib/package.json": '{ "name": "lib" }\n',
+		"pnpm-workspace.yaml": workspace,
+		"pnpm-lock.yaml": lockfile,
+	});
+	await repo.write("pnpm-workspace.yaml", edited);
+	await repo.write("pnpm-lock.yaml", `${lockfile}# edited\n`);
+	return checkLockfile({
+		root: repo.root,
+		path: "pnpm-lock.yaml",
+		stacks: [stack("pnpm")],
+		baseline: new TextEncoder().encode(lockfile),
+		head,
+		deadline: performance.now() + 10_000,
+	});
+}
+
+test("a pnpm setting changed in pnpm-workspace.yaml is for a human", async () => {
+	const verdict = await workspaceCheck(
+		workspace.replace("pad: 1.0.0", "pad: 1.1.0"),
+	);
+	expect(verdict?.message).toContain(
+		"pnpm-workspace.yaml changes pnpm settings other than packages, catalog and catalogs",
+	);
+});
+
+test("a repeated key in pnpm-workspace.yaml blocks even when the last copy matches", async () => {
+	const verdict = await workspaceCheck(
+		`overrides:\n  pad: 1.1.0\n${workspace}`,
+	);
+	expect(verdict?.message).toContain(
+		"reads pnpm-workspace.yaml as one block of top-level keys, each once",
+	);
+});
+
+test("temp folders a killed check left behind are removed after an hour", async () => {
+	const folder = await realpath(await mkdtemp(join(tmpdir(), "gw-tmp-")));
+	roots.add(folder);
+	const old = join(folder, "cagr-lockfile-old");
+	const recent = join(folder, "cagr-lockfile-recent");
+	await mkdir(old);
+	await mkdir(recent);
+	const hours = new Date(Date.now() - 2 * 3_600_000);
+	await utimes(old, hours, hours);
+	const saved = process.env.TMPDIR;
+	process.env.TMPDIR = folder;
+	try {
+		await check("bun.lock", [stack("bun")]);
+	} finally {
+		if (saved === undefined) delete process.env.TMPDIR;
+		else process.env.TMPDIR = saved;
+	}
+	expect(existsSync(old)).toBe(false);
+	expect(existsSync(recent)).toBe(true);
 });

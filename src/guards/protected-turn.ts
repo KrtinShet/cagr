@@ -246,6 +246,9 @@ async function captureFiles(
 		: null;
 }
 
+/** Milliseconds the starting snapshot may take, inside the command budget. Tests on a loaded machine raise it. */
+export const snapshotBudget = { commandMs: 40, toolMs: 250 };
+
 export async function rememberProtected(
 	file: string,
 	input: HookInput,
@@ -254,7 +257,10 @@ export async function rememberProtected(
 	const entries = protectedEntries(config.files);
 	if (!entries.length) return;
 	const deadline =
-		performance.now() + (input.event === "command.before" ? 40 : 250);
+		performance.now() +
+		(input.event === "command.before"
+			? snapshotBudget.commandMs
+			: snapshotBudget.toolMs);
 	const directory = protectedStateDir(file);
 	const captures = await Promise.allSettled(
 		checkouts(input).map(async (root) => {

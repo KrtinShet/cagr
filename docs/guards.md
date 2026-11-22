@@ -131,24 +131,23 @@ reason = "Migrations are generated. Run `bun run db:migrate --name <change>` ins
 
 ### Lockfiles written by the package manager
 
-At turn end a change to `bun.lock`, `pnpm-lock.yaml`, `package-lock.json` or `yarn.lock` passes when the package manager wrote it. The manager comes from the `[[stack]] package_manager` that covers the lockfile's path. When several stacks cover it, a stack whose manager writes that lockfile wins, and stacks for other ecosystems, such as uv, are ignored. cagr copies the manifests (every `package.json` and `pnpm-workspace.yaml`, patches, and local packages named by a relative path) from the working copy to a temp folder. The manager config (`.npmrc`, `bunfig.toml`, `.yarnrc` and Yarn releases) comes from the commit at the start of the turn, since it picks the registry, the cache and code the manager runs. There it gives the manager the lockfile from the start of the turn and runs it in lockfile-only mode:
+At turn end a change to `bun.lock`, `pnpm-lock.yaml`, `package-lock.json` or `yarn.lock` passes when the package manager wrote it. The manager comes from the `[[stack]] package_manager` that covers the lockfile's path. When several stacks cover it, a stack whose manager writes that lockfile wins, and stacks for other ecosystems, such as uv, are ignored. cagr copies the manifests (every `package.json`, patches, and local packages named by a relative path) from the working copy to a temp folder. Everything that picks the registry, the cache or code the manager runs comes from the commit at the start of the turn: `.npmrc`, `bunfig.toml`, `.yarnrc`, Yarn releases, `.pnpmfile.cjs` and `.pnpmfile.mjs`, and every `pnpm-workspace.yaml` key except `packages`, `catalog` and `catalogs`. The manager runs with a home folder of its own, so config under your home folder (`~/.npmrc`, `~/.bunfig.toml`, pnpm's global rc) is not read; only its package caches are linked in. There it gives the manager the lockfile from the start of the turn and runs it in lockfile-only mode:
 
 | Manager | Command |
 | --- | --- |
 | bun | `bun install --lockfile-only --ignore-scripts` |
-| pnpm | `pnpm install --lockfile-only --offline --ignore-scripts --ignore-pnpmfile` |
-| npm | `npm install --package-lock-only --offline --ignore-scripts` |
+| pnpm | `pnpm install --lockfile-only --offline --ignore-scripts`, with the committed pnpmfile |
+| npm | `npm install --package-lock-only --offline --ignore-scripts --prefix <folder>` |
 | Yarn 1 | `yarn install --offline --ignore-scripts --no-default-rc`, which installs into the temp folder |
 
-The change passes when the result matches the lockfile in the checkout. For `bun.lock`, `package-lock.json` and `pnpm-lock.yaml` cagr compares the parsed data with keys sorted, since `bun add` writes keys in an order `bun install` later sorts. `yarn.lock` must match byte for byte. So `pnpm add -D knip` and `bun remove left-pad` pass, and a hand edit to a version or an integrity hash blocks with restore steps. What it proves and what it does not is in [Limits](limits.md#lockfiles).
+The change passes when the result matches the lockfile in the checkout. For `bun.lock` and `package-lock.json` cagr compares the parsed data with keys sorted, since `bun add` writes keys in an order `bun install` later sorts, and a key repeated in one object blocks. `pnpm-lock.yaml` and `yarn.lock` must match byte for byte. So `pnpm add -D knip` and `bun remove left-pad` pass, and a hand edit to a version or an integrity hash blocks with restore steps. What it proves and what it does not is in [Limits](limits.md#lockfiles).
 
 It blocks, with the fix, when:
 
 - No stack with `package_manager` covers the lockfile, or the stack uses a different manager.
 - The check cannot run: the manager is missing, it fails, it needs a package that is not in its cache, or it runs out of time. Run `<manager> install` so the cache has every package, then stop again, or ask the user to make the change.
 - The index or a commit holds a different version of the lockfile than the working copy. Stage and commit what the manager wrote.
-
-A Yarn 2 or later `yarn.lock` is not rebuilt, since Yarn 2 and later load plugins and releases named in rc files from any parent folder. It blocks, and the user runs the yarn command.
+- The turn changed a pnpmfile, or a `pnpm-workspace.yaml` key other than `packages`, `catalog` and `catalogs`, or wrote a top-level key twice. Those are gate changes: a human makes them.
 
 `bun.lockb`, `uv.lock`, `poetry.lock`, `Pipfile.lock`, `Cargo.lock` and `go.sum` keep the plain protected-file check: any change made during the turn blocks.
 
