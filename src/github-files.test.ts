@@ -86,7 +86,14 @@ test("only the review job looks for a successful status before running its steps
 	const scratch = mkdtempSync(join(tmpdir(), "gw-review-status-"));
 	try {
 		const output = join(scratch, "output");
-		for (const state of ["success", "pending", "", "unavailable"]) {
+		for (const [state, skip] of [
+			["success", true],
+			["success\nfailure", true],
+			["failure\nsuccess", false],
+			["pending", false],
+			["", false],
+			["unavailable", false],
+		] as const) {
 			writeFileSync(output, "");
 			const result = Bun.spawnSync(
 				[
@@ -108,10 +115,8 @@ test("only the review job looks for a successful status before running its steps
 				},
 			);
 			expect(result.exitCode).toBe(0);
-			expect(readFileSync(output, "utf8")).toBe(
-				state === "success" ? "skip=true\n" : "",
-			);
-			if (state === "success")
+			expect(readFileSync(output, "utf8")).toBe(skip ? "skip=true\n" : "");
+			if (skip)
 				expect(result.stdout.toString()).toContain(
 					"Skipping review for test-sha",
 				);
