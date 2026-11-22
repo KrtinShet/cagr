@@ -22,6 +22,7 @@ import {
 	checkoutOf,
 	checkProtected,
 	rememberProtected,
+	snapshotNotice,
 } from "../guards/protected-turn";
 import { insideRoot } from "../paths";
 import { gateResult } from "../review/gate";
@@ -68,8 +69,17 @@ export async function handle(
 				input.event === "command.before"
 					? await commandBefore(input, config)
 					: await fileBeforeEdit(input, config);
-			if (decision.kind === "allow")
-				await rememberProtected(stateFile(input.sessionId), input, config);
+			if (decision.kind === "allow") {
+				const file = stateFile(input.sessionId);
+				const notice = await rememberProtected(file, input, config).catch(() =>
+					snapshotNotice(file, true),
+				);
+				if (notice)
+					return {
+						...decision,
+						notice: [decision.notice, notice].filter(Boolean).join("\n"),
+					};
+			}
 			return decision;
 		}
 		case "file.after_edit":

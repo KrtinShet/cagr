@@ -204,12 +204,85 @@ test("a linked checkout uses its own starting commit", async () => {
 	expect(await repo.stop()).toBe("");
 });
 
-test("a Git error in baseline capture allows the command and tells the human", async () => {
+async function withoutGitStatus(
+	repo: Awaited<ReturnType<typeof setup>>,
+	action: () => Promise<void>,
+) {
+	const index = process.env.GIT_INDEX_FILE;
+	await repo.write(".git/bad-index", "not a Git index");
+	process.env.GIT_INDEX_FILE = join(repo.root, ".git/bad-index");
+	try {
+		await action();
+	} finally {
+		if (index === undefined) delete process.env.GIT_INDEX_FILE;
+		else process.env.GIT_INDEX_FILE = index;
+	}
+}
+
+test("a failed snapshot gives one notice and command guards still deny", async () => {
+	const repo = await setup(
+		{},
+		'[[stack]]\nlanguage = "typescript"\npackage_manager = "bun"\n',
+	);
+	await withoutGitStatus(repo, async () => {
+		const output = await repo.before("cat README.md");
+		expect(output).not.toContain("cagr is off for this call");
+		expect(JSON.parse(output).systemMessage).toContain("protected files");
+		expect(await repo.before("cat README.md")).toBe("");
+		expect(JSON.parse(await repo.before("npm install"))).toMatchObject({
+			hookSpecificOutput: {
+				permissionDecision: "deny",
+				permissionDecisionReason: expect.stringContaining(
+					"(cagr: package-manager)",
+				),
+			},
+		});
+	});
+	expect(await repo.stop()).toBe("");
+	await withoutGitStatus(repo, async () => {
+		expect(
+			JSON.parse(await repo.before("cat README.md")).systemMessage,
+		).toContain("protected files");
+	});
+});
+
+test.each(["unstaged", "committed"])(
+	"the starting HEAD catches a %s shell write after snapshot capture failed",
+	async (kind) => {
+		const repo = await setup();
+		const command = "printf '# shell change\\n' >> cagr.toml";
+		await withoutGitStatus(repo, async () => {
+			await repo.before(command);
+		});
+		expect((await runShell(command, repo.root)).ok).toBe(true);
+		if (kind === "committed")
+			await repo.git("commit", "-qam", "chore: change config");
+		expect(await repo.before("cat README.md")).toBe("");
+		expect(JSON.parse(await repo.stop())).toMatchObject({
+			decision: "block",
+			reason: expect.stringContaining(
+				`cagr.toml\n  Review changes against ${repo.base}.`,
+			),
+		});
+	},
+);
+
+test("turn end asks for a manual check when even the starting HEAD is unavailable", async () => {
 	const repo = await setup();
-	await repo.write(".git/index", "bad index");
-	const result = JSON.parse(await repo.before("cat README.md"));
-	expect(result).toEqual({
-		systemMessage: expect.stringContaining("Could not check protected files"),
+	const gitDir = process.env.GIT_DIR;
+	process.env.GIT_DIR = join(repo.root, ".git/missing");
+	try {
+		const result = JSON.parse(await repo.before("cat README.md"));
+		expect(result.systemMessage).toContain(
+			"could not record a starting commit",
+		);
+	} finally {
+		if (gitDir === undefined) delete process.env.GIT_DIR;
+		else process.env.GIT_DIR = gitDir;
+	}
+	expect(JSON.parse(await repo.stop())).toMatchObject({
+		decision: "block",
+		reason: expect.stringContaining("Review protected-file changes"),
 	});
 });
 
