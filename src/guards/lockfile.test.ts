@@ -26,6 +26,7 @@ async function check(path: string, stacks: LockfileStack[], write = true) {
 		path,
 		stacks,
 		baseline: null,
+		head: null,
 		deadline: performance.now() + 10_000,
 	});
 }
@@ -59,6 +60,15 @@ test("a lockfile the stack's manager does not write says which manager to use", 
 	);
 });
 
+test("a JavaScript stack is chosen over another ecosystem's on the same paths", async () => {
+	const other = await check("package-lock.json", [stack("uv"), stack("bun")]);
+	expect(other?.message).toContain("uses bun, which does not write");
+	const only = await check("bun.lock", [stack("uv")]);
+	expect(only?.message).toContain("only when a [[stack]] with package_manager");
+	const writer = await check("bun.lock", [stack("pnpm"), stack("bun")], false);
+	expect(writer?.message).toContain("bun.lock is deleted");
+});
+
 test("a deleted lockfile, or a folder in its place, asks for a restore", async () => {
 	const deleted = await check("bun.lock", [stack("bun")], false);
 	expect(deleted?.message).toContain("bun.lock is deleted");
@@ -70,6 +80,7 @@ test("a deleted lockfile, or a folder in its place, asks for a restore", async (
 		path: "bun.lock",
 		stacks: [stack("bun")],
 		baseline: null,
+		head: null,
 		deadline: performance.now() + 10_000,
 	});
 	expect(verdict?.message).toContain("bun.lock is not a regular file");

@@ -436,6 +436,34 @@ test("a local package named with file: and no ./ passes turn end", async () => {
 	expect(await repo.stop()).toBe("");
 });
 
+test("a hand edit bun would repair still blocks", async () => {
+	const repo = await lockedRepo("bun");
+	expect(await repo.before("sed -i.bak s/x/y/ bun.lock")).toBe("");
+	const original = await repo.read();
+	await repo.write(
+		"bun.lock",
+		original.replace(
+			'"packages": {',
+			'"packages": {\n    "orphan": ["orphan@9.9.9", "", {}, "sha512-AAAA"],\n',
+		),
+	);
+	const { decision, reason } = JSON.parse(await repo.stop());
+	expect(decision).toBe("block");
+	expect(reason).toContain("looks edited by hand");
+});
+
+test("the check uses the manager config from the starting commit", async () => {
+	const repo = await lockedRepo("bun");
+	expect(await repo.before("bun add zed")).toBe("");
+	await repo.add("zed");
+	const empty = join(repo.root, ".empty-cache");
+	await repo.write(
+		"bunfig.toml",
+		`[install]\nregistry = "http://127.0.0.1:9/"\n[install.cache]\ndir = "${empty}"\n`,
+	);
+	expect(await repo.stop()).toBe("");
+});
+
 test("a folder in place of the lockfile still blocks the other protected files", async () => {
 	const repo = await lockedRepo("bun");
 	expect(await repo.before("rm bun.lock && mkdir bun.lock")).toBe("");

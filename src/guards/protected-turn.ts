@@ -575,6 +575,7 @@ async function violations(
 							path,
 							stacks: snapshot.stacks ?? [],
 							baseline: starting,
+							head: snapshot.head ?? null,
 							deadline: lockfileDeadline,
 						});
 			if (lockfile && lockfile.message === null) return null;

@@ -131,7 +131,7 @@ reason = "Migrations are generated. Run `bun run db:migrate --name <change>` ins
 
 ### Lockfiles written by the package manager
 
-At turn end a change to `bun.lock`, `pnpm-lock.yaml`, `package-lock.json` or `yarn.lock` passes when the package manager wrote it. The manager comes from the `[[stack]] package_manager` that covers the lockfile's path. cagr copies the manifests (every `package.json`, `pnpm-workspace.yaml`, `.npmrc`, `bunfig.toml`, `.yarnrc`, `.yarnrc.yml`, Yarn releases, plugins and patches, and local packages named by a relative path) to a temp folder. There it gives the manager the lockfile from the start of the turn and runs it in lockfile-only mode:
+At turn end a change to `bun.lock`, `pnpm-lock.yaml`, `package-lock.json` or `yarn.lock` passes when the package manager wrote it. The manager comes from the `[[stack]] package_manager` that covers the lockfile's path. When several stacks cover it, a stack whose manager writes that lockfile wins, and stacks for other ecosystems, such as uv, are ignored. cagr copies the manifests (every `package.json` and `pnpm-workspace.yaml`, patches, and local packages named by a relative path) from the working copy to a temp folder. The manager config (`.npmrc`, `bunfig.toml`, `.yarnrc`, `.yarnrc.yml`, Yarn releases and plugins) comes from the commit at the start of the turn, since it picks the registry, the cache and code the manager runs. There it gives the manager the lockfile from the start of the turn and runs it in lockfile-only mode:
 
 | Manager | Command |
 | --- | --- |
@@ -141,7 +141,7 @@ At turn end a change to `bun.lock`, `pnpm-lock.yaml`, `package-lock.json` or `ya
 | Yarn 2 and later | `yarn install --mode=update-lockfile`, with network and scripts off |
 | Yarn 1 | `yarn install --offline --ignore-scripts`, which installs into the temp folder |
 
-The change passes when the result matches the lockfile in the checkout. A second run on the current lockfile absorbs differences in key order, since `bun add` writes keys in an order `bun install` later sorts. So `pnpm add -D knip` and `bun remove left-pad` pass, and a hand edit to a version or an integrity hash blocks with restore steps. What it proves and what it does not is in [Limits](limits.md#lockfiles).
+The change passes when the result matches the lockfile in the checkout. For `bun.lock`, `package-lock.json` and `pnpm-lock.yaml` cagr compares the parsed data with keys sorted, since `bun add` writes keys in an order `bun install` later sorts. `yarn.lock` must match byte for byte. So `pnpm add -D knip` and `bun remove left-pad` pass, and a hand edit to a version or an integrity hash blocks with restore steps. What it proves and what it does not is in [Limits](limits.md#lockfiles).
 
 It blocks, with the fix, when:
 

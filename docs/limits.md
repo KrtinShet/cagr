@@ -36,7 +36,7 @@ The turn-end lockfile check (see [protected-file](guards.md#lockfiles-written-by
 It does not prove:
 
 - That the manifests are right. `package.json` stays editable, and a dependency added there by hand is accepted once the lockfile matches it.
-- That the registry, the manager's cache or the manager config in the repo (`.npmrc`, `bunfig.toml`, `.yarnrc.yml`, Yarn releases and plugins) can be trusted. The check runs whatever manager and config the repo has.
+- That the registry, the manager's cache or the committed manager config can be trusted. The check runs the manager on `PATH` with the config from the commit at the start of the turn. Config changed during the turn, or left uncommitted before it, is not used, so a lockfile that needs it blocks.
 - Anything about an update that changes versions without changing `package.json`, such as `npm update`. That blocks, and the user runs the update instead.
 
 pnpm, npm and Yarn run offline with scripts off, so a package missing from the cache blocks the stop. bun has no offline switch: it reads its manifest cache and may ask the registry for a package missing from it, writing to its own cache. Yarn 1 has no lockfile-only mode, so it links packages into the temp folder, which is slower in a large repo. The check runs in parallel with the turn-end stack checks and stops at the turn-end deadline. Local packages outside the repo, and workspace manifests that Git ignores, are not copied, so a lockfile that needs them blocks.

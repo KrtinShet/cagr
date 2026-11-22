@@ -29,15 +29,14 @@ const writers: Record<string, Writer> = {
 	"yarn.lock": "yarn",
 };
 
-const manifests = new Set([
-	"package.json",
-	"pnpm-workspace.yaml",
-	".npmrc",
-	"bunfig.toml",
-	".yarnrc",
-	".yarnrc.yml",
-]);
-const extraDirs = [".yarn/releases/", ".yarn/plugins/", ".yarn/patches/"];
+const manifests = new Set(["package.json", "pnpm-workspace.yaml"]);
+/** Config that picks the registry, the cache or code the manager runs. It comes from the starting commit, since the agent can write the working copy. */
+const configs = new Set([".npmrc", "bunfig.toml", ".yarnrc", ".yarnrc.yml"]);
+const configDirs = [".yarn/releases/", ".yarn/plugins/"];
+const corepackOffline = {
+	COREPACK_ENABLE_NETWORK: "0",
+	COREPACK_ENABLE_DOWNLOAD_PROMPT: "0",
+};
 const dependencyFields = [
 	"dependencies",
 	"devDependencies",
@@ -54,13 +53,18 @@ export const isLockfile = (path: string) =>
 /** Null message: the package manager wrote this lockfile. */
 export type LockfileVerdict = { message: string | null };
 
-function managerFor(stacks: LockfileStack[], path: string) {
-	return stacks.find(
-		(stack) =>
-			stack.package_manager !== null &&
-			stack.paths.some((glob) => matchesGlob(glob, path)) &&
-			!stack.exclude_paths?.some((glob) => matchesGlob(glob, path)),
-	)?.package_manager;
+/** The covering stack's JavaScript manager, preferring the lockfile's own writer when several stacks cover it. */
+function managerFor(stacks: LockfileStack[], path: string, writer: Writer) {
+	const javascript: string[] = Object.values(writers);
+	const managers = stacks
+		.filter(
+			(stack) =>
+				stack.paths.some((glob) => matchesGlob(glob, path)) &&
+				!stack.exclude_paths?.some((glob) => matchesGlob(glob, path)),
+		)
+		.map((stack) => stack.package_manager)
+		.filter((manager) => manager !== null && javascript.includes(manager));
+	return managers.includes(writer) ? writer : managers[0];
 }
 
 type Command = { argv: string[]; env?: Record<string, string> };
@@ -107,8 +111,6 @@ function command(manager: Writer, lockfile: Uint8Array): Command {
 						YARN_ENABLE_SCRIPTS: "0",
 						YARN_ENABLE_IMMUTABLE_INSTALLS: "0",
 						YARN_ENABLE_TELEMETRY: "0",
-						COREPACK_ENABLE_DOWNLOAD_PROMPT: "0",
-						COREPACK_ENABLE_NETWORK: "0",
 					},
 				};
 			// Yarn 1 has no lockfile-only mode. It installs into the temp copy.
@@ -123,10 +125,6 @@ function command(manager: Writer, lockfile: Uint8Array): Command {
 					"--no-bin-links",
 					"--no-progress",
 				],
-				env: {
-					COREPACK_ENABLE_DOWNLOAD_PROMPT: "0",
-					COREPACK_ENABLE_NETWORK: "0",
-				},
 			};
 	}
 }
@@ -162,11 +160,44 @@ function localRefs(manifest: string, text: string): string[] {
 /** Copies what the package manager reads for the lockfile at `path`: manifests, its config and local packages. */
 async function copyInputs(
 	root: string,
+	head: string | null,
 	path: string,
 	target: string,
 	deadline: number,
 ) {
 	const project = posix.dirname(path);
+	const inProject = (file: string) =>
+		project === "." ? file : file.slice(project.length + 1);
+	const gitRun = async (args: string[]) => {
+		const result = await run(["git", ...args], root, {
+			timeoutMs: Math.max(1, Math.floor(deadline - performance.now())),
+		});
+		if (!result.ok)
+			throw new Error(`git ${args[0]} failed: ${result.output.trim()}`);
+		return result.stdout;
+	};
+	if (head) {
+		const tree = await gitRun([
+			"ls-tree",
+			"-r",
+			"-z",
+			"--name-only",
+			head,
+			"--",
+			project,
+		]);
+		for (const file of tree.split("\0"))
+			if (
+				configs.has(basename(file)) ||
+				configDirs.some((dir) => inProject(file).startsWith(dir))
+			) {
+				await mkdir(dirname(join(target, file)), { recursive: true });
+				await writeFile(
+					join(target, file),
+					await gitRun(["show", `${head}:${file}`]),
+				);
+			}
+	}
 	const listed = await run(
 		[
 			"git",
@@ -182,14 +213,14 @@ async function copyInputs(
 		{ timeoutMs: Math.max(1, Math.floor(deadline - performance.now())) },
 	);
 	if (!listed.ok) throw new Error(`git ls-files failed: ${listed.output}`);
-	const files = listed.stdout.split("\0").filter((file) => {
-		const inProject = project === "." ? file : file.slice(project.length + 1);
-		return (
-			manifests.has(basename(file)) ||
-			extraDirs.some((dir) => inProject.startsWith(dir)) ||
-			inProject.startsWith("patches/")
+	const files = listed.stdout
+		.split("\0")
+		.filter(
+			(file) =>
+				manifests.has(basename(file)) ||
+				inProject(file).startsWith(".yarn/patches/") ||
+				inProject(file).startsWith("patches/"),
 		);
-	});
 	const refs = new Set<string>();
 	for (const file of files) {
 		const source = join(root, file);
@@ -208,7 +239,13 @@ async function copyInputs(
 			filter: (from) => {
 				if (performance.now() > deadline)
 					throw new Error(`Copying the local package ${ref} ran out of time.`);
-				return !/(^|\/)(node_modules|\.git)$/.test(from);
+				// Config and lockfiles come from the starting commit and the turn's baseline, never a local package copy.
+				const name = basename(from);
+				return !(
+					/^(node_modules|\.git|\.yarn)$/.test(name) ||
+					configs.has(name) ||
+					Object.hasOwn(writers, name)
+				);
 			},
 		});
 	}
@@ -217,22 +254,21 @@ async function copyInputs(
 async function regenerate(
 	spec: Command,
 	root: string,
+	head: string | null,
 	path: string,
 	lockfile: Uint8Array | null,
 	deadline: number,
 ) {
 	const folder = await mkdtemp(join(tmpdir(), "cagr-lockfile-"));
 	try {
-		await copyInputs(root, path, folder, deadline);
+		await copyInputs(root, head, path, folder, deadline);
 		const file = join(folder, path);
-		// A local ref to the project folder copies the lockfile under check, so replace or remove it.
 		if (lockfile) await writeFile(file, lockfile);
-		else await rm(file, { force: true });
 		const timeoutMs = Math.floor(deadline - performance.now());
 		if (timeoutMs <= 0) throw new Error("No time was left to run it.");
 		const result = await run(spec.argv, dirname(file), {
 			timeoutMs,
-			env: spec.env,
+			env: { ...corepackOffline, ...spec.env },
 			processGroup: true,
 		});
 		const shown = spec.argv.join(" ");
@@ -248,8 +284,36 @@ async function regenerate(
 	}
 }
 
-const same = (a: Uint8Array | null, b: Uint8Array | null) =>
-	a !== null && b !== null && Buffer.from(a).equals(Buffer.from(b));
+function sortKeys(value: unknown): unknown {
+	if (Array.isArray(value)) return value.map(sortKeys);
+	if (!value || typeof value !== "object") return value;
+	return Object.fromEntries(
+		Object.entries(value)
+			.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+			.map(([key, inner]) => [key, sortKeys(inner)]),
+	);
+}
+
+const parsers: Record<string, (text: string) => unknown> = {
+	"bun.lock": (text) => Bun.JSONC.parse(text),
+	"package-lock.json": (text) => JSON.parse(text),
+	"pnpm-lock.yaml": (text) => Bun.YAML.parse(text),
+};
+
+/** Equal bytes, or equal data with keys in any order, since `bun add` writes keys in an order `bun install` later sorts. */
+function same(name: string, a: Uint8Array | null, b: Uint8Array | null) {
+	if (a === null || b === null) return false;
+	if (Buffer.from(a).equals(Buffer.from(b))) return true;
+	const parse = parsers[name];
+	if (!parse) return false;
+	try {
+		const decode = (bytes: Uint8Array) =>
+			JSON.stringify(sortKeys(parse(new TextDecoder().decode(bytes))));
+		return decode(a) === decode(b);
+	} catch {
+		return false;
+	}
+}
 
 /**
  * Says whether the lockfile at `path` is what the stack's package manager
@@ -263,12 +327,14 @@ export async function checkLockfile(options: {
 	path: string;
 	stacks: LockfileStack[];
 	baseline: Uint8Array | null;
+	/** The commit at the start of the turn, which supplies the manager config. */
+	head: string | null;
 	deadline: number;
 }): Promise<LockfileVerdict | null> {
-	const { root, path, stacks, baseline, deadline } = options;
+	const { root, head, path, stacks, baseline, deadline } = options;
 	const writer = writers[basename(path)];
 	if (!writer) return null;
-	const manager = managerFor(stacks, path);
+	const manager = managerFor(stacks, path, writer);
 	if (!manager)
 		return {
 			message: `cagr accepts a ${basename(path)} change only when a [[stack]] with package_manager covers ${path}. Ask the user to add one to the cagr config, or restore the file.`,
@@ -285,13 +351,15 @@ export async function checkLockfile(options: {
 	try {
 		const current = new Uint8Array(await readFile(join(root, path)));
 		const spec = command(writer, baseline ?? current);
-		// The second run normalises the current file, since `bun add` writes keys in an order `bun install` later sorts.
-		const [rewritten, normalised] = await Promise.all([
-			regenerate(spec, root, path, baseline, deadline),
-			regenerate(spec, root, path, current, deadline),
-		]);
-		if (same(rewritten, current) || same(rewritten, normalised))
-			return { message: null };
+		const rewritten = await regenerate(
+			spec,
+			root,
+			head,
+			path,
+			baseline,
+			deadline,
+		);
+		if (same(basename(path), rewritten, current)) return { message: null };
 		return {
 			message: `This is not what ${manager} writes from the current manifests and the lockfile at the start of the turn, so it looks edited by hand. Change dependencies with ${manager} add or remove instead. If an update command changed versions without changing package.json, ask the user to run that update.`,
 		};
