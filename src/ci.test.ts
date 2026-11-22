@@ -47,7 +47,60 @@ test("a clean branch passes every check and reports its risk tier", async () => 
 	expect(result.checks.some(({ name }) => name === "Pull request title")).toBe(
 		false,
 	);
+	expect(result.checks.some(({ name }) => name === "Verify")).toBe(false);
 	expect(result.tier).toBe("medium");
+});
+
+test.each([
+	{ command: "test -f src/a.ts", ok: true, verify: { ok: true, output: "" } },
+	{
+		command: "echo verify failed; exit 17",
+		ok: false,
+		verify: { ok: false, output: "echo verify failed; exit 17\nverify failed" },
+	},
+	{ command: " ", ok: true, verify: undefined },
+])("CI reports Verify for '$command'", async ({ command, ok, verify }) => {
+	const { repo, config } = await branch(
+		{ ...stack({}), git: { pre_push: command } },
+		{ "src/a.ts": "export const a = 1;\n" },
+		"feat: add a",
+	);
+	const result = await ci(config, { cwd: repo.root, base: "main", env: {} });
+	expect(result.ok).toBe(ok);
+	expect(result.checks.find((entry) => entry.name === "Verify")).toEqual(
+		verify && { ...verify, name: "Verify", annotations: [] },
+	);
+});
+
+test("Verify reuses the result of an identical turn-end command", async () => {
+	const shared = "test ! -f src/a.ts";
+	const verify = "test -f src/a.ts";
+	const { repo, config } = await branch(
+		{
+			...stack({ on_turn_end: ["test ! -f {files}"] }),
+			git: { pre_push: [shared, verify] },
+		},
+		{ "src/a.ts": "export const a = 1;\n" },
+		"feat: add a",
+	);
+	const runCheck = spyOn(runner, "runShell");
+	try {
+		const result = await ci(config, {
+			cwd: repo.root,
+			base: "main",
+			env: {},
+			runCheck,
+		});
+		expect(runCheck.mock.calls.map(([command]) => command)).toEqual([
+			shared,
+			verify,
+		]);
+		expect(
+			result.checks.filter((entry) => !entry.ok).map((entry) => entry.name),
+		).toEqual(["Checks", "Verify"]);
+	} finally {
+		runCheck.mockRestore();
+	}
 });
 
 test("an empty GITHUB_BASE_REF, as on merge_group, falls back to the protected branch", async () => {

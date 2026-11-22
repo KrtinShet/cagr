@@ -53,7 +53,7 @@ The `review` and `nightly` jobs run Claude Code, which needs an Anthropic API ke
 
 ## `cagr ci`
 
-`cagr ci` runs the checks the hooks ran, on the files the branch changed. The base is `--base`, else `GITHUB_BASE_REF`, else `[git] protected_branch`, else `main`. Deleted files are left out.
+`cagr ci` runs the checks from the hooks. File-based checks use the files the branch changed and leave out deleted files. The base is `--base`, else `GITHUB_BASE_REF`, else `[git] protected_branch`, else `main`.
 
 | Check             | What it does                                                                                                                                                                                     |
 | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -67,6 +67,7 @@ The `review` and `nightly` jobs run Claude Code, which needs an Anthropic API ke
 | Layout            | The [layout rules](code-rules.md#layout-rules) on the changed files, when there are any.                                                                                                            |
 | Risk              | The tier, approvals and owners of the change. Never fails.                                                                                                                                       |
 | Pull request body | When the run is for a pull request and `review.pr_sections` is set: the body must have every heading. "The description lacks "## Risk". Edit it and fill them in."                               |
+| Verify            | Runs the non-empty `[git] pre_push` commands from the config root after the other checks, with a 30 minute limit per command. If Checks already ran the same command after expanding `{files}`, Verify reuses its result. |
 
 Output is one line per check, `PASS` or `FAIL`, with the problems under each failure. It exits 1 if any check failed.
 
@@ -167,6 +168,8 @@ This installs a launchd agent on macOS or a systemd user timer on Linux. The sch
 
 Use `cagr ci --watch` to run a pass now. It skips drafts and any commit that already has `cagr/checks` or `cagr/review`, including pending and failed statuses sent by the pre-push hook or review gate. Use `cagr ci --pr 42` to run or retry an open PR by number. A new commit SHA is eligible for the next pass.
 
-Each run fetches the exact PR head and base into a temporary Git worktree under `~/.cache/cagr/`. It uses the stack's dependency install commands or an explicit `[ci] install` override, and runs the existing checks and Claude review. It posts `cagr/checks` and `cagr/review` statuses and puts review findings on the PR. The worktree is removed when the run finishes. A scheduled pass runs one PR at a time, and an active pass holds a lock for the checkout.
+Each run fetches the exact PR head and base into a temporary Git worktree under `~/.cache/cagr/`. The base is available to commands as `origin/<base>`. Local CI uses the stack's dependency install commands or an explicit `[ci] install` override, then runs the same checks as `cagr ci`, including Verify. A failed Verify command makes `cagr/checks` fail. Local CI also runs Claude review, posts `cagr/review`, and puts review findings on the PR. The worktree is removed when the run finishes. A scheduled pass runs one PR at a time, and an active pass holds a lock for the checkout.
+
+Local CI checks out the PR head with a detached HEAD. Commands inherit the local CI process environment, including `PATH` and `HOME`. Local CI supplies PR metadata to cagr directly and sets no GitHub Actions variables for commands. It clears GitHub and Claude credential environment variables and disables Git and GitHub CLI prompts. Verify clears `GIT_DIR`, `GIT_WORK_TREE`, and `GIT_INDEX_FILE` just like the push hook.
 
 Local CI runs only while your machine is on and awake and the user scheduler is active. The work uses your machine's CPU, disk and the local Claude account. GitHub needs branch protection that requires the two statuses to block a merge. Local CI only runs same-repo PRs from authors with write access. The install and check commands execute code from those PRs with your user account's permissions, so use this only in repos whose writers you trust.
