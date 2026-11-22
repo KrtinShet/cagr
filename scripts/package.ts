@@ -23,8 +23,8 @@ const license = "MIT";
 const licenseFile = join(root, "LICENSE");
 const meta = {
 	homepage: "https://krtinshet.github.io/cagr/",
-	repository: { type: "git", url: "git+https://github.com/krtinshet/cagr.git" },
-	bugs: { url: "https://github.com/krtinshet/cagr/issues" },
+	repository: { type: "git", url: "git+https://github.com/KrtinShet/cagr.git" },
+	bugs: { url: "https://github.com/KrtinShet/cagr/issues" },
 	author: "Krtin Shet",
 };
 
