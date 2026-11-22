@@ -40,11 +40,11 @@ test("nits, answered and fixed findings do not hold the gate", () => {
 	});
 });
 
-test("after max_rounds the denial explains that only verification runs", () => {
+test("after max_rounds the denial says no further full round runs", () => {
 	const rounds = [round({ n: 1 }), round({ n: 2, scope: "diff" })];
 	const result = gateResult(record(rounds, [finding()]), head, settings);
 	expect(result.kind === "deny" && result.reason).toContain(
-		"only verifies earlier findings",
+		"no further full round runs",
 	);
 });
 
@@ -101,6 +101,32 @@ test("an older head is judged by the current finding states, so a reopened findi
 	expect(result.kind === "deny" && result.reason).toContain("f1 src/a.ts:4");
 	const later = finding({ id: "f2", round: 3 });
 	expect(gateResult(record(rounds, [later]), older, settings).kind).toBe(
+		"allow",
+	);
+});
+
+test("a fix judged on a later commit does not pass an older head", () => {
+	const older = "c".repeat(40);
+	const rounds = [
+		round({ n: 1, head: older }),
+		round({ n: 2, head, from: older, scope: "diff" }),
+	];
+	const later = finding({ status: "fixed", fixedIn: head });
+	expect(gateResult(record(rounds, [later]), head, settings).kind).toBe(
+		"allow",
+	);
+	const result = gateResult(record(rounds, [later]), older, settings);
+	expect(result.kind === "deny" && result.reason).toContain("f1 src/a.ts:4");
+	// An older record with no fix commit: fixed only at the last reviewed head.
+	const unknown = finding({ status: "fixed", fixedIn: null });
+	expect(gateResult(record(rounds, [unknown]), head, settings).kind).toBe(
+		"allow",
+	);
+	expect(gateResult(record(rounds, [unknown]), older, settings).kind).toBe(
+		"deny",
+	);
+	const answered = finding({ status: "answered" });
+	expect(gateResult(record(rounds, [answered]), older, settings).kind).toBe(
 		"allow",
 	);
 });

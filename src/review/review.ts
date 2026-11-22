@@ -11,6 +11,7 @@ import {
 	type ReviewAgent,
 	ReviewerError,
 } from "./agent";
+import { answerHint, type Reach, reachFrom, unresolved } from "./gate";
 import {
 	type FinderOutput,
 	type Focus,
@@ -130,6 +131,7 @@ export async function review(
 	let scope: Round["scope"] = "scan";
 	let recheckBefore: number | null = null;
 	let branchFiles: string[] = [];
+	let reach: Reach = () => false;
 	if (!scanning) {
 		const baseRef = await resolveBase(baseName, cwd);
 		mergeBase = await gitOut(["merge-base", baseRef, head], cwd);
@@ -139,12 +141,13 @@ export async function review(
 				file,
 				`No commits on ${branch} beyond ${baseName}, so there is nothing to review.`,
 			);
+		reach = await reachFrom(record, head, cwd);
 		const plan = await planRound(record, {
 			head,
 			mergeBase,
 			full: options.full === true,
 			maxRounds: config.review.max_rounds,
-			skip: config.review.skip,
+			reach,
 			cwd,
 			progress,
 		});
@@ -210,6 +213,12 @@ export async function review(
 		previous: record.findings,
 		cycleStart: scope === "full" ? roundNumber : cycleStart(record),
 		recheckBefore,
+		stale: unresolved(record, head, reach)
+			.filter((finding) => finding.status === "fixed")
+			.map((finding) => finding.id),
+		spent: record.findings
+			.filter((finding) => checksAt(record, finding.id, head) >= 2)
+			.map((finding) => finding.id),
 		capped:
 			scope !== "full" &&
 			scope !== "scan" &&
@@ -227,6 +236,7 @@ export async function review(
 		at: now().toISOString(),
 		summary: "",
 		error: null,
+		verified: [],
 	};
 	let agent: ReviewAgent;
 	try {
@@ -291,6 +301,7 @@ export async function review(
 					),
 				),
 			);
+			round.verified = previous.map((finding) => finding.id);
 			const verdict = tally(keyed, votes, previous);
 			if (effort !== "quick") kept = verdict.kept;
 			fixedIds = verdict.fixed;
@@ -302,6 +313,12 @@ export async function review(
 				finding.status = "fixed";
 				finding.fixedIn = head;
 				fixed.push(finding);
+			} else if (
+				context.stale.includes(finding.id) &&
+				fixedIds.has(finding.id)
+			) {
+				// Confirmed on history the old fix commit is not part of, so this head is the fix commit now.
+				finding.fixedIn = head;
 			} else if (finding.status === "fixed" && !fixedIds.has(finding.id)) {
 				finding.status = "open";
 				finding.fixedIn = null;
@@ -310,8 +327,10 @@ export async function review(
 		record.findings.push(...found);
 		round.summary =
 			scope === "verify" ? "Checked earlier findings." : countLine(found);
-		const passed = blocking(record).length === 0;
 		if (!scanning) record.rounds.push(round);
+		const passed =
+			(scanning ? blocking(record) : unresolved(record, head, reach)).length ===
+			0;
 		if (file) writeRecord(file, record);
 		return {
 			record,
@@ -333,7 +352,7 @@ type PlanInput = {
 	mergeBase: string;
 	full: boolean;
 	maxRounds: number;
-	skip: string[];
+	reach: Reach;
 	cwd: string;
 	progress: (line: string) => void;
 };
@@ -344,11 +363,18 @@ type Plan = {
 	recheckBefore: number | null;
 };
 
+/** How many rounds that ran at `head` gave the verifier the finding `id`. */
+function checksAt(record: ReviewRecord, id: string, head: string) {
+	return record.rounds.filter(
+		(round) =>
+			!round.error && round.head === head && round.verified?.includes(id),
+	).length;
+}
+
 /**
  * Picks what the next round covers, or returns why there is nothing to do.
- * A fix commit is a commit that is not a merge and changes only files with an
- * open Important finding. Past the round cap, the verifier alone covers fix
- * commits; if any new commit is not one, finders review the new commits' diff.
+ * New commits always get finders on their diff, before and past the round
+ * cap: the cap only stops further full rounds.
  */
 async function planRound(
 	record: ReviewRecord,
@@ -381,8 +407,8 @@ async function planRound(
 		return fresh;
 	}
 	if (lastOk.head === head) {
-		// A verifier can be wrong about an earlier finding, so let it look again.
-		// Findings reported at this commit need a fix or an answer, so the
+		// A verifier can be wrong about an earlier finding, so it may look once
+		// more. Findings reported at this commit need a fix or an answer, so the
 		// boundary is the first round that reviewed it, not the latest recheck.
 		let first = lastOk;
 		for (const round of record.rounds.toReversed()) {
@@ -390,61 +416,25 @@ async function planRound(
 			if (round.head !== head) break;
 			first = round;
 		}
-		const recheck = blocking(record).some((finding) => finding.round < first.n);
-		return recheck
-			? { from: first.from, scope: "verify", recheckBefore: first.n }
-			: `${head.slice(0, 7)} was already reviewed in round ${lastOk.n}.`;
-	}
-	const diff = {
-		from: lastOk.head,
-		scope: "diff" as const,
-		recheckBefore: null,
-	};
-	if (discoveryRounds(record) < input.maxRounds) return diff;
-	const covered = new Set(
-		blocking(record)
-			.map((finding) => finding.file)
-			.filter(Boolean),
-	);
-	const commits = (
-		await gitOut(
-			["rev-list", "--parents", `${lastOk.head}..${head}`, `^${mergeBase}`],
-			cwd,
-		)
-	)
-		.split("\n")
-		.filter(Boolean)
-		.map((line) => line.split(" "));
-	const other: string[] = [];
-	for (const [sha = "", ...parents] of commits) {
-		// A merge can bring in any code, through its conflict resolution, so it is never a fix commit.
-		if (parents.length > 1) {
-			other.push(sha.slice(0, 7));
-			continue;
-		}
-		const files = (
-			await gitOut(
-				["diff-tree", "--no-commit-id", "--name-only", "-r", sha],
-				cwd,
-			)
-		)
-			.split("\n")
-			.filter(
-				(path) =>
-					path !== "" && !input.skip.some((glob) => matchesGlob(glob, path)),
-			);
-		if (files.some((path) => !covered.has(path))) other.push(sha.slice(0, 7));
-	}
-	if (covered.size > 0 && commits.length > 0 && other.length === 0) {
-		progress(
-			`Reached the ${input.maxRounds}-round cap, and the new commits only change files with an open Important finding.`,
+		const earlier = unresolved(record, head, input.reach).filter(
+			(finding) => finding.round < first.n,
 		);
-		return { ...diff, scope: "verify" };
+		if (earlier.length === 0)
+			return `${head.slice(0, 7)} was already reviewed in round ${lastOk.n}.`;
+		const spent = earlier.filter(
+			(finding) => checksAt(record, finding.id, head) >= 2,
+		);
+		if (spent.length === earlier.length) {
+			const ids = spent.map((finding) => finding.id).join(", ");
+			return `The verifier already checked ${ids} again at ${head.slice(0, 7)}, so \`cagr review\` does not check ${spent.length === 1 ? "it" : "them"} a third time at this commit. Commit a fix and run \`cagr review\`. ${answerHint(spent[0]?.id ?? "f1")}`;
+		}
+		return { from: first.from, scope: "verify", recheckBefore: first.n };
 	}
-	progress(
-		`Reached the ${input.maxRounds}-round cap, but ${other.length > 0 ? other.join(", ") : "the new commits"} ${other.length === 1 ? "is not a fix commit" : "are not fix commits"} (a merge, or a change to a file with no open Important finding), so finders review the new commits.`,
-	);
-	return diff;
+	if (discoveryRounds(record) >= input.maxRounds)
+		progress(
+			`Reached the ${input.maxRounds}-round cap, so no further full round runs: finders review the new commits, and the verifier checks earlier findings.`,
+		);
+	return { from: lastOk.head, scope: "diff", recheckBefore: null };
 }
 
 function failed(

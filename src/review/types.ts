@@ -45,6 +45,8 @@ export type Round = {
 	summary: string;
 	/** Set when the reviewer could not run. The gate then lets the PR through and tells the human. */
 	error: string | null;
+	/** The earlier findings the verifier judged in this round. Older records lack it. */
+	verified?: string[];
 };
 
 export type ReviewRecord = {

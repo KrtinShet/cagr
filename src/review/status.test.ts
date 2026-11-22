@@ -257,6 +257,8 @@ test("post-status is pending without a review of the pushed SHA and failure whil
 	issue.status = "fixed";
 	issue.fixedIn = third;
 	expect(await state(third)).toBe("success");
+	// Fixed on third, which second does not contain: a reset to second still fails.
+	expect(await state(second)).toBe("failure");
 	const extra = await repo.commit("feat: unrelated", {
 		"src/b.ts": "unreviewed\n",
 	});

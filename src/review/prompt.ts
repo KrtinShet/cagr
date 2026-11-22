@@ -28,6 +28,10 @@ export type ReviewContext = {
 	cycleStart: number;
 	/** Set on a recheck of an already reviewed commit: only findings from rounds before this one are verified again. */
 	recheckBefore: number | null;
+	/** Fixed findings whose fix was judged on a commit this head does not contain: the verifier checks them again. */
+	stale: string[];
+	/** Findings the verifier already judged twice at this head: they are not judged again here. */
+	spent: string[];
 	/** Past the round cap: findings fixed in this cycle are checked again, in case a later commit broke the fix. */
 	capped: boolean;
 };
@@ -123,7 +127,9 @@ function commitMessages(context: ReviewContext) {
 export function findingsToVerify(context: ReviewContext) {
 	const { recheckBefore } = context;
 	return context.previous.filter((finding) => {
+		if (context.spent.includes(finding.id)) return false;
 		if (recheckBefore !== null && finding.round >= recheckBefore) return false;
+		if (context.stale.includes(finding.id)) return true;
 		const recheckFix =
 			finding.severity === "important" &&
 			finding.status === "fixed" &&
@@ -157,7 +163,7 @@ function shared(context: ReviewContext) {
 	if (context.scope === "full")
 		parts.push(
 			"",
-			"This is the only full review. Later rounds see only fix commits, so anything you miss now ships. Report every instance of every class now.",
+			"This is the only full review. Later rounds see only the commits added after it, so anything you miss now ships. Report every instance of every class now.",
 		);
 	parts.push(
 		"",
@@ -218,17 +224,9 @@ export function verifierPrompt(
 	return [
 		`You check other reviewers' findings on branch ${context.branch} (${context.from.slice(0, 12)}..${context.head.slice(0, 12)}), independently, in a fresh context. Do not change any file.`,
 		"",
-		...(context.recheckBefore !== null
-			? [
-					"This commit was already reviewed. Check the earlier findings below again at this commit. Return an empty candidates list.",
-				]
-			: context.scope === "verify"
-				? [
-						"The round cap was reached. Check earlier findings against the new commits. Return an empty candidates list.",
-					]
-				: [
-						"For each candidate, read the code and decide whether it is real: the file and line exist at the reviewed commit and the failure happens as described. Speculative, style-only, and already-handled findings are not real. You may change the severity.",
-					]),
+		context.scope === "verify"
+			? "This commit was already reviewed. Check the earlier findings below again at this commit. Return an empty candidates list."
+			: "For each candidate, read the code and decide whether it is real: the file and line exist at the reviewed commit and the failure happens as described. Speculative, style-only, and already-handled findings are not real. You may change the severity.",
 		...calibration,
 		...(previous.length > 0
 			? [

@@ -19,8 +19,8 @@ import { type AnswerKind, answerKinds } from "./types";
 export const reviewHelp = `Usage: cagr review [options]
 
   review [--base <branch>] [--full] [--effort quick|standard|deep]
-                               Review this branch. After round 1, check only new commits. Past the cap, the
-                               verifier alone checks fix commits. --full forces a full round.
+                               Review this branch. After round 1, review only new commits, also past the
+                               cap. --full forces a full round.
   review --scan <globs...> [--issue]
                                Review existing code. --issue opens a GitHub issue with the findings.
   review --ci                  In GitHub Actions: review the pull request and post the findings on it.
