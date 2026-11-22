@@ -439,23 +439,30 @@ describe("review", () => {
 		});
 		const second = await review(repo.config, { ...options, agent });
 		expect(second.found.map((entry) => entry.id)).toEqual(["f2"]);
-		const again = fakeAgent({
-			finder: () => ({ findings: [] }),
-			verifier: () => ({
-				previous: [
-					{ id: "f1", fixed: true },
-					{ id: "f2", fixed: true },
-				],
-			}),
-		});
-		const outcome = await review(repo.config, {
-			...options,
-			agent: again.agent,
-		});
-		const prompt = again.calls[0]?.prompt ?? "";
-		expect(prompt).toContain("already reviewed");
-		expect(prompt).toContain("f1 src/a.ts");
-		expect(prompt).not.toContain("f2 src/b.ts");
+		const recheck = async (f1Fixed: boolean) => {
+			const next = fakeAgent({
+				finder: () => ({ findings: [] }),
+				verifier: () => ({
+					previous: [
+						{ id: "f1", fixed: f1Fixed },
+						{ id: "f2", fixed: true },
+					],
+				}),
+			});
+			const outcome = await review(repo.config, {
+				...options,
+				agent: next.agent,
+			});
+			const prompt = next.calls[0]?.prompt ?? "";
+			expect(prompt).toContain("already reviewed");
+			expect(prompt).toContain("f1 src/a.ts");
+			expect(prompt).not.toContain("f2 src/b.ts");
+			return outcome;
+		};
+		// The first recheck leaves f1 open, so a second one runs: it must still keep f2 out.
+		await recheck(false);
+		const outcome = await recheck(true);
+		expect(outcome.round?.scope).toBe("verify");
 		expect(
 			outcome.record.findings.map((entry) => [entry.id, entry.status]),
 		).toEqual([
@@ -464,18 +471,6 @@ describe("review", () => {
 		]);
 		expect(outcome.passed).toBe(false);
 		expect(reviewReport(outcome, 3)).not.toContain("round cap");
-		const third = fakeAgent({
-			finder: () => ({ findings: [] }),
-			verifier: () => ({ previous: [{ id: "f2", fixed: true }] }),
-		});
-		const repeat = await review(repo.config, {
-			...options,
-			agent: third.agent,
-		});
-		expect(third.calls[0]?.prompt ?? "").not.toContain("f2 src/b.ts");
-		expect(
-			repeat.record.findings.find((entry) => entry.id === "f2")?.status,
-		).toBe("open");
 	});
 
 	test("past the cap, a finder round still verifies open nits", async () => {
