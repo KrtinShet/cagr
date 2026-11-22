@@ -130,7 +130,12 @@ test("the written config loads and keeps what was found", async () => {
 		["javascript", "bun", []],
 		["python", "pip", ["pytest -q"]],
 	]);
-	expect(loaded.files.protected.length).toBe(12);
+	expect(loaded.files.protected).toEqual(
+		expect.arrayContaining([
+			expect.objectContaining({ glob: "cagr.toml", gate: true }),
+			expect.objectContaining({ glob: ".env*", gate: false }),
+		]),
+	);
 });
 
 test("the generated JSON files go through the repo's on_edit commands", async () => {

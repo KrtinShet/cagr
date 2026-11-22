@@ -39,12 +39,23 @@ export async function runHook(
 			? commandTarget(input.command)
 			: (input.files[0] ?? "").slice(0, 200);
 		key = Bun.hash(input.command ?? target).toString(36);
-		const config = load(input.cwd);
+		let config: Config | null;
+		let configNotice = "";
+		try {
+			config = load(input.cwd);
+		} catch (error) {
+			if (event !== "turn.end" || !(error instanceof ConfigError)) throw error;
+			config = null;
+			configNotice = `cagr could not load the current configuration. ${error.message}`;
+			entries.push({ id: "hook-error", decision: "fail-open", target });
+		}
 		enabled = config?.stats.enabled ?? true;
 		root = config?.root ?? null;
-		decision = config
-			? await collectStats(entries, () => handle(input, config))
-			: { kind: "allow" };
+		decision = await collectStats(entries, () => handle(input, config));
+		if (configNotice && decision.kind !== "deny")
+			decision.notice = [decision.notice, configNotice]
+				.filter(Boolean)
+				.join("\n");
 		if (config && event === "session.start")
 			entries.push({ id: "session", decision: "session", target: "" });
 		if (decision.kind === "deny" && !entries.length) {

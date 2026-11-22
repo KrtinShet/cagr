@@ -96,9 +96,14 @@ So you cannot remove a preset's protected file by leaving it out. To change what
 | `review.pr_sections`      | `["Testing", "Risk", "How to revert"]`                                                                                                                                                                                             |
 | `review.agents_may_merge` | `false`                                                                                                                                                                                                                            |
 | `risk.paths`              | `.github/workflows/**` is `high` ("CI workflows run with the repo's secrets."). `{**/*.md,docs/**}` is `low` ("Docs and copy.").                                                                                                   |
-| `files.protected`         | `.env*`, except `.env.example`, `.env.sample` and `.env.template`. The lockfiles `bun.lock`, `bun.lockb`, `package-lock.json`, `pnpm-lock.yaml`, `yarn.lock`, `uv.lock`, `poetry.lock`, `Pipfile.lock`, `Cargo.lock` and `go.sum`. |
+| `files.protected`         | `.env*`, except `.env.example`, `.env.sample` and `.env.template`. The lockfiles `bun.lock`, `bun.lockb`, `package-lock.json`, `pnpm-lock.yaml`, `yarn.lock`, `uv.lock`, `poetry.lock`, `Pipfile.lock`, `Cargo.lock` and `go.sum`. Gate files and lint configs are listed below. |
 
-The reasons shown for the protected files:
+The preset marks these entries with `gate = true`:
+
+- Gate files include `cagr.toml`, `.cagr/**`, `.githooks/**`, `.claude/settings.json`, `.codex/hooks.json`, `.github/workflows/**` and `.github/CODEOWNERS`.
+- Lint config patterns include `biome.json`, `biome.jsonc`, `eslint.config.*`, `.eslintrc*`, `ruff.toml`, `.ruff.toml`, `mypy.ini`, `.golangci.y*ml`, `clippy.toml` and `.oxlintrc.json`.
+
+The reasons shown for the other protected files:
 
 - `.env*`: "Env files hold real values. Do not edit them; tell the user which key is missing."
 - Lockfiles: "Lockfiles are written by the package manager. Change dependencies with its add or remove command instead."
@@ -211,10 +216,14 @@ See [Hooks and events](hooks-and-events.md) for when each list runs and how long
 
 | Key                  | Type           | Default             | Meaning                                                    |
 | -------------------- | -------------- | ------------------- | ---------------------------------------------------------- |
+| `gate_edit_env`      | string         | `"CAGR_ALLOW_GATE_EDIT"` | Name of the human-only environment variable. Set it to `1` before starting the agent session to allow gate edits. |
 | `protected`          | list of tables | `[]`                | Files agents may not edit.                                 |
 | `protected[].glob`   | string         | required            | A glob. Without a slash it matches the file name anywhere. |
 | `protected[].except` | list of globs  | `[]`                | Globs that stay editable.                                  |
+| `protected[].gate`   | boolean        | `false` | Opens this entry when the human-only switch is set. |
 | `protected[].reason` | string         | required, not empty | What to do instead. Shown to the agent.                    |
+
+With the switch set, entries with `gate = false` still apply. For example, the preset keeps env files and lockfiles protected.
 
 ## `[commands]`
 

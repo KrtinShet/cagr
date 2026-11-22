@@ -66,10 +66,16 @@ export const commandReasons = {
 };
 
 /** Whether the command needs the current branch or checkout to be judged. */
-export function needsGitContext(line: string) {
-	return simpleCommands(withoutHeredocBodies(line)).some(
-		(words) => programName(programWords(words)) === "git",
-	);
+export function needsGitContext(line: string, config: Config) {
+	return simpleCommands(withoutHeredocBodies(line)).some((words) => {
+		const program = programWords(words);
+		if (programName(program) !== "git") return false;
+		const args = program.slice(1);
+		return (
+			(config.git.worktree_only && changesMainCheckout(args)) ||
+			(config.git.protected_branch !== null && args.includes("push"))
+		);
+	});
 }
 
 export function commandFinding(
@@ -114,6 +120,11 @@ function simpleCommandFinding(
 		words.some((word) => word.startsWith(`${git.skip_env}=`))
 	)
 		return { id: "hook-skip", reason: commandReasons.skipHooks(config) };
+	if (words.some((word) => word.startsWith(`${config.files.gate_edit_env}=`)))
+		return {
+			id: "gate-edit-env",
+			reason: `${config.files.gate_edit_env} is for humans only. Tell the user which gate file you would change and why.`,
+		};
 	const program = programWords(words);
 	const manager = packageManagerFinding(program, config);
 	if (manager) return manager;

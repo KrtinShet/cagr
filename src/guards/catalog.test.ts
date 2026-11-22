@@ -30,7 +30,9 @@ test("every guard describes its configured policy and notes when off", () => {
 		expect(guard.summary).toBe(
 			guard.id === "agent-approval"
 				? "GitHub alias imports and aliases that bypass guards"
-				: null,
+				: guard.id === "gate-edit-env"
+					? "setting the human-only switch CAGR_ALLOW_GATE_EDIT"
+					: null,
 		);
 });
 
