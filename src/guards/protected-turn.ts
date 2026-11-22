@@ -29,6 +29,7 @@ import { protectedEntries, protectedEntry } from "./edit";
 
 type Blob = { mode: string; oid: string };
 type IndexEntry = Blob & { stage: string };
+type StatusPath = { workStatus: string; index: IndexEntry[] };
 type FileState = {
 	index: IndexEntry[];
 	/** Missing means the working copy matches the index. Null means deleted. */
@@ -36,10 +37,10 @@ type FileState = {
 };
 type Snapshot = {
 	root: string;
-	head: string | null;
+	head?: string | null;
 	branch: string | null;
 	entries: ProtectedFile[];
-	files: Record<string, FileState>;
+	files: Record<string, FileState> | null;
 };
 
 const hash = (bytes: string | Uint8Array) =>
@@ -148,7 +149,7 @@ async function status(
 		deadline,
 	);
 	let head: string | null = null;
-	const paths = new Map<string, { workStatus: string; index: IndexEntry[] }>();
+	const paths = new Map<string, StatusPath>();
 	for (const record of result?.split("\0") ?? []) {
 		if (record.startsWith("# branch.oid ")) {
 			const oid = record.slice(13);
@@ -220,6 +221,28 @@ async function workingCopy(
 	return `${info.mode & 0o111 ? "100755" : "100644"} ${hash(content)}`;
 }
 
+async function captureFiles(
+	root: string,
+	folder: string,
+	paths: Map<string, StatusPath>,
+) {
+	const files = await Promise.allSettled(
+		[...paths].map(async ([path, { workStatus, index }]) => {
+			const state: FileState = { index };
+			if (workStatus === "D") state.work = null;
+			else if (workStatus !== ".")
+				state.work = await workingCopy(
+					join(root, path),
+					join(folder, hash(path)),
+				);
+			return [path, state] as const;
+		}),
+	);
+	return files.every((entry) => entry.status === "fulfilled")
+		? Object.fromEntries(files.map((entry) => entry.value))
+		: null;
+}
+
 export async function rememberProtected(
 	file: string,
 	input: HookInput,
@@ -228,51 +251,80 @@ export async function rememberProtected(
 	const entries = protectedEntries(config.files);
 	if (!entries.length) return;
 	const deadline =
-		performance.now() + (input.event === "command.before" ? 42 : 250);
+		performance.now() + (input.event === "command.before" ? 40 : 250);
 	const directory = protectedStateDir(file);
-	await Promise.all(
+	const captures = await Promise.allSettled(
 		checkouts(input).map(async (root) => {
 			const target = join(directory, hash(root));
 			if (existsSync(target)) return;
-			const { head, paths } = await status(root, entries, deadline);
+			// Start both Git reads before a slow status can spend the command budget.
+			const startHead = git(
+				root,
+				["rev-parse", "--verify", "--quiet", "HEAD"],
+				deadline,
+				1,
+			).then(
+				(head) => head?.trim() ?? null,
+				() => undefined,
+			);
+			const startStatus = status(root, entries, deadline).catch(() => null);
 			await mkdir(directory, { recursive: true, mode: 0o700 });
 			const temporary = await mkdtemp(join(directory, ".capture-"));
 			try {
-				const files = await Promise.all(
-					[...paths].map(async ([path, { workStatus, index }]) => {
-						const state: FileState = { index };
-						if (workStatus === "D") state.work = null;
-						else if (workStatus !== ".")
-							state.work = await workingCopy(
-								join(root, path),
-								join(temporary, hash(path)),
-							);
-						return [path, state] as const;
-					}),
-				);
+				const previous = await startStatus;
+				const files = previous
+					? await captureFiles(root, temporary, previous.paths)
+					: null;
 				const snapshot: Snapshot = {
 					root,
-					head,
+					head: previous ? previous.head : await startHead,
 					branch: config.git.protected_branch,
 					entries,
-					files: Object.fromEntries(files),
+					files,
 				};
 				await writeFile(
 					join(temporary, "snapshot.json"),
 					JSON.stringify(snapshot),
 				);
-				// Parallel tools keep the first complete baseline for their checkout.
-				await rename(temporary, target).catch(
-					(error: NodeJS.ErrnoException) => {
-						if (error.code !== "EEXIST" && error.code !== "ENOTEMPTY")
-							throw error;
-					},
-				);
+				// Parallel tools must not replace the first baseline once a tool can write.
+				try {
+					await rename(temporary, target);
+				} catch (error) {
+					const code = (error as NodeJS.ErrnoException).code;
+					if (code === "EEXIST" || code === "ENOTEMPTY") return;
+					throw error;
+				}
+				if (snapshot.files === null)
+					return snapshot.head === undefined ? "no-head" : "head";
 			} finally {
 				await rm(temporary, { recursive: true, force: true });
 			}
 		}),
 	);
+	const incomplete = captures.filter(
+		(capture) => capture.status === "rejected" || capture.value,
+	);
+	if (incomplete.length)
+		return snapshotNotice(
+			file,
+			incomplete.some(
+				(capture) =>
+					capture.status === "rejected" || capture.value === "no-head",
+			),
+		);
+}
+
+export async function snapshotNotice(file: string, unavailable: boolean) {
+	const directory = protectedStateDir(file);
+	try {
+		await mkdir(directory, { recursive: true, mode: 0o700 });
+		await writeFile(join(directory, ".notice"), "", { flag: "wx" });
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "EEXIST") return;
+	}
+	return unavailable
+		? "cagr could not record a starting commit for some protected files. Review those changes manually before continuing."
+		: "cagr could not snapshot protected files. The turn-end check will use the starting commit and may flag earlier changes.";
 }
 
 function indexMatches(index: IndexEntry[], blob: Blob | undefined) {
@@ -371,7 +423,7 @@ async function protectedBranch(snapshot: Snapshot, deadline: number) {
 				1,
 			);
 			if (branch?.trim() === `refs/heads/${snapshot.branch}`)
-				return snapshot.head;
+				return snapshot.head ?? null;
 		}
 		return ref.trim();
 	}
@@ -384,6 +436,10 @@ async function violations(folder: string, deadline: number) {
 	);
 	const { root, entries } = snapshot;
 	if (!existsSync(join(root, ".git"))) return [];
+	if (snapshot.head === undefined)
+		return [
+			`- ${root}\n  cagr could not record the starting commit. Review protected-file changes in the worktree, index and commits before continuing.`,
+		];
 	const { head, paths: changed } = await status(root, entries, deadline);
 	let committedPaths: string[] = [];
 	if (snapshot.head !== head) {
@@ -409,7 +465,7 @@ async function violations(folder: string, deadline: number) {
 	}
 	const paths = [
 		...new Set([
-			...Object.keys(snapshot.files),
+			...Object.keys(snapshot.files ?? {}),
 			...changed.keys(),
 			...committedPaths,
 		]),
@@ -426,9 +482,10 @@ async function violations(folder: string, deadline: number) {
 			const old = oldTree.get(path);
 			const current = newTree.get(path);
 			const branch = branchTree.get(path);
-			const before = Object.hasOwn(snapshot.files, path)
-				? snapshot.files[path]
-				: undefined;
+			const before =
+				snapshot.files && Object.hasOwn(snapshot.files, path)
+					? snapshot.files[path]
+					: undefined;
 			const baseline = before ?? { index: old ? [{ ...old, stage: "0" }] : [] };
 			const change = changed.get(path);
 			const index =
@@ -451,6 +508,8 @@ async function violations(folder: string, deadline: number) {
 				(!committed || sameBlob(branch, current))
 			)
 				return null;
+			if (!snapshot.files)
+				return `- ${join(root, path)}\n  Review changes against ${snapshot.head ?? "the empty starting tree"}. Restore only changes made during this turn.`;
 			return `- ${join(root, path)}\n  ${restoration(snapshot, folder, path, baseline, old, committed)}`;
 		}),
 	);
@@ -475,7 +534,7 @@ export async function checkProtected(
 		? {
 				name: "Protected files",
 				ok: false,
-				output: `Put each file back as it was before this turn.\n${problems.join("\n")}`,
+				output: `Review the protected files below and restore any changes made during this turn.\n${problems.join("\n")}`,
 			}
 		: null;
 }
