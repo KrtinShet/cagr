@@ -139,7 +139,7 @@ test("a pnpm setting changed in pnpm-workspace.yaml is for a human", async () =>
 		workspace.replace("pad: 1.0.0", "pad: 1.1.0"),
 	);
 	expect(verdict?.message).toContain(
-		"pnpm-workspace.yaml changes pnpm settings other than packages, catalog and catalogs",
+		"pnpm-workspace.yaml differs from the last commit in pnpm settings other than packages, catalog and catalogs",
 	);
 });
 
@@ -177,19 +177,25 @@ test("temp folders a killed check left behind are removed after an hour", async 
 async function editedCheck(
 	path: string,
 	manager: LockfileStack["package_manager"],
-	committed: Record<string, string>,
+	committed:
+		| Record<string, string>
+		| ((root: string) => Record<string, string>),
 	edited: Record<string, string>,
+	after?: (repo: Awaited<ReturnType<typeof tempRepo>>) => Promise<unknown>,
 ) {
 	const repo = await tempRepo();
 	roots.add(repo.root);
-	const head = await repo.commit("chore: add project", committed);
+	const files =
+		typeof committed === "function" ? committed(repo.root) : committed;
+	const head = await repo.commit("chore: add project", files);
 	for (const [file, text] of Object.entries(edited))
 		await repo.write(file, text);
+	await after?.(repo);
 	return checkLockfile({
 		root: repo.root,
 		path,
 		stacks: [stack(manager)],
-		baseline: new TextEncoder().encode(committed[path] ?? ""),
+		baseline: new TextEncoder().encode(files[path] ?? ""),
 		head,
 		deadline: performance.now() + 10_000,
 	});
@@ -209,7 +215,7 @@ test("a packageManager changed during the turn is for a human", async () => {
 		},
 	);
 	expect(verdict?.message).toContain(
-		"packageManager field in package.json changed during the turn, from pnpm@11.22.0 to pnpm@10.0.0",
+		"packageManager field in package.json is pnpm@10.0.0, and in the last commit pnpm@11.22.0",
 	);
 });
 
@@ -242,7 +248,7 @@ test("a pnpmfile that loads a module from the repo is not run", async () => {
 		{ "pnpm-lock.yaml": `${lockfile}# edited\n` },
 	);
 	expect(verdict?.message).toContain(
-		".pnpmfile.cjs loads a module that is not a Node built-in",
+		"could not prove that .pnpmfile.cjs loads only Node built-ins",
 	);
 });
 
@@ -262,7 +268,7 @@ test("a pnpm setting changed in the root package.json is for a human", async () 
 		},
 	);
 	expect(verdict?.message).toContain(
-		"The pnpm field in package.json changed during the turn",
+		"The pnpm field in package.json differs from the last commit",
 	);
 });
 
@@ -291,3 +297,97 @@ test.skipIf(Bun.which("yarn") === null)(
 		expect(verdict?.message).toContain("could not check that yarn wrote");
 	},
 );
+
+test("a packageManager a human set but did not commit asks for a commit", async () => {
+	const lockfile = "lockfileVersion: '9.0'\n";
+	const verdict = await editedCheck(
+		"pnpm-lock.yaml",
+		"pnpm",
+		{ "package.json": '{ "name": "app" }\n', "pnpm-lock.yaml": lockfile },
+		{
+			"package.json": '{ "name": "app", "packageManager": "pnpm@11.22.0" }\n',
+			"pnpm-lock.yaml": `${lockfile}# edited\n`,
+		},
+	);
+	expect(verdict?.message).toContain(
+		"is pnpm@11.22.0, and in the last commit unset",
+	);
+	expect(verdict?.message).toContain("ask the user to commit it");
+});
+
+test("a pnpmfile that loads a package Bun bundles but Node does not is not run", async () => {
+	const lockfile = "lockfileVersion: '9.0'\n";
+	const verdict = await editedCheck(
+		"pnpm-lock.yaml",
+		"pnpm",
+		{
+			"package.json": '{ "name": "app" }\n',
+			".pnpmfile.cjs":
+				"const { fetch } = require('undici')\nmodule.exports = {}\n",
+			"pnpm-lock.yaml": lockfile,
+		},
+		{ "pnpm-lock.yaml": `${lockfile}# edited\n` },
+	);
+	expect(verdict?.message).toContain(
+		"could not prove that .pnpmfile.cjs loads only Node built-ins",
+	);
+});
+
+test("a pnpmfile a git clean filter makes look committed is refused", async () => {
+	const lockfile = "lockfileVersion: '9.0'\n";
+	const verdict = await editedCheck(
+		"pnpm-lock.yaml",
+		"pnpm",
+		{
+			"package.json": '{ "name": "app" }\n',
+			".pnpmfile.cjs": "module.exports = {}\n",
+			"pnpm-lock.yaml": lockfile,
+		},
+		{
+			".gitattributes": ".pnpmfile.cjs filter=keep\n",
+			".pnpmfile.cjs":
+				"module.exports = { hooks: { readPackage: (pkg) => pkg } }\n",
+			"pnpm-lock.yaml": `${lockfile}# edited\n`,
+		},
+		(repo) =>
+			repo.git(
+				"config",
+				"filter.keep.clean",
+				"git cat-file blob HEAD:.pnpmfile.cjs",
+			),
+	);
+	expect(verdict?.message).toContain(
+		".pnpmfile.cjs differs from the last commit",
+	);
+});
+
+test("a yarn-path that is not one file in the repo is refused", async () => {
+	const lockfile = "# yarn lockfile v1\n";
+	const verdict = await editedCheck(
+		"yarn.lock",
+		"yarn",
+		{
+			"package.json": '{ "name": "app", "version": "1.0.0" }\n',
+			".yarnrc": 'yarn-path "./"\n',
+			"yarn.lock": lockfile,
+		},
+		{ "yarn.lock": `${lockfile}\n` },
+	);
+	expect(verdict?.message).toContain("that is not one file in the repo");
+});
+
+test("an absolute yarn-path into the checkout is refused", async () => {
+	const lockfile = "# yarn lockfile v1\n";
+	const verdict = await editedCheck(
+		"yarn.lock",
+		"yarn",
+		(root) => ({
+			"package.json": '{ "name": "app", "version": "1.0.0" }\n',
+			".yarnrc": `yarn-path "${join(root, "tools/yarn.cjs")}"\n`,
+			"tools/yarn.cjs": "process.exit(3)\n",
+			"yarn.lock": lockfile,
+		}),
+		{ "yarn.lock": `${lockfile}\n` },
+	);
+	expect(verdict?.message).toContain("by its absolute path in this checkout");
+});

@@ -1,4 +1,4 @@
-import { existsSync, lstatSync } from "node:fs";
+import { existsSync, lstatSync, realpathSync } from "node:fs";
 import {
 	cp,
 	lstat,
@@ -11,7 +11,6 @@ import {
 	symlink,
 	writeFile,
 } from "node:fs/promises";
-import { builtinModules } from "node:module";
 import { homedir, tmpdir } from "node:os";
 import {
 	basename,
@@ -263,7 +262,7 @@ function workspaceSettings(path: string, text: string | null) {
 function workspaceFor(path: string, work: string | null, start: string | null) {
 	if (workspaceSettings(path, work) !== workspaceSettings(path, start))
 		throw new Refusal(
-			`${path} changes pnpm settings other than packages, catalog and catalogs. Those settings pick the store, overrides and which packages run build scripts, so a human makes that change. Restore the other settings to the last commit and ask the user to make the change.`,
+			`${path} differs from the last commit in pnpm settings other than packages, catalog and catalogs. Those settings pick the store, overrides and which packages run build scripts, so cagr uses only committed ones. If the turn changed them, restore them; if a human did, ask the user to commit them. Then stop again.`,
 		);
 	if (work === null || work === start) return work;
 	const working = topLevel(work);
@@ -408,21 +407,50 @@ async function copyInputs(
 			await writeFile(join(target, file), (await fromHead(file)) ?? "");
 		}
 	const yarnrc = decode(await fromHead(posix.join(project, ".yarnrc")));
-	const yarnPath =
-		yarnrc && /^\s*yarn-path\s+(?:"([^"]*)"|(\S+))/m.exec(yarnrc);
-	const release = yarnPath ? (yarnPath[1] ?? yarnPath[2] ?? "") : "";
+	const releases = [
+		...(yarnrc ?? "").matchAll(
+			/^\s*(?:yarn-path|"yarn-path")\s+(?:"([^"]*)"|(\S+))/gm,
+		),
+	].map((match) => match[1] ?? match[2] ?? "");
 	// Yarn 1 runs the release the committed .yarnrc names, so it must come from the commit too.
-	if (release && !isAbsolute(release)) {
-		const file = posix.normalize(posix.join(project, release));
-		if (file === ".." || file.startsWith("../"))
+	if (releases.length) {
+		const release = releases[0] ?? "";
+		const outside = relative(
+			root,
+			isAbsolute(release) && existsSync(release)
+				? realpathSync(release)
+				: release,
+		)
+			.split(sep)
+			.join("/");
+		if (
+			isAbsolute(release) &&
+			!(outside === ".." || outside.startsWith("../") || isAbsolute(outside))
+		)
 			throw new Refusal(
-				`The committed .yarnrc runs a yarn-path outside the repo, ${release}, which the check cannot take from the commit. Restore the lockfile and ask the user to run the yarn command.`,
+				`The committed .yarnrc names yarn-path ${release} by its absolute path in this checkout, where Yarn would run the working copy. Make it relative to the .yarnrc in a commit, or restore the lockfile and ask the user to run the yarn command.`,
 			);
-		const bytes = await fromHead(file);
-		await rm(join(target, file), { force: true, recursive: true });
-		if (bytes) {
-			await mkdir(dirname(join(target, file)), { recursive: true });
-			await writeFile(join(target, file), bytes);
+		const file = posix.normalize(posix.join(project, release));
+		if (
+			new Set(releases).size > 1 ||
+			(!isAbsolute(release) &&
+				(file === ".." ||
+					file.startsWith("../") ||
+					file.endsWith("/") ||
+					file === "." ||
+					file === project))
+		)
+			throw new Refusal(
+				`The committed .yarnrc names a yarn-path, ${release}, that is not one file in the repo, so the check cannot take it from the commit. Restore the lockfile and ask the user to run the yarn command.`,
+			);
+		// A release outside the checkout is part of the machine, like the yarn on PATH.
+		if (!isAbsolute(release)) {
+			const bytes = await fromHead(file);
+			await rm(join(target, file), { force: true, recursive: true });
+			if (bytes) {
+				await mkdir(dirname(join(target, file)), { recursive: true });
+				await writeFile(join(target, file), bytes);
+			}
 		}
 	}
 	return fromHead;
@@ -461,23 +489,37 @@ function workspaceRoot(repo: string, project: string) {
 	return project;
 }
 
-/** Whether a pnpmfile loads only Node built-ins. Anything else resolves to files in the temp folder or its parents, which the agent can write. */
+/** Node core modules. A fixed list, since the runtime running cagr (Bun) lists modules Node resolves from disk. */
+const nodeModules = new Set(
+	"assert assert/strict async_hooks buffer child_process cluster console constants crypto dgram diagnostics_channel dns dns/promises domain events fs fs/promises http http2 https inspector inspector/promises module net os path path/posix path/win32 perf_hooks process punycode querystring readline readline/promises repl stream stream/consumers stream/promises stream/web string_decoder sys timers timers/promises tls trace_events tty url util util/types v8 vm wasi worker_threads zlib".split(
+		" ",
+	),
+);
+
+/**
+ * Whether a pnpmfile loads only Node built-ins. Anything else resolves to
+ * files in the temp folder or its parents, which the agent can write. The
+ * pnpmfile is committed, so this reads ordinary code, not code written to
+ * hide a load: comments, strings and object keys are skipped.
+ */
 function builtinsOnly(text: string) {
-	const keywords =
-		(text.match(/\b(?:require|import)\b/g)?.length ?? 0) +
-		(text.match(/\bfrom\s*["']/g)?.length ?? 0);
-	let covered = 0;
-	for (const [load, keyword = "", name = ""] of text.matchAll(
-		/\b(require|import)\s*\(\s*["']([^"']+)["']\s*\)|\bimport\s+(?:[\w$*{},\s]+?\s+from\s+)?["']([^"']+)["']/g,
-	)) {
-		const module = (name || load.match(/["']([^"']+)["']/)?.[1] || "").replace(
-			/^node:/,
-			"",
-		);
-		if (!builtinModules.includes(module)) return false;
-		covered += keyword ? 1 : /\bfrom\b/.test(load) ? 2 : 1;
+	const quoted = /"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'|`(?:[^`\\]|\\.)*`/;
+	const code = text.replace(
+		new RegExp(`(${quoted.source})|\\/\\/[^\\n]*|\\/\\*[\\s\\S]*?\\*\\/`, "g"),
+		(match, string) => (string ? match : " "),
+	);
+	const load =
+		/\b(?:require|import)\s*\(\s*(["'])([^"']+)\1\s*\)|\b(?:import|export)\s+(?:[\w$*{},\s]+?\s+from\s+)?(["'])([^"']+)\3/g;
+	for (const match of code.matchAll(load)) {
+		const name = (match[2] ?? match[4] ?? "").replace(/^node:/, "");
+		if (!nodeModules.has(name)) return false;
 	}
-	return covered === keywords;
+	const rest = code
+		.replace(load, " ")
+		.replace(new RegExp(quoted.source, "g"), '""')
+		.replace(/\bimport\.meta\b/g, " ")
+		.replace(/([{,]\s*)(?:require|import)(\s*:)/g, "$1$2");
+	return !/\b(?:require|import)\b|\bfrom\s*""/.test(rest);
 }
 
 /**
@@ -487,47 +529,33 @@ function builtinsOnly(text: string) {
  */
 async function copyPnpmfiles(
 	root: string,
-	head: string | null,
 	workspace: string,
 	target: string,
-	deadline: number,
+	fromHead: (file: string) => Promise<Uint8Array | null>,
 ) {
-	const timeoutMs = () => Math.max(1, Math.floor(deadline - performance.now()));
 	for (const name of pnpmfiles) {
 		const file = posix.join(workspace, name);
 		const source = join(root, file);
 		const work = existsSync(source)
 			? new Uint8Array(await readFile(source))
 			: null;
-		const start = head
-			? await run(
-					["git", "rev-parse", "--verify", "--quiet", `${head}:${file}`],
-					root,
-					{
-						timeoutMs: timeoutMs(),
-					},
-				)
-			: null;
-		const hashed = work
-			? await run(
-					["git", "hash-object", `--path=${file}`, "--", source],
-					root,
-					{
-						timeoutMs: timeoutMs(),
-					},
-				)
-			: null;
-		const startOid = start?.ok ? start.stdout.trim() : null;
-		if (hashed && !hashed.ok)
-			throw new Error(`git hash-object failed: ${hashed.output.trim()}`);
-		if ((startOid ?? "") !== (hashed?.stdout.trim() ?? ""))
+		const start = await fromHead(file);
+		const committed = decode(start);
+		// Only a checkout with CRLF line ends may differ, since Git attributes and filters are agent-writable.
+		const checkedOut =
+			work !== null &&
+			committed !== null &&
+			(Buffer.from(work).equals(Buffer.from(start ?? [])) ||
+				(!committed.includes("\r") &&
+					decode(work) === committed.replaceAll("\n", "\r\n")));
+		if ((work !== null || start !== null) && !checkedOut)
 			throw new Refusal(
-				`${file} differs from the last commit. A pnpmfile runs inside pnpm and can rewrite any dependency, so changing it is a gate change for a human. Restore ${file} and ask the user to make the change.`,
+				`${file} differs from the last commit. A pnpmfile runs inside pnpm and can rewrite any dependency, so cagr runs only a committed one. If the turn changed it, restore it; if a human did, ask the user to commit it. Then stop again.`,
 			);
-		if (!work) continue;
-		if (!builtinsOnly(new TextDecoder().decode(work)))
+		if (!work || committed === null) continue;
+		if (!builtinsOnly(committed))
 			throw new Refusal(
-				`${file} loads a module that is not a Node built-in. In the check that module would come from the temp folder, which the agent can write, so cagr does not run it. Restore the lockfile and ask the user to run the pnpm command.`,
+				`cagr could not prove that ${file} loads only Node built-ins. In the check any other module would come from the temp folder, which the agent can write, so cagr does not run it. Restore the lockfile and ask the user to run the pnpm command.`,
 			);
 		await writeFile(join(target, file), work);
 	}
@@ -624,7 +652,7 @@ async function regenerate(
 		);
 		if (pinned !== working)
 			throw new Refusal(
-				`The packageManager field in package.json changed during the turn, from ${pinned ?? "none"} to ${working ?? "none"}. It picks the version Corepack runs, so a human makes that change. Restore it and ask the user to make the change.`,
+				`The packageManager field in package.json is ${working ?? "unset"}, and in the last commit ${pinned ?? "unset"}. It picks the version Corepack runs, so cagr uses only a committed one. If the turn changed it, restore it; if a human did, ask the user to commit it. Then stop again.`,
 			);
 		if (manager === "yarn" && /^yarn@(?:[2-9]|\d\d)/.test(pinned ?? ""))
 			throw new Refusal(yarnBerry);
@@ -653,7 +681,7 @@ async function regenerate(
 			const relativeRoot =
 				relative(repo, workspace).split(sep).join("/") || ".";
 			env.NPM_CONFIG_WORKSPACE_DIR = workspace;
-			await copyPnpmfiles(root, head, relativeRoot, repo, deadline);
+			await copyPnpmfiles(root, relativeRoot, repo, fromHead);
 			const manifest = posix.join(relativeRoot, "package.json");
 			const settings = (text: string | null) => {
 				try {
@@ -669,7 +697,7 @@ async function regenerate(
 				settings(decode(await fromHead(manifest)))
 			)
 				throw new Refusal(
-					`The pnpm field in ${manifest} changed during the turn. It holds pnpm settings such as overrides and which packages run build scripts, so a human makes that change. Restore it and ask the user to make the change.`,
+					`The pnpm field in ${manifest} differs from the last commit. It holds pnpm settings such as overrides and which packages run build scripts, so cagr uses only committed ones. If the turn changed it, restore it; if a human did, ask the user to commit it. Then stop again.`,
 				);
 		}
 		if (spec.yarnrc && existsSync(join(folderOf, ".yarnrc")))

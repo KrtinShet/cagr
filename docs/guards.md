@@ -148,7 +148,9 @@ It blocks, with the fix, when:
 - The check cannot run: the manager is missing, it fails, it needs a package that is not in its cache, or it runs out of time. Run `<manager> install` so the cache has every package, then stop again, or ask the user to make the change.
 - The index or a commit holds a different version of the lockfile than the working copy. Stage and commit what the manager wrote.
 - The turn changed a pnpmfile, the `packageManager` field, the root `package.json` `pnpm` field, or a `pnpm-workspace.yaml` key other than `packages`, `catalog` and `catalogs`, or wrote a top-level key twice. Those are gate changes: a human makes them.
-- The committed pnpmfile loads a module that is not a Node built-in, or the committed `.yarnrc` names a `yarn-path` outside the repo. The user runs the command.
+- The committed pnpmfile loads a module that is not a Node built-in, or the committed `.yarnrc` names a `yarn-path` that is not one file in the repo. The user runs the command.
+
+A blocked gate change says to restore the file if the turn changed it, or to ask the user to commit it if a human did, then stop again.
 
 `bun.lockb`, `uv.lock`, `poetry.lock`, `Pipfile.lock`, `Cargo.lock` and `go.sum` keep the plain protected-file check: any change made during the turn blocks.
 
