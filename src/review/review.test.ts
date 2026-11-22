@@ -373,7 +373,7 @@ describe("review", () => {
 		expect(again.skipped).toContain("Commit a fix");
 		expect(again.skipped).toContain("cagr review answer f1");
 		expect(refused.calls).toEqual([]);
-		// --full still runs, but the verifier does not judge f1 a third time here.
+		// --full still runs, but the verifier judges neither f1 (spent here) nor f2 (reported here).
 		const full = fakeAgent({
 			finder: () => ({ findings: [] }),
 			verifier: () => ({ previous: [{ id: "f1", fixed: true }] }),
@@ -384,11 +384,54 @@ describe("review", () => {
 			full: true,
 		});
 		expect(forced.round?.scope).toBe("full");
-		expect(full.calls.at(-1)?.prompt).not.toContain("f1 src/a.ts");
+		expect(full.calls.map((call) => call.schema)).toEqual([finderSchema]);
 		expect(
 			forced.record.findings.find((entry) => entry.id === "f1")?.status,
 		).toBe("open");
 		expect(forced.passed).toBe(false);
+	});
+
+	test("a finding is never judged at the commit that reported it, even by --full or after a reset", async () => {
+		const repo = await branchRepo();
+		const { agent } = fakeAgent({
+			finder: (_, call) => ({ findings: call === 0 ? [candidate()] : [] }),
+			verifier: () => ({ previous: [{ id: "f1", fixed: false }] }),
+		});
+		const options = { cwd: repo.root, effort: "quick" as const };
+		const first = await review(repo.config, { ...options, agent });
+		const reported = first.round?.head ?? "";
+		const lenient = fakeAgent({
+			finder: () => ({ findings: [] }),
+			verifier: () => ({ previous: [{ id: "f1", fixed: true }] }),
+		});
+		const forced = await review(repo.config, {
+			...options,
+			agent: lenient.agent,
+			full: true,
+		});
+		expect(forced.round?.scope).toBe("full");
+		expect(forced.passed).toBe(false);
+		await repo.commit("fix: first attempt", { "src/a.ts": "broken\n" });
+		expect((await review(repo.config, { ...options, agent })).passed).toBe(
+			false,
+		);
+		await repo.git("reset", "-q", "--hard", reported);
+		const reset = await review(repo.config, {
+			...options,
+			agent: lenient.agent,
+		});
+		expect(reset.round?.scope).toBe("full");
+		expect(reset.passed).toBe(false);
+		expect(lenient.calls.map((call) => call.schema)).toEqual([
+			finderSchema,
+			finderSchema,
+		]);
+		const again = await review(repo.config, {
+			...options,
+			agent: lenient.agent,
+		});
+		expect(again.skipped).toContain("Commit a fix");
+		expect(again.passed).toBe(false);
 	});
 
 	test("past the cap, a finder round still verifies open nits", async () => {

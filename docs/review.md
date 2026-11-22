@@ -109,7 +109,7 @@ A cycle starts with a full round. If the last reviewed commit is not an ancestor
 
 `cagr review --full` forces a full round of the whole branch, even at a commit already reviewed. It also starts a new cycle. More review never weakens the gate.
 
-If the verifier judged an earlier finding not fixed and you think it was wrong, run `cagr review` again at the same commit: it runs the verifier once more on the findings from earlier rounds. That recheck runs once per finding per commit. After it, `cagr review` at that commit does nothing and says to commit a fix or answer the finding (`cagr review answer <id> --wrong "<why>"`). `--full` still runs a full round there, but the verifier does not judge a finding a third time at the same commit. A finding reported at this commit needs a fix or an answer.
+If the verifier judged an earlier finding not fixed and you think it was wrong, run `cagr review` again at the same commit: it runs the verifier once more on the findings from earlier rounds. That recheck runs once per finding per commit. After it, `cagr review` at that commit does nothing and says to commit a fix or answer the finding (`cagr review answer <id> --wrong "<why>"`). `--full` still runs a full round there, but the verifier does not judge a finding a third time at the same commit, and never judges a finding at the commit that reported it. A finding reported at this commit needs a fix or an answer.
 
 With `[review] status = true`, the pre-push hook and `cagr review answer` send `cagr/review` for the commit:
 

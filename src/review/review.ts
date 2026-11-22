@@ -60,6 +60,8 @@ export type ReviewOutcome = {
 	round: Round | null;
 	found: ReviewFinding[];
 	fixed: ReviewFinding[];
+	/** Important findings not closed at the reviewed head, including fixes judged on a commit it does not contain. */
+	open: ReviewFinding[];
 	passed: boolean;
 	file: string | null;
 	/** Set when there was nothing to review, with why. */
@@ -131,7 +133,11 @@ export async function review(
 	let scope: Round["scope"] = "scan";
 	let recheckBefore: number | null = null;
 	let branchFiles: string[] = [];
-	let reach: Reach = () => false;
+	const reach: Reach = scanning
+		? () => false
+		: await reachFrom(record, head, cwd);
+	const openNow = () =>
+		scanning ? blocking(record) : unresolved(record, head, reach);
 	if (!scanning) {
 		const baseRef = await resolveBase(baseName, cwd);
 		mergeBase = await gitOut(["merge-base", baseRef, head], cwd);
@@ -139,9 +145,9 @@ export async function review(
 			return skippedOutcome(
 				record,
 				file,
+				openNow(),
 				`No commits on ${branch} beyond ${baseName}, so there is nothing to review.`,
 			);
-		reach = await reachFrom(record, head, cwd);
 		const plan = await planRound(record, {
 			head,
 			mergeBase,
@@ -151,7 +157,8 @@ export async function review(
 			cwd,
 			progress,
 		});
-		if (typeof plan === "string") return skippedOutcome(record, file, plan);
+		if (typeof plan === "string")
+			return skippedOutcome(record, file, openNow(), plan);
 		({ from, scope, recheckBefore } = plan);
 		branchFiles = (await gitOut(["diff", "--name-only", mergeBase, head], cwd))
 			.split("\n")
@@ -217,7 +224,7 @@ export async function review(
 			.filter((finding) => finding.status === "fixed")
 			.map((finding) => finding.id),
 		spent: record.findings
-			.filter((finding) => checksAt(record, finding.id, head) >= 2)
+			.filter((finding) => judgedAt(record, finding, head))
 			.map((finding) => finding.id),
 		capped:
 			scope !== "full" &&
@@ -242,7 +249,7 @@ export async function review(
 	try {
 		agent = options.agent ?? pickAgent(config.review.reviewer);
 	} catch (error) {
-		return failed(record, round, file, error as Error);
+		return failed(record, round, file, openNow, error as Error);
 	}
 	round.reviewer = agent.name;
 	const ask = (prompt: string, schema: object) =>
@@ -328,22 +335,21 @@ export async function review(
 		round.summary =
 			scope === "verify" ? "Checked earlier findings." : countLine(found);
 		if (!scanning) record.rounds.push(round);
-		const passed =
-			(scanning ? blocking(record) : unresolved(record, head, reach)).length ===
-			0;
+		const open = openNow();
 		if (file) writeRecord(file, record);
 		return {
 			record,
 			round,
 			found,
 			fixed,
-			passed,
+			open,
+			passed: open.length === 0,
 			file,
 			skipped: null,
 		};
 	} catch (error) {
 		if (!(error instanceof ReviewerError)) throw error;
-		return failed(record, round, file, error);
+		return failed(record, round, file, openNow, error);
 	}
 }
 
@@ -363,12 +369,20 @@ type Plan = {
 	recheckBefore: number | null;
 };
 
-/** How many rounds that ran at `head` gave the verifier the finding `id`. */
-function checksAt(record: ReviewRecord, id: string, head: string) {
-	return record.rounds.filter(
-		(round) =>
-			!round.error && round.head === head && round.verified?.includes(id),
-	).length;
+/**
+ * Whether the verifier may not judge `finding` again at `head`. A finding
+ * reported at this commit needs a fix or an answer, so it is never judged
+ * here. Otherwise it gets two verdicts per commit: the first review there and
+ * one recheck.
+ */
+function judgedAt(record: ReviewRecord, finding: ReviewFinding, head: string) {
+	const ran = record.rounds.filter(
+		(round) => !round.error && round.head === head,
+	);
+	return (
+		ran.some((round) => round.n === finding.round) ||
+		ran.filter((round) => round.verified?.includes(finding.id)).length >= 2
+	);
 }
 
 /**
@@ -421,12 +435,10 @@ async function planRound(
 		);
 		if (earlier.length === 0)
 			return `${head.slice(0, 7)} was already reviewed in round ${lastOk.n}.`;
-		const spent = earlier.filter(
-			(finding) => checksAt(record, finding.id, head) >= 2,
-		);
+		const spent = earlier.filter((finding) => judgedAt(record, finding, head));
 		if (spent.length === earlier.length) {
 			const ids = spent.map((finding) => finding.id).join(", ");
-			return `The verifier already checked ${ids} again at ${head.slice(0, 7)}, so \`cagr review\` does not check ${spent.length === 1 ? "it" : "them"} a third time at this commit. Commit a fix and run \`cagr review\`. ${answerHint(spent[0]?.id ?? "f1")}`;
+			return `The verifier already judged ${ids} at ${head.slice(0, 7)} as often as it may, so \`cagr review\` does not judge ${spent.length === 1 ? "it" : "them"} again at this commit. Commit a fix and run \`cagr review\`. ${answerHint(spent[0]?.id ?? "f1")}`;
 		}
 		return { from: first.from, scope: "verify", recheckBefore: first.n };
 	}
@@ -441,6 +453,7 @@ function failed(
 	record: ReviewRecord,
 	round: Round,
 	file: string | null,
+	openNow: () => ReviewFinding[],
 	error: Error,
 ): ReviewOutcome {
 	round.error = error.message;
@@ -452,6 +465,7 @@ function failed(
 		round,
 		found: [],
 		fixed: [],
+		open: openNow(),
 		passed: false,
 		file,
 		skipped: null,
@@ -461,6 +475,7 @@ function failed(
 function skippedOutcome(
 	record: ReviewRecord,
 	file: string | null,
+	open: ReviewFinding[],
 	why: string,
 ): ReviewOutcome {
 	return {
@@ -468,7 +483,8 @@ function skippedOutcome(
 		round: null,
 		found: [],
 		fixed: [],
-		passed: blocking(record).length === 0,
+		open,
+		passed: open.length === 0,
 		file,
 		skipped: why,
 	};

@@ -125,7 +125,7 @@ function readText(path: string) {
 	}
 }
 
-/** Reads the branch's review record: two quick git calls (three when the command names a branch) and one file, to stay inside the command budget. */
+/** Reads the branch's review record: two quick git calls (three when the command names a branch), one file, and one parallel ancestry check per commit where a finding was judged fixed, to stay inside the command budget. */
 async function reviewGate(
 	command: string,
 	cwd: string,

@@ -31,7 +31,7 @@ export function reviewReport(
 	maxRounds: number,
 ): string {
 	if (outcome.skipped) {
-		const open = blocking(outcome.record);
+		const open = outcome.open;
 		return open.length > 0
 			? `${outcome.skipped}\n\nStill open:\n${open.map(block).join("\n")}\n\nFix them, commit, and run \`cagr review\` again. ${answerHint(open[0]?.id ?? "f1")}`
 			: outcome.skipped;
@@ -39,7 +39,7 @@ export function reviewReport(
 	const round = outcome.round;
 	if (round?.error) {
 		const gate =
-			blocking(outcome.record).length === 0
+			outcome.open.length === 0
 				? "The pull request gate will tell the human this commit went out unreviewed."
 				: "Earlier Important findings still hold the pull request gate.";
 		return `The reviewer could not run: ${round.error}\n\n${gate} Fix the reviewer and run \`cagr review\` again.\n\n${reviewPreparation}`;
@@ -61,7 +61,7 @@ export function reviewReport(
 		sections.push(
 			`Pre-existing (not from this branch, optional):\n${of("pre-existing").map(block).join("\n")}`,
 		);
-	const open = blocking(outcome.record);
+	const open = outcome.open;
 	const older = open.filter((finding) => !outcome.found.includes(finding));
 	if (older.length > 0)
 		sections.push(
