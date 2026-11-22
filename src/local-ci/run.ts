@@ -28,7 +28,7 @@ const localRun: typeof run = (argv, cwd, options) =>
 	run(argv, cwd, {
 		...options,
 		processGroup: process.platform !== "win32",
-		env: loginEnv,
+		env: { ...options?.env, ...loginEnv },
 	});
 
 type Runtime = {

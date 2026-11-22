@@ -3,6 +3,7 @@ import { join, relative, resolve } from "node:path";
 import { checkChanges } from "./changes/check";
 import type { Config } from "./config/schema";
 import { gitContext } from "./git";
+import { gitEnv } from "./git-hooks";
 import { missingSections } from "./guards/github";
 import { checkSuppressions } from "./guards/lint-suppression";
 import { branchFinding, commitMessageFinding } from "./guards/names";
@@ -10,7 +11,7 @@ import { stackFiles, tidy, withFiles } from "./hook/stack-files";
 import { classify, riskReport } from "./risk";
 import { type LayoutRule, layoutFindings } from "./rules/layout";
 import { findInFiles, loadRuleSet, RuleError } from "./rules/rules";
-import { run, runShell } from "./run";
+import { type RunResult, run, runShell } from "./run";
 import { SyncError, sync } from "./sync";
 
 export type Annotation = { file?: string; line?: number; message: string };
@@ -231,6 +232,11 @@ export async function ci(
 		);
 	checks.push(check("Edit checks", editProblems));
 
+	const verifyCommands = config.git.pre_push.filter((command) =>
+		command.trim(),
+	);
+	const verifyOptions = { timeoutMs: 1_800_000, env: gitEnv };
+	const turnEndResults = new Map<string, RunResult>();
 	const commands = new Map<string, string[]>();
 	for (const stack of config.stack) {
 		const paths = stackFiles(stack, absolute, config);
@@ -240,9 +246,14 @@ export async function ci(
 	const endProblems: string[] = [];
 	for (const [command, paths] of commands) {
 		if (command.includes("{files}") && paths.length === 0) continue;
-		const result = await runCheck(withFiles(command, paths), cwd, {
-			timeoutMs: 1_800_000,
-		});
+		const expanded = withFiles(command, paths);
+		const shared = verifyCommands.includes(expanded);
+		const result = await runCheck(
+			expanded,
+			cwd,
+			shared ? verifyOptions : { timeoutMs: verifyOptions.timeoutMs },
+		);
+		if (shared) turnEndResults.set(expanded, result);
 		if (!result.ok)
 			endProblems.push(`${command}\n${tidy(result.output, 4000)}`);
 	}
@@ -314,6 +325,16 @@ export async function ci(
 					: [],
 			),
 		);
+	}
+	if (verifyCommands.length > 0) {
+		const problems: string[] = [];
+		for (const command of verifyCommands) {
+			const result =
+				turnEndResults.get(command) ??
+				(await runCheck(command, cwd, verifyOptions));
+			if (!result.ok) problems.push(`${command}\n${tidy(result.output, 4000)}`);
+		}
+		checks.push(check("Verify", problems));
 	}
 	if (await out(["git", "status", "--porcelain", "-z"], cwd))
 		checks.push(

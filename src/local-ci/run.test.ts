@@ -10,7 +10,13 @@ import { tempRepo } from "../test/repo";
 import { watchPaths } from "./cache";
 import { localCi } from "./run";
 
-async function fixture(install?: string) {
+async function fixture({
+	install,
+	prePush,
+}: {
+	install?: string;
+	prePush?: string;
+} = {}) {
 	const repo = await tempRepo();
 	await repo.write(
 		"cagr.toml",
@@ -18,6 +24,7 @@ async function fixture(install?: string) {
 enabled = []
 [git]
 commit_message = "conventional"
+${prePush ? `pre_push = ${JSON.stringify(prePush)}` : ""}
 [review]
 pr_sections = ["Testing"]
 [ci]
@@ -50,6 +57,7 @@ paths = ["**"]
 		paths,
 		config,
 		source,
+		base,
 		head,
 		clean() {
 			rmSync(home, { recursive: true, force: true });
@@ -63,6 +71,9 @@ const noFindings = JSON.stringify({
 	type: "result",
 	structured_output: { summary: "Looks good.", findings: [], fixed: [] },
 });
+
+const failingVerify =
+	'test -n "$PATH" && test -n "$HOME" && git rev-parse --verify origin/target && exit 17';
 
 function runtime(
 	f: Awaited<ReturnType<typeof fixture>>,
@@ -138,6 +149,7 @@ function runtime(
 			return run(argv, cwd, options);
 		}
 		if (argv[0] === "claude") return result(true, noFindings);
+		if (argv[2] === failingVerify) return run(argv, cwd, options);
 		if (argv[0] === "sh")
 			return result(!settings.installFails, "install output");
 		throw new Error(`Unexpected command: ${argv.join(" ")}`);
@@ -248,7 +260,7 @@ test("a changed PR head is never checked out or given a status for stale metadat
 });
 
 test("an install failure posts failed checks, still reviews, and cleans up both worktrees", async () => {
-	const f = await fixture("custom install");
+	const f = await fixture({ install: "custom install" });
 	try {
 		const r = runtime(f, { installFails: true });
 		expect(await localCi(f.config, f.paths, 3, r)).toBe(false);
@@ -264,6 +276,22 @@ test("an install failure posts failed checks, still reviews, and cleans up both 
 		expect(
 			readdirSync(f.paths.cache).filter((name) => name.startsWith("pr-")),
 		).toEqual([]);
+	} finally {
+		f.clean();
+	}
+});
+
+test("a failing Verify command sees the PR base and posts failed checks", async () => {
+	const f = await fixture({ prePush: failingVerify });
+	try {
+		const r = runtime(f);
+		expect(await localCi(f.config, f.paths, 3, r)).toBe(false);
+		expect(r.lines.join("\n")).toContain(
+			`FAIL Verify\n  ${failingVerify}\n  ${f.base}`,
+		);
+		expect(
+			r.calls.find((args) => args.includes("context=cagr/checks")),
+		).toContain("state=failure");
 	} finally {
 		f.clean();
 	}

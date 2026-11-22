@@ -56,7 +56,7 @@ export function parsePushLines(stdin: string): PushedRef[] {
 }
 
 // Git sets these for hooks; a pre_push command that runs git in another repo must not inherit them.
-const gitEnv = {
+export const gitEnv = {
 	GIT_DIR: undefined,
 	GIT_WORK_TREE: undefined,
 	GIT_INDEX_FILE: undefined,
