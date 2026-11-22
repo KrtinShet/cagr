@@ -93,12 +93,12 @@ export async function reachFrom(
 				);
 				if (!fix) return;
 				const changed = await run(
-					["git", "diff", "--name-only", fix.from, fix.head],
+					["git", "diff", "--name-only", "-z", fix.from, fix.head],
 					cwd,
 				);
 				if (!changed.ok) return;
 				const files = [
-					...changed.stdout.split("\n").filter(Boolean),
+					...changed.stdout.split("\0").filter(Boolean),
 					...(finding.file ? [finding.file] : []),
 				];
 				if (files.length === 0) return;

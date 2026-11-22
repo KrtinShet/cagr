@@ -762,7 +762,7 @@ describe("verdicts on earlier findings", () => {
 			expect(outcome.round?.scope).toBe("diff");
 			expect(outcome.passed).toBe(false);
 			expect(reviewReport(outcome, 2)).toContain(
-				"f1 is still open: no commit since the last check changed any reviewed file, so the verifier does not judge it again. Fix it (src/a.ts), or answer it with `cagr review answer f1",
+				"f1 is still open: no commit since the last check changed any reviewed file. Fix it (src/a.ts), or answer it with `cagr review answer f1",
 			);
 			// The recheck at the same commit is no reroll either.
 			const again = await review(repo.config, { cwd: repo.root, agent });
@@ -790,11 +790,27 @@ describe("verdicts on earlier findings", () => {
 		).toBe("deny");
 	});
 
-	test("a commit that changes another file, such as a new test, gets a verdict", async () => {
+	test("a commit that touches only other files gets no verdict, unless its message names the finding", async () => {
 		const { repo, emptyCommit } = await reported();
 		await emptyCommit();
 		await review(repo.config, { cwd: repo.root, agent: noVerdictOnF1().agent });
-		await repo.commit("test(auth): cover an expired session", {
+		// A commit for another finding does not spend f1's verdicts.
+		await repo.commit("feat(auth): add logout", {
+			"src/b.ts": "export const logout = () => {};\n",
+		});
+		const other = noVerdictOnF1();
+		const unrelated = await review(repo.config, {
+			cwd: repo.root,
+			agent: other.agent,
+		});
+		expect(unrelated.record.findings[0]?.verdicts).toBeUndefined();
+		expect(reviewReport(unrelated, 2)).toContain(
+			"f1 is still open: no commit since the last check touched src/a.ts. Fix it, or answer it with `cagr review answer f1",
+		);
+		expect(reviewReport(unrelated, 2)).toContain(
+			"If the fix is in another file, name f1 in the commit message.",
+		);
+		await repo.commit("test(auth): cover an expired session (F1)", {
 			"src/a.test.ts": "test('expired session', () => {});\n",
 		});
 		const { agent, calls } = fakeAgent({
@@ -919,7 +935,7 @@ describe("verdicts on earlier findings", () => {
 		});
 		const options = { cwd: repo.root, effort: "quick" as const };
 		const first = await review(repo.config, { ...options, agent });
-		await repo.commit("fix: check the session in the caller", {
+		await repo.commit("fix: check the session in the caller (f1)", {
 			"src/b.ts": "if (!user) return;\n",
 		});
 		expect((await review(repo.config, { ...options, agent })).passed).toBe(

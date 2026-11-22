@@ -427,11 +427,12 @@ function judgedAt(record: ReviewRecord, finding: ReviewFinding, head: string) {
 /**
  * Open findings the verifier may not judge at `head`, each with why. A verdict
  * on unchanged code is only a reroll of the model, so a finding is judged
- * again only when a commit since its last verdict (or since the round that
- * reported it) changed a reviewed file, and at most `maxVerdicts` times. Any
- * file counts, not only the finding's: a fix can be a new test or a change in
- * a caller, and the cap bounds the rest. A recheck at the commit of its last
- * verdict is left to `judgedAt`. A git error leaves the finding to the verifier.
+ * again only when the commits since its last verdict (or since the round that
+ * reported it) changed its file, or changed a reviewed file and name its id in
+ * a message (a fix in a test or a caller). Commits for other findings leave it
+ * alone, so they do not spend its `maxVerdicts`. A recheck at the commit of
+ * its last verdict is left to `judgedAt`. A git error leaves the finding to
+ * the verifier.
  */
 async function heldBack(
 	record: ReviewRecord,
@@ -440,41 +441,45 @@ async function heldBack(
 	cwd: string,
 ) {
 	const held = new Map<string, string>();
+	const quiet = (from: string, paths: string[]) =>
+		run(["git", "diff", "--quiet", from, head, "--", ...paths], cwd);
+	const reviewed = [".", ...skip.map((glob) => `:(exclude,glob)${glob}`)];
 	await Promise.all(
 		record.findings
 			.filter((finding) => finding.status === "open")
 			.map(async (finding) => {
+				const { id, file } = finding;
 				if ((finding.verdicts ?? 0) >= maxVerdicts) {
 					held.set(
-						finding.id,
-						`${finding.id} is still open: the verifier judged it ${maxVerdicts} times, the most it may. Answer it with ${answerCommand(finding.id)}.`,
+						id,
+						`${id} is still open: the verifier judged it ${maxVerdicts} times, the most it may. Answer it with ${answerCommand(id)}.`,
 					);
 					return;
 				}
 				const last = record.rounds.findLast(
 					(round) =>
 						!round.error &&
-						(round.n === finding.round || round.verified?.includes(finding.id)),
+						(round.n === finding.round || round.verified?.includes(id)),
 				);
 				if (!last || last.head === head) return;
-				const unchanged = await run(
-					[
-						"git",
-						"diff",
-						"--quiet",
-						last.head,
-						head,
-						"--",
-						".",
-						...skip.map((glob) => `:(exclude,glob)${glob}`),
-					],
+				if ((await quiet(last.head, reviewed)).ok) {
+					held.set(
+						id,
+						`${id} is still open: no commit since the last check changed any reviewed file. Fix it${file ? ` (${file})` : ""}, or answer it with ${answerCommand(id)}.`,
+					);
+					return;
+				}
+				if (!file || !(await quiet(last.head, [`:(literal)${file}`])).ok)
+					return;
+				const log = await run(
+					["git", "log", "--format=%B", `${last.head}..${head}`],
 					cwd,
 				);
-				if (unchanged.ok)
-					held.set(
-						finding.id,
-						`${finding.id} is still open: no commit since the last check changed any reviewed file, so the verifier does not judge it again. Fix it${finding.file ? ` (${finding.file})` : ""}, or answer it with ${answerCommand(finding.id)}.`,
-					);
+				if (!log.ok || new RegExp(`\\b${id}\\b`, "i").test(log.stdout)) return;
+				held.set(
+					id,
+					`${id} is still open: no commit since the last check touched ${file}. Fix it, or answer it with ${answerCommand(id)}. If the fix is in another file, name ${id} in the commit message.`,
+				);
 			}),
 	);
 	return held;
