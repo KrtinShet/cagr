@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { existsSync } from "node:fs";
+import { existsSync, lstatSync } from "node:fs";
 import {
 	cp,
 	lstat,
@@ -227,6 +227,8 @@ async function copyInputs(
 			filter: (from) => {
 				if (performance.now() > deadline)
 					throw new Error(`Copying the local package ${ref} ran out of time.`);
+				// A copied symlink could send later writes outside the temp folder.
+				if (lstatSync(from).isSymbolicLink()) return false;
 				// Config and lockfiles come from the starting commit and the turn's baseline, never a local package copy.
 				const name = basename(from).toLowerCase();
 				return !(
@@ -281,13 +283,24 @@ async function regenerate(
 		if (spec.yarnrc === 1 && existsSync(join(project, ".yarnrc")))
 			argv.push("--use-yarnrc", join(project, ".yarnrc"));
 		if (spec.yarnrc === 2) {
+			const rc = join(project, ".yarnrc.yml");
+			const settings = existsSync(rc)
+				? (Bun.YAML.parse(await readFile(rc, "utf8")) as {
+						yarnPath?: unknown;
+					} | null)
+				: null;
+			const release =
+				typeof settings?.yarnPath === "string" && !isAbsolute(settings.yarnPath)
+					? join(project, settings.yarnPath)
+					: null;
+			// Run the committed release directly, so no launcher reads rc files from the temp folder's parents.
+			if (release && existsSync(release)) {
+				argv.splice(0, 1, "node", release);
+				env.YARN_IGNORE_PATH = "1";
+			}
 			// A name nobody else knows, so only the committed config is read.
 			env.YARN_RC_FILENAME = `.cagr-yarnrc-${randomUUID()}.yml`;
-			if (existsSync(join(project, ".yarnrc.yml")))
-				await rename(
-					join(project, ".yarnrc.yml"),
-					join(project, env.YARN_RC_FILENAME),
-				);
+			if (existsSync(rc)) await rename(rc, join(project, env.YARN_RC_FILENAME));
 		}
 		const timeoutMs = Math.floor(deadline - performance.now());
 		if (timeoutMs <= 0) throw new Error("No time was left to run it.");
