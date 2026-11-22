@@ -14,17 +14,20 @@ import {
 /** Runs `gh` with args, optional stdin, and returns stdout. Injected in tests. */
 export type Gh = (args: string[], stdin?: string) => Promise<string>;
 
-export const ghCli: Gh = async (args, stdin) => {
-	const result = await run(["gh", ...args], process.cwd(), {
-		stdin,
-		timeoutMs: 60_000,
-	});
-	if (!result.ok)
-		throw new Error(
-			`gh ${args.slice(0, 3).join(" ")} failed: ${result.output.trim().slice(0, 400)}`,
-		);
-	return result.stdout;
-};
+export const ghAt =
+	(cwd: string, runner = run): Gh =>
+	async (args, stdin) => {
+		const result = await runner(["gh", ...args], cwd, {
+			stdin,
+			timeoutMs: 60_000,
+		});
+		if (!result.ok)
+			throw new Error(
+				`gh ${args.slice(0, 3).join(" ")} failed: ${result.output.trim().slice(0, 400)}`,
+			);
+		return result.stdout;
+	};
+export const ghCli: Gh = (args, stdin) => ghAt(process.cwd())(args, stdin);
 
 const marker = "cagr-review";
 const stateLine = /<!-- cagr-review ([A-Za-z0-9+/=]+) -->/;
@@ -88,8 +91,12 @@ type Comment = { id: number; body: string; login: string };
 export const isWorkflowBot = (login: string | null | undefined) =>
 	login?.replace(/\[bot\]$/, "") === "github-actions";
 
-// Only the workflow's own comment counts: anyone can post a comment that carries the marker.
-async function stateComment(gh: Gh, pr: PullRequest): Promise<Comment | null> {
+// Anyone can post a comment that carries the marker.
+async function stateComment(
+	gh: Gh,
+	pr: PullRequest,
+	isReviewer: (login: string | null | undefined) => boolean,
+): Promise<Comment | null> {
 	const out = await gh([
 		"api",
 		"--paginate",
@@ -103,7 +110,7 @@ async function stateComment(gh: Gh, pr: PullRequest): Promise<Comment | null> {
 		.map((line) => JSON.parse(line) as Comment);
 	return (
 		comments.findLast(
-			(comment) => isWorkflowBot(comment.login) && stateLine.test(comment.body),
+			(comment) => isReviewer(comment.login) && stateLine.test(comment.body),
 		) ?? null
 	);
 }
@@ -118,6 +125,7 @@ const resolvedQuery = `query($owner: String!, $name: String!, $number: Int!) {
 export async function resolvedFindings(
 	gh: Gh,
 	pr: PullRequest,
+	isReviewer = isWorkflowBot,
 ): Promise<Map<string, string>> {
 	const [owner, name] = pr.repo.split("/");
 	const out = await gh([
@@ -153,8 +161,7 @@ export async function resolvedFindings(
 	for (const thread of data.data?.repository?.pullRequest?.reviewThreads
 		?.nodes ?? []) {
 		const first = thread.comments.nodes[0];
-		// A thread counts only when the workflow started it, so a hand-made comment with the marker does not.
-		if (!thread.isResolved || !isWorkflowBot(first?.author?.login)) continue;
+		if (!thread.isResolved || !isReviewer(first?.author?.login)) continue;
 		const id = first?.body.match(/<!-- cagr:(f\d+) -->/)?.[1];
 		if (id) resolved.set(id, thread.resolvedBy?.login ?? "someone");
 	}
@@ -236,15 +243,20 @@ export async function ciReview(
 		agent?: ReviewAgent;
 		env?: Record<string, string | undefined>;
 		progress?: (line: string) => void;
+		local?: { pr: PullRequest; login: string };
 	} = {},
-): Promise<{ ok: boolean; report: string }> {
+) {
 	const gh = options.gh ?? ghCli;
-	const pr = pullRequestFromEvent(options.env);
-	const existing = await stateComment(gh, pr);
+	const pr = options.local?.pr ?? pullRequestFromEvent(options.env);
+	const login = options.local?.login.toLowerCase();
+	const isReviewer = login
+		? (author: string | null | undefined) => author?.toLowerCase() === login
+		: isWorkflowBot;
+	const existing = await stateComment(gh, pr, isReviewer);
 	const record =
 		(existing && decodeState(existing.body)) ??
 		emptyRecord(`pr-${pr.number}`, pr.base);
-	for (const [id, who] of await resolvedFindings(gh, pr).catch(
+	for (const [id, who] of await resolvedFindings(gh, pr, isReviewer).catch(
 		() => new Map<string, string>(),
 	)) {
 		const finding = record.findings.find((entry) => entry.id === id);
@@ -281,12 +293,14 @@ export async function ciReview(
 	await saveState(gh, pr, existing, outcome.record).catch((error: Error) => {
 		saved = `\n\nThe review state could not be saved to the pull request, so the next run starts over: ${error.message}`;
 		if (readOnlyToken.test(error.message))
-			saved +=
-				"\nThe token cannot write to this pull request. GitHub gives pull requests from forks a read-only token and no secrets, so this job cannot review them. Review fork pull requests by hand, or run `cagr review` on a branch in this repo.";
+			saved += options.local
+				? "\nRun `gh auth login` with an account that can post to this pull request."
+				: "\nThe token cannot write to this pull request. GitHub gives pull requests from forks a read-only token and no secrets, so this job cannot review them. Review fork pull requests by hand, or run `cagr review` on a branch in this repo.";
 	});
 	const report = `${reviewReport(outcome, config.review.max_rounds)}${posted}${saved}`;
 	// Fail open: a reviewer that could not run does not hold the pull request, but findings already open still do.
 	return {
+		complete: !outcome.round?.error && posted === "" && saved === "",
 		ok: outcome.round?.error
 			? blocking(outcome.record).length === 0
 			: outcome.passed,

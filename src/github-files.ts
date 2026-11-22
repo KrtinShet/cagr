@@ -6,10 +6,35 @@ const header =
 /** A GitHub Actions expression. */
 const expr = (inner: string) => `$${"{{"} ${inner} }}`;
 
-function stackDir(stack: Stack) {
+export function stackDir(stack: Stack) {
 	const first = stack.paths[0] ?? "**";
 	const dir = first.replace(/\/?\*\*.*$/, "").replace(/\/[^/]*\*.*$/, "");
 	return dir === "" || dir.includes("*") ? "." : dir;
+}
+
+export function stackInstall(stack: Stack) {
+	switch (stack.package_manager) {
+		case "bun":
+			return "bun install --frozen-lockfile";
+		case "pnpm":
+			return "pnpm install --frozen-lockfile";
+		case "npm":
+			return "npm ci";
+		case "yarn":
+			return "yarn install --frozen-lockfile";
+		case "uv":
+			return "uv sync";
+		case "poetry":
+			return "poetry install";
+		case "pip":
+			return "pip install -r requirements.txt";
+		case "pipenv":
+			return "pipenv sync --dev";
+		case null:
+			if (stack.language === "go") return "go mod download";
+			if (stack.language === "rust") return "cargo fetch";
+			return null;
+	}
 }
 
 /** Steps that install each stack's tools and dependencies, once per manager and folder. */
@@ -39,10 +64,7 @@ function setupSteps(config: Config): string[] {
 		switch (stack.package_manager) {
 			case "bun":
 				once("setup-bun", ["      - uses: oven-sh/setup-bun@v2"]);
-				once(`bun:${dir}`, [
-					"      - run: bun install --frozen-lockfile",
-					...where,
-				]);
+				once(`bun:${dir}`, [`      - run: ${stackInstall(stack)}`, ...where]);
 				break;
 			case "pnpm":
 				once("setup-pnpm", [
@@ -51,10 +73,7 @@ function setupSteps(config: Config): string[] {
 					"        with:",
 					"          node-version: lts/*",
 				]);
-				once(`pnpm:${dir}`, [
-					"      - run: pnpm install --frozen-lockfile",
-					...where,
-				]);
+				once(`pnpm:${dir}`, [`      - run: ${stackInstall(stack)}`, ...where]);
 				break;
 			case "npm":
 			case "yarn":
@@ -64,13 +83,13 @@ function setupSteps(config: Config): string[] {
 					"          node-version: lts/*",
 				]);
 				once(`${stack.package_manager}:${dir}`, [
-					`      - run: ${stack.package_manager === "npm" ? "npm ci" : "yarn install --frozen-lockfile"}`,
+					`      - run: ${stackInstall(stack)}`,
 					...where,
 				]);
 				break;
 			case "uv":
 				once("setup-uv", ["      - uses: astral-sh/setup-uv@v6"]);
-				once(`uv:${dir}`, ["      - run: uv sync", ...where]);
+				once(`uv:${dir}`, [`      - run: ${stackInstall(stack)}`, ...where]);
 				break;
 			case "poetry":
 			case "pip":
@@ -80,7 +99,7 @@ function setupSteps(config: Config): string[] {
 					"          python-version: '3.x'",
 				]);
 				once(`${stack.package_manager}:${dir}`, [
-					`      - run: ${stack.package_manager === "poetry" ? "pipx install poetry && poetry install" : "pip install -r requirements.txt"}`,
+					`      - run: ${stack.package_manager === "poetry" ? "pipx install poetry && " : ""}${stackInstall(stack)}`,
 					...where,
 				]);
 				break;

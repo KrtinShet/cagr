@@ -168,7 +168,7 @@ export async function githubLines(config: Config, gh: Gh): Promise<Line[]> {
 						text: `[risk] names owners, but GitHub does not require their review. Turn on "Require review from Code Owners". ${fix}`,
 					},
 		);
-	if (config.ci.github) {
+	if (config.ci.github && !config.ci.local) {
 		const wanted = ["checks", ...(config.ci.review ? ["review"] : [])];
 		for (const name of wanted)
 			lines.push(
@@ -180,10 +180,12 @@ export async function githubLines(config: Config, gh: Gh): Promise<Line[]> {
 						},
 			);
 	}
-	if (config.review.status) {
+	if (config.ci.local || config.review.status) {
 		const wanted = [
 			"cagr/review",
-			...(config.git.pre_push.length > 0 ? ["cagr/checks"] : []),
+			...(config.ci.local || config.git.pre_push.length > 0
+				? ["cagr/checks"]
+				: []),
 		];
 		for (const name of wanted)
 			lines.push(
@@ -194,7 +196,7 @@ export async function githubLines(config: Config, gh: Gh): Promise<Line[]> {
 						}
 					: {
 							ok: false,
-							text: `[review] status sends \`${name}\`, but it is not a required check, so a branch can merge without it. Add ${name} under required status checks (it is listed once cagr has sent it). ${fix}`,
+							text: `${config.ci.local ? "Local CI" : "[review] status"} sends \`${name}\`, but it is not a required check, so a branch can merge without it. Add ${name} under required status checks (it is listed once cagr has sent it). ${fix}`,
 						},
 			);
 	}

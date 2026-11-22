@@ -1,10 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadConfig, resolveConfig } from "./config/load";
 import { doctor, programsOf } from "./doctor";
 import { GitSetupError, installGitHooks, sync } from "./sync";
+import { tempRepo } from "./test/repo";
 
 test("a check needs its runner, and the tool behind an exec runner", () => {
 	expect(programsOf("bun run lint")).toEqual([{ name: "bun", dirs: [] }]);
@@ -162,4 +163,21 @@ test("doctor rounds fractional whole-hook and sub-step timings", async () => {
 	expect(report).toContain("`change collection`: median 710 ms, max 710 ms");
 	expect(report).toContain("(whole hook): median 9 ms, max 9 ms");
 	expect(report).not.toContain("709.510");
+});
+
+test("doctor reports a local CI conflict and suggests installing the watch", async () => {
+	const { root } = await tempRepo("gw-doctor-local-ci-");
+	try {
+		const config = resolveConfig(
+			{ ci: { local: true, github: true } },
+			root,
+			"x",
+		);
+		const { report } = await doctor(config);
+		expect(report).toContain("[ci] local takes precedence over github.");
+		expect(report).toContain("Run `cagr ci --install-watch`.");
+		expect(report).toContain("No watch pass recorded yet.");
+	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
 });

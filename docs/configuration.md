@@ -280,10 +280,11 @@ A low change needs no human approval, a medium one needs one, and a high one nee
 
 | Key       | Type          | Default                                                                                  | Meaning                                                                                               |
 | --------- | ------------- | ---------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `local`   | boolean       | `false` | Run CI on the owner's machine. Takes precedence over `github`. |
 | `github`  | boolean       | `false`                                                                                  | `cagr sync` writes the GitHub workflow, the pull request template and CODEOWNERS.                     |
 | `review`  | boolean       | `false`                                                                                  | The workflow reviews each pull request with `cagr review --ci`. Needs the `ANTHROPIC_API_KEY` secret. |
 | `nightly` | list of globs | `[]`                                                                                     | Globs the workflow reviews every night with `cagr review --scan`, opening an issue for findings.      |
-| `install` | string        | `curl -fsSL https://github.com/krtinshet/cagr/releases/latest/download/install.sh \| sh` | The shell command the workflow uses to install cagr.                                                  |
+| `install` | string        | `curl -fsSL https://github.com/krtinshet/cagr/releases/latest/download/install.sh \| sh` | The shell command the workflow uses to install cagr. An explicit value overrides the stack dependency install in local CI.                                                  |
 
 See [CI](ci.md).
 

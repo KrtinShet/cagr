@@ -328,3 +328,35 @@ test("a state comment GitHub will not take is reported, not thrown, and names fo
 	expect(result.report).toContain("The review state could not be saved");
 	expect(result.report).toContain("pull requests from forks");
 });
+
+test("local review trusts the signed-in account's state and resolutions", async () => {
+	const { repo, config, head } = await prRepo();
+	const pr = { number: 3, repo: "o/r", base: "main", head, body: "" };
+	const local = { pr, login: "OWNER" };
+	const first = fakeGh({});
+	await ciReview(config, repo.root, { gh: first.gh, local, agent: oneBug });
+	const state = String(
+		first.posts.find((post) =>
+			post.args.includes("repos/o/r/issues/3/comments"),
+		)?.body.body,
+	);
+	const { gh, posts } = fakeGh({
+		comments: [{ id: 22, login: "owner", body: state }],
+		threadAuthor: "owner",
+		resolved: ["f1"],
+	});
+	const result = await ciReview(config, repo.root, {
+		gh,
+		local,
+		agent: brokenAgent,
+	});
+	expect(result.ok).toBe(true);
+	expect(result.complete).toBe(true);
+	expect(
+		posts.some(
+			(post) =>
+				post.args.includes("PATCH") &&
+				post.args.includes("repos/o/r/issues/comments/22"),
+		),
+	).toBe(true);
+});

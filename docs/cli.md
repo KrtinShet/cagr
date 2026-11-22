@@ -66,7 +66,7 @@ The command honors CAGR_REPO and CAGR_DOWNLOAD_URL just like the install script.
 cagr sync [--check]
 ```
 
-Rewrites the generated files from the config: the agent hook files, the git hooks, and with `[ci] github = true` the workflow, PR template and CODEOWNERS. Keeps your own hook entries and any user-owned file without the generated mark. See [Generated files](configuration.md#generated-files-and-cagr-sync).
+Rewrites the generated files from the config: the agent hook files, the git hooks, and with `[ci] github = true` and `local = false` the workflow, PR template and CODEOWNERS. Keeps your own hook entries and any user-owned file without the generated mark. See [Generated files](configuration.md#generated-files-and-cagr-sync).
 
 - `--check`: write nothing. List the files that are out of date and exit 1 if there are any.
 
@@ -150,9 +150,15 @@ Prints the risk tier of the branch's change compared with `--base` (default: the
 
 ```
 cagr ci [--base <branch>]
+cagr ci --pr <number>
+cagr ci --watch
+cagr ci --install-watch
+cagr ci --uninstall-watch
 ```
 
 Runs the checks the hooks ran on the branch's changed files: generated files, branch name, commit messages, edit checks, turn-end checks, code rules, layout rules, risk, and the pull request body. Exits 1 if any check fails. The base is `--base`, else `GITHUB_BASE_REF`, else the protected branch, else `main`. See [CI](ci.md#cagr-ci).
+
+`--pr` runs the checks and review for an open GitHub PR from your machine and posts both statuses. `--watch` makes one pass over open, non-draft PRs and skips commits with either cagr status. `--install-watch` schedules that pass every five minutes using launchd or a systemd user timer. `--uninstall-watch` removes the schedule. See [No GitHub Actions](ci.md#no-github-actions).
 
 ## check
 

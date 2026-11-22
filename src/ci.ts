@@ -55,10 +55,13 @@ export async function ci(
 	options: {
 		cwd: string;
 		base?: string;
+		pr?: PullRequest & { branch: string };
+		runCheck?: typeof runShell;
 		env?: Record<string, string | undefined>;
 	},
 ): Promise<CiResult> {
 	const env = options.env ?? process.env;
+	const runCheck = options.runCheck ?? runShell;
 	const git = await gitContext(options.cwd);
 	const cwd = config.root;
 	const baseName =
@@ -99,19 +102,13 @@ export async function ci(
 				: [],
 		),
 	);
-	let pullRequest: PullRequest | undefined;
-	if (env.GITHUB_EVENT_PATH) {
+	let pullRequest: PullRequest | undefined = options.pr;
+	if (!pullRequest && env.GITHUB_EVENT_PATH) {
 		try {
 			const event = JSON.parse(readFileSync(env.GITHUB_EVENT_PATH, "utf8")) as {
 				pull_request?: PullRequest;
 			};
 			pullRequest = event.pull_request;
-			if (pullRequest && pullRequest.head?.sha !== changeResult.snapshot.head)
-				checks.push(
-					check("PR head", [
-						"Check out the exact pull request head SHA and rerun cagr ci.",
-					]),
-				);
 		} catch {
 			checks.push(
 				check("PR head", [
@@ -120,6 +117,12 @@ export async function ci(
 			);
 		}
 	}
+	if (pullRequest && pullRequest.head?.sha !== changeResult.snapshot.head)
+		checks.push(
+			check("PR head", [
+				"Check out the exact pull request head SHA and rerun cagr ci.",
+			]),
+		);
 	try {
 		const suppressions = await checkSuppressions(
 			config,
@@ -157,7 +160,7 @@ export async function ci(
 	}
 	checks.push(check("Generated files", drift));
 
-	const branch = env.GITHUB_HEAD_REF || git.branch;
+	const branch = options.pr?.branch || env.GITHUB_HEAD_REF || git.branch;
 	const branchProblem = branch ? branchFinding(branch, config) : null;
 	checks.push(
 		check("Branch name", branchProblem ? [branchProblem.reason] : []),
@@ -211,7 +214,7 @@ export async function ci(
 		const paths = stackFiles(stack, absolute, config);
 		if (paths.length === 0) continue;
 		for (const command of stack.on_edit) {
-			const result = await runShell(withFiles(command, paths), cwd, {
+			const result = await runCheck(withFiles(command, paths), cwd, {
 				timeoutMs: 300_000,
 			});
 			if (!result.ok)
@@ -237,7 +240,7 @@ export async function ci(
 	const endProblems: string[] = [];
 	for (const [command, paths] of commands) {
 		if (command.includes("{files}") && paths.length === 0) continue;
-		const result = await runShell(withFiles(command, paths), cwd, {
+		const result = await runCheck(withFiles(command, paths), cwd, {
 			timeoutMs: 1_800_000,
 		});
 		if (!result.ok)

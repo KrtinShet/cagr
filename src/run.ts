@@ -11,6 +11,7 @@ export type RunResult = {
 
 export type RunOptions = {
 	timeoutMs?: number;
+	processGroup?: boolean;
 	env?: Record<string, string | undefined>;
 	stdin?: string;
 };
@@ -33,22 +34,37 @@ export async function run(
 			stdout: "pipe",
 			stderr: "pipe",
 			env: { ...process.env, ...quiet, ...options.env },
-			timeout: options.timeoutMs,
+			detached: options.processGroup,
+			timeout: options.processGroup ? undefined : options.timeoutMs,
 			killSignal: "SIGKILL",
 		});
+		let groupTimedOut = false;
+		const timer =
+			options.processGroup && options.timeoutMs !== undefined
+				? setTimeout(() => {
+						groupTimedOut = true;
+						try {
+							process.kill(-child.pid, "SIGKILL");
+						} catch (error) {
+							if ((error as NodeJS.ErrnoException).code !== "ESRCH")
+								throw error;
+						}
+					}, options.timeoutMs)
+				: undefined;
 		const [stdout, stderr, exitCode] = await Promise.all([
 			new Response(child.stdout).text(),
 			new Response(child.stderr).text(),
 			child.exited,
-		]);
+		]).finally(() => clearTimeout(timer));
 		const timedOut =
-			child.signalCode === "SIGKILL" && options.timeoutMs !== undefined;
+			groupTimedOut ||
+			(child.signalCode === "SIGKILL" && options.timeoutMs !== undefined);
 		const ms = Math.round(performance.now() - started);
 		const output = timedOut
 			? `${stdout}${stderr}\nStopped after ${options.timeoutMs} ms. Make the check faster or narrow it with {files}.`
 			: `${stdout}${stderr}`;
 		return {
-			ok: exitCode === 0,
+			ok: exitCode === 0 && !timedOut,
 			output,
 			stdout,
 			stderr,

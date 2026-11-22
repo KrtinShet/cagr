@@ -266,8 +266,12 @@ describe("sync", () => {
 
 	test("turning [ci] github off deletes the workflow sync wrote, not one a person wrote", async () => {
 		const root = await mkdtemp(join(tmpdir(), "gw-sync-"));
-		const make = (github: boolean) =>
-			resolveConfig({ agents: { enabled: [] }, ci: { github } }, root, "x");
+		const make = (github: boolean, local = false) =>
+			resolveConfig(
+				{ agents: { enabled: [] }, ci: { github, local } },
+				root,
+				"x",
+			);
 		sync(make(true));
 		const workflow = join(root, ".github/workflows/cagr.yml");
 		expect(await readFile(workflow, "utf8")).toContain(
@@ -280,6 +284,13 @@ describe("sync", () => {
 			{ file: ".github/workflows/cagr.yml", why: "[ci] github is off." },
 		]);
 		expect(await Bun.file(workflow).exists()).toBe(false);
+		sync(make(true));
+		expect(sync(make(true, true)).removed).toEqual([
+			{ file: ".github/workflows/cagr.yml", why: "[ci] local is on." },
+		]);
+		expect(sync(make(true, true)).written).not.toContain(
+			".github/workflows/cagr.yml",
+		);
 		await writeFile(workflow, "name: mine\n");
 		expect(sync(make(false)).removed).toEqual([]);
 		expect(await readFile(workflow, "utf8")).toBe("name: mine\n");

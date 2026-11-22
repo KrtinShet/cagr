@@ -64,13 +64,14 @@ export async function postStatus(
 	gh: Gh,
 	sha: string,
 	status: CommitStatus,
+	repo?: string,
 ): Promise<{ ok: boolean; message: string }> {
 	try {
 		await gh([
 			"api",
 			"-X",
 			"POST",
-			`repos/{owner}/{repo}/statuses/${sha}`,
+			`repos/${repo ?? "{owner}/{repo}"}/statuses/${sha}`,
 			"-f",
 			`state=${status.state}`,
 			"-f",
@@ -85,7 +86,9 @@ export async function postStatus(
 	} catch (error) {
 		return {
 			ok: false,
-			message: failureNote((error as Error).message, sha, status.context),
+			message: repo
+				? `GitHub did not get ${status.context} for ${sha.slice(0, 7)}. Check that gh can write commit statuses (\`gh auth status\`). ${(error as Error).message}`
+				: failureNote((error as Error).message, sha, status.context),
 		};
 	}
 }
