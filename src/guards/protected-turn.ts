@@ -304,7 +304,7 @@ function restoration(
 	const restore = (target: string) =>
 		`${argv} restore --source=${snapshot.head} ${target} ${file}`;
 	const steps: string[] = [];
-	const removeFile = `Delete the file with \`rm -f -- ${fullPath}\` if it exists.`;
+	const removeFile = `Delete the file with \`rm -f ${fullPath}\` if it exists.`;
 	if (oldHead) {
 		steps.push(`Run \`${restore("--staged --worktree")}\`.`);
 	} else {
@@ -337,7 +337,7 @@ function restoration(
 		const backup = shellQuote(join(folder, hash(path)));
 		steps.push(
 			removeFile,
-			`Restore the prior working copy with \`cp -pP -- ${backup} ${fullPath}\`.`,
+			`Restore the prior working copy with \`cp -pP ${backup} ${fullPath}\`.`,
 		);
 	} else if (before.work === null) steps.push(removeFile);
 	else if (!indexMatches(before.index, oldHead) && before.index.length) {
