@@ -1,7 +1,15 @@
 import { existsSync } from "node:fs";
-import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+	cp,
+	lstat,
+	mkdir,
+	mkdtemp,
+	readFile,
+	rm,
+	writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, dirname, join, posix } from "node:path";
+import { basename, dirname, isAbsolute, join, posix } from "node:path";
 import type { Stack } from "../config/schema";
 import { insideRoot, matchesGlob } from "../paths";
 import { run, shellQuote } from "../run";
@@ -57,7 +65,7 @@ function managerFor(stacks: LockfileStack[], path: string) {
 
 type Command = { argv: string[]; env?: Record<string, string> };
 
-/** The command, and its environment, that makes the manager rewrite only the lockfile without the network or scripts. */
+/** The command, and its environment, that makes the manager rewrite only the lockfile without the network or scripts. The starting lockfile, when there is one, picks the Yarn major version, since the current one is under check. */
 function command(manager: Writer, lockfile: Uint8Array): Command {
 	switch (manager) {
 		case "bun":
@@ -91,7 +99,7 @@ function command(manager: Writer, lockfile: Uint8Array): Command {
 				],
 			};
 		case "yarn":
-			if (new TextDecoder().decode(lockfile).includes("__metadata:"))
+			if (/^__metadata:/m.test(new TextDecoder().decode(lockfile)))
 				return {
 					argv: ["yarn", "install", "--mode=update-lockfile"],
 					env: {
@@ -133,8 +141,12 @@ function localRefs(manifest: string, text: string): string[] {
 	const refs: string[] = [];
 	const visit = (value: unknown, field: string) => {
 		if (typeof value === "string") {
-			const spec = /^(?:file|link|portal):(.+)$/.exec(value)?.[1] ?? value;
-			if (field === "patchedDependencies" || /^\.{1,2}\//.test(spec))
+			const local = /^(?:file|link|portal):(.+)$/.exec(value)?.[1];
+			const spec = local ?? value;
+			if (
+				!isAbsolute(spec) &&
+				(local || field === "patchedDependencies" || /^\.{1,2}\//.test(spec))
+			)
 				refs.push(join(dirname(manifest), spec));
 		} else if (value && typeof value === "object")
 			for (const inner of Object.values(value)) visit(inner, field);
@@ -193,7 +205,11 @@ async function copyInputs(
 		if (insideRoot(root, source) === null || !existsSync(source)) continue;
 		await cp(source, join(target, ref), {
 			recursive: true,
-			filter: (from) => !/(^|\/)(node_modules|\.git)$/.test(from),
+			filter: (from) => {
+				if (performance.now() > deadline)
+					throw new Error(`Copying the local package ${ref} ran out of time.`);
+				return !/(^|\/)(node_modules|\.git)$/.test(from);
+			},
 		});
 	}
 }
@@ -259,16 +275,14 @@ export async function checkLockfile(options: {
 		return {
 			message: `This part of the repo uses ${manager}, which does not write ${basename(path)}. Change dependencies with ${manager} add or remove instead.`,
 		};
-	const fullPath = join(root, path);
-	const current = existsSync(fullPath)
-		? new Uint8Array(await readFile(fullPath))
-		: null;
-	if (!current)
+	const info = await lstat(join(root, path)).catch(() => null);
+	if (!info?.isFile())
 		return {
-			message: `${path} was deleted. ${manager} does not delete its lockfile, so restore it.`,
+			message: `${path} is ${info ? "not a regular file" : "deleted"}. ${manager} writes its lockfile as a regular file, so restore it.`,
 		};
-	const spec = command(writer, current);
 	try {
+		const current = new Uint8Array(await readFile(join(root, path)));
+		const spec = command(writer, baseline ?? current);
 		// The second run normalises the current file, since `bun add` writes keys in an order `bun install` later sorts.
 		const [rewritten, normalised] = await Promise.all([
 			regenerate(spec, root, path, baseline, deadline),

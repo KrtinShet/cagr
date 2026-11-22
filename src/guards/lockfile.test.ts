@@ -59,9 +59,20 @@ test("a lockfile the stack's manager does not write says which manager to use", 
 	);
 });
 
-test("a deleted lockfile asks for a restore", async () => {
-	const verdict = await check("bun.lock", [stack("bun")], false);
-	expect(verdict?.message).toContain("bun.lock was deleted");
+test("a deleted lockfile, or a folder in its place, asks for a restore", async () => {
+	const deleted = await check("bun.lock", [stack("bun")], false);
+	expect(deleted?.message).toContain("bun.lock is deleted");
+	const repo = await tempRepo();
+	roots.add(repo.root);
+	await repo.write("bun.lock/inner", "x\n");
+	const verdict = await checkLockfile({
+		root: repo.root,
+		path: "bun.lock",
+		stacks: [stack("bun")],
+		baseline: null,
+		deadline: performance.now() + 10_000,
+	});
+	expect(verdict?.message).toContain("bun.lock is not a regular file");
 });
 
 test("other files are left to the plain protected-file check", async () => {

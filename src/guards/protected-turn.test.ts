@@ -419,6 +419,34 @@ test("a local tarball added with bun add passes turn end", async () => {
 	expect(await repo.stop()).toBe("");
 });
 
+test("a local package named with file: and no ./ passes turn end", async () => {
+	const repo = await lockedRepo("bun");
+	await mkdir(join(repo.root, "vendor"));
+	await copyFile(
+		repo.registry.tarball("zed", "2.0.0"),
+		join(repo.root, "vendor/zed.tgz"),
+	);
+	await repo.write(
+		"package.json",
+		'{ "name": "app", "version": "1.0.0", "dependencies": { "pad": "1.0.0", "zed": "file:vendor/zed.tgz" } }\n',
+	);
+	expect(await repo.before("bun install")).toBe("");
+	expect((await runShell("bun install", repo.root)).ok).toBe(true);
+	expect(await repo.read()).toContain("vendor/zed.tgz");
+	expect(await repo.stop()).toBe("");
+});
+
+test("a folder in place of the lockfile still blocks the other protected files", async () => {
+	const repo = await lockedRepo("bun");
+	expect(await repo.before("rm bun.lock && mkdir bun.lock")).toBe("");
+	await rm(join(repo.root, "bun.lock"));
+	await repo.write("bun.lock/inner", "x\n");
+	await repo.write("cagr.toml", `${policy}# shell change\n`);
+	const { decision, reason } = JSON.parse(await repo.stop());
+	expect(decision).toBe("block");
+	expect(reason).toContain("cagr.toml");
+});
+
 test.each([
 	["an integrity hash", (text: string) => text.replace(/sha512-./, "sha512-A")],
 	[
