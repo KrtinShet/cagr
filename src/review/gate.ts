@@ -39,8 +39,9 @@ export type Reach = {
 	(commit: string): boolean;
 	/**
 	 * Set only after a failed round: fixed findings whose fix commit the head
-	 * does not contain, but whose file at the head is as the fix left it (a
-	 * rebase, not a reset to before the fix).
+	 * does not contain, but whose fix's files (the files the fix round covered,
+	 * and the finding's own) are at the head as the fix left them: a rebase,
+	 * not a reset to before the fix.
 	 */
 	kept?: ReadonlySet<string>;
 };
@@ -87,6 +88,20 @@ export async function reachFrom(
 					reached.has(finding.fixedIn)
 				)
 					return;
+				const fix = record.rounds.findLast(
+					(round) => !round.error && round.head === finding.fixedIn,
+				);
+				if (!fix) return;
+				const changed = await run(
+					["git", "diff", "--name-only", fix.from, fix.head],
+					cwd,
+				);
+				if (!changed.ok) return;
+				const files = [
+					...changed.stdout.split("\n").filter(Boolean),
+					...(finding.file ? [finding.file] : []),
+				];
+				if (files.length === 0) return;
 				const same = await run(
 					[
 						"git",
@@ -95,7 +110,7 @@ export async function reachFrom(
 						finding.fixedIn,
 						target,
 						"--",
-						...(finding.file ? [`:(literal)${finding.file}`] : []),
+						...files.map((file) => `:(literal)${file}`),
 					],
 					cwd,
 				);

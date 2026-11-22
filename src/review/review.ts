@@ -150,7 +150,7 @@ export async function review(
 		scanning ? blocking(record) : unresolved(record, head, reach);
 	const held = scanning
 		? new Map<string, string>()
-		: await heldBack(record, head, cwd);
+		: await heldBack(record, head, config.review.skip, cwd);
 	// After a failed round the gate holds only what `holdsOnError` keeps, so the report and CI say the same.
 	const openAfterError = async () => {
 		if (scanning) return blocking(record);
@@ -361,8 +361,10 @@ export async function review(
 				// Confirmed on history the old fix commit is not part of, so this head is the fix commit now.
 				finding.fixedIn = head;
 			} else if (finding.status === "fixed" && !fixedIds.has(finding.id)) {
+				// A reopened finding needs a new fix, so it gets a fresh count of verdicts.
 				finding.status = "open";
 				finding.fixedIn = null;
+				finding.verdicts = 0;
 			}
 		}
 		record.findings.push(...found);
@@ -424,13 +426,19 @@ function judgedAt(record: ReviewRecord, finding: ReviewFinding, head: string) {
 
 /**
  * Open findings the verifier may not judge at `head`, each with why. A verdict
- * on an unchanged file is only a reroll of the model, so a finding is judged
+ * on unchanged code is only a reroll of the model, so a finding is judged
  * again only when a commit since its last verdict (or since the round that
- * reported it) changed its file, and at most `maxVerdicts` times. A recheck at
- * the commit of its last verdict is left to `judgedAt`. A git error leaves the
- * finding to the verifier.
+ * reported it) changed a reviewed file, and at most `maxVerdicts` times. Any
+ * file counts, not only the finding's: a fix can be a new test or a change in
+ * a caller, and the cap bounds the rest. A recheck at the commit of its last
+ * verdict is left to `judgedAt`. A git error leaves the finding to the verifier.
  */
-async function heldBack(record: ReviewRecord, head: string, cwd: string) {
+async function heldBack(
+	record: ReviewRecord,
+	head: string,
+	skip: string[],
+	cwd: string,
+) {
 	const held = new Map<string, string>();
 	await Promise.all(
 		record.findings
@@ -457,14 +465,15 @@ async function heldBack(record: ReviewRecord, head: string, cwd: string) {
 						last.head,
 						head,
 						"--",
-						...(finding.file ? [`:(literal)${finding.file}`] : []),
+						".",
+						...skip.map((glob) => `:(exclude,glob)${glob}`),
 					],
 					cwd,
 				);
 				if (unchanged.ok)
 					held.set(
 						finding.id,
-						`${finding.id} is still open: no commit since the last check touched ${finding.file || "any file"}. Fix it, or answer it with ${answerCommand(finding.id)}.`,
+						`${finding.id} is still open: no commit since the last check changed any reviewed file, so the verifier does not judge it again. Fix it${finding.file ? ` (${finding.file})` : ""}, or answer it with ${answerCommand(finding.id)}.`,
 					);
 			}),
 	);

@@ -762,13 +762,13 @@ describe("verdicts on earlier findings", () => {
 			expect(outcome.round?.scope).toBe("diff");
 			expect(outcome.passed).toBe(false);
 			expect(reviewReport(outcome, 2)).toContain(
-				"f1 is still open: no commit since the last check touched src/a.ts. Fix it, or answer it with `cagr review answer f1",
+				"f1 is still open: no commit since the last check changed any reviewed file, so the verifier does not judge it again. Fix it (src/a.ts), or answer it with `cagr review answer f1",
 			);
 			// The recheck at the same commit is no reroll either.
 			const again = await review(repo.config, { cwd: repo.root, agent });
 			expect(calls).toEqual([]);
 			expect(again.skipped).toContain(
-				"f1 is still open: no commit since the last check touched src/a.ts.",
+				"f1 is still open: no commit since the last check changed any reviewed file",
 			);
 		}
 		// Neither is --full, which runs the finders but does not judge f1.
@@ -790,12 +790,12 @@ describe("verdicts on earlier findings", () => {
 		).toBe("deny");
 	});
 
-	test("a commit that touches the finding's file gets a verdict", async () => {
+	test("a commit that changes another file, such as a new test, gets a verdict", async () => {
 		const { repo, emptyCommit } = await reported();
 		await emptyCommit();
 		await review(repo.config, { cwd: repo.root, agent: noVerdictOnF1().agent });
-		await repo.commit("fix: handle the session", {
-			"src/a.ts": "export const login = (user) => user?.name;\n",
+		await repo.commit("test(auth): cover an expired session", {
+			"src/a.test.ts": "test('expired session', () => {});\n",
 		});
 		const { agent, calls } = fakeAgent({
 			finder: () => ({ findings: [] }),
@@ -909,6 +909,84 @@ describe("verdicts on earlier findings", () => {
 				await reachFrom(dropped.record, droppedHead, repo.root),
 			).kind,
 		).toBe("deny");
+	});
+
+	test("a reviewer error after a reset to before a fix in another file still holds the gate", async () => {
+		const repo = await branchRepo();
+		const { agent } = fakeAgent({
+			finder: (_, call) => ({ findings: call === 0 ? [candidate()] : [] }),
+			verifier: () => ({ previous: [{ id: "f1", fixed: true }] }),
+		});
+		const options = { cwd: repo.root, effort: "quick" as const };
+		const first = await review(repo.config, { ...options, agent });
+		await repo.commit("fix: check the session in the caller", {
+			"src/b.ts": "if (!user) return;\n",
+		});
+		expect((await review(repo.config, { ...options, agent })).passed).toBe(
+			true,
+		);
+		await repo.git("reset", "-q", "--hard", first.round?.head ?? "");
+		await repo.commit("feat: more", { "src/c.ts": "c\n" });
+		const broken: ReviewAgent = {
+			name: "broken",
+			ask: async () => {
+				throw new ReviewerError("claude ran past 600s");
+			},
+		};
+		const outcome = await review(repo.config, { ...options, agent: broken });
+		expect(outcome.round?.error).toBe("claude ran past 600s");
+		expect(outcome.open.map((entry) => entry.id)).toEqual(["f1"]);
+		const head = outcome.round?.head ?? "";
+		expect(
+			gateResult(
+				outcome.record,
+				head,
+				repo.config,
+				await reachFrom(outcome.record, head, repo.root),
+			).kind,
+		).toBe("deny");
+	});
+
+	test("a finding the verifier reopens gets a fresh count of verdicts", async () => {
+		const { repo } = await reported();
+		const verdict = (fixed: boolean) =>
+			fakeAgent({
+				finder: () => ({ findings: [] }),
+				verifier: () => ({ previous: [{ id: "f1", fixed }] }),
+			});
+		let edit = 0;
+		const touch = () =>
+			repo.commit(`fix: attempt ${++edit}`, { "src/a.ts": `// ${edit}\n` });
+		await touch();
+		await review(repo.config, { cwd: repo.root, agent: verdict(false).agent });
+		await review(repo.config, { cwd: repo.root, agent: verdict(false).agent });
+		await touch();
+		const closed = await review(repo.config, {
+			cwd: repo.root,
+			agent: verdict(true).agent,
+		});
+		expect(closed.fixed.map((entry) => entry.id)).toEqual(["f1"]);
+		expect(closed.record.findings[0]?.verdicts).toBe(3);
+		// Past the round cap a later commit checks the fix again, and it no longer holds.
+		await touch();
+		const reopened = await review(repo.config, {
+			cwd: repo.root,
+			agent: verdict(false).agent,
+		});
+		expect(reopened.record.findings[0]?.status).toBe("open");
+		await touch();
+		const next = verdict(true);
+		const outcome = await review(repo.config, {
+			cwd: repo.root,
+			agent: next.agent,
+		});
+		expect(
+			next.calls.some(
+				(call) =>
+					call.schema === verifierSchema && call.prompt.includes("f1 src/a.ts"),
+			),
+		).toBe(true);
+		expect(outcome.passed).toBe(true);
 	});
 });
 
