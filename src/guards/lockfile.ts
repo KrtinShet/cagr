@@ -499,33 +499,35 @@ const nodeModules = new Set(
 /**
  * Whether a pnpmfile loads only Node built-ins. Anything else resolves to
  * files in the temp folder or its parents, which the agent can write. The
- * pnpmfile is committed, so this reads ordinary code, not code written to
- * hide a load: comments, strings and object keys are skipped.
+ * calls are read from the raw text, since a regex literal can make comments
+ * and strings look like they start or end elsewhere. A `require` or `import`
+ * word that is not called, such as in a comment, an object key or a member
+ * name, loads nothing.
  */
-function builtinsOnly(text: string) {
-	const quoted = /"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'|`(?:[^`\\]|\\.)*`/;
-	const code = text.replace(
-		new RegExp(`(${quoted.source})|\\/\\/[^\\n]*|\\/\\*[\\s\\S]*?\\*\\/`, "g"),
-		(match, string) => (string ? match : " "),
-	);
+export function builtinsOnly(text: string) {
 	const load =
-		/\b(?:require|import)\s*\(\s*(["'])([^"']+)\1\s*\)|\b(?:import|export)\s+(?:[\w$*{},\s]+?\s+from\s+)?(["'])([^"']+)\3/g;
-	for (const match of code.matchAll(load)) {
+		/\b(?:require|import)\s*\(\s*(["'`])([^"'`]+)\1\s*\)|\b(?:import|export)\s+(?:[\w$*{},\s]+?\s+from\s+)?(["'])([^"']+)\3/g;
+	for (const match of text.matchAll(load)) {
 		const name = (match[2] ?? match[4] ?? "").replace(/^node:/, "");
 		if (!nodeModules.has(name)) return false;
 	}
-	const rest = code
-		.replace(load, " ")
-		.replace(new RegExp(quoted.source, "g"), '""')
-		.replace(/\bimport\.meta\b/g, " ")
-		.replace(/([{,]\s*)(?:require|import)(\s*:)/g, "$1$2");
-	return !/\b(?:require|import)\b|\bfrom\s*""/.test(rest);
+	const rest = text.replace(load, " ");
+	// A call with a computed name, another way to load, or require passed on as a value.
+	if (
+		/\b(?:require|import)\s*\(|\bcreateRequire\b|\b_load\b|[=,(]\s*require\b(?!\s*[.:(,}])/.test(
+			rest,
+		)
+	)
+		return false;
+	const quoted = /"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'|`(?:[^`\\]|\\.)*`/g;
+	// A static import the scan above did not read, such as one split by comments.
+	return !/\bfrom\s*["'`]/.test(rest.replace(quoted, ""));
 }
 
 /**
  * A pnpmfile runs inside pnpm and changes the lockfile, so the check runs it
- * only when it matches the starting commit, as Git would store it, and loads
- * only Node built-ins.
+ * only when it matches the starting commit, byte for byte or as a CRLF
+ * checkout of it, and loads only Node built-ins.
  */
 async function copyPnpmfiles(
 	root: string,
@@ -544,10 +546,15 @@ async function copyPnpmfiles(
 		// Only a checkout with CRLF line ends may differ, since Git attributes and filters are agent-writable.
 		const checkedOut =
 			work !== null &&
-			committed !== null &&
-			(Buffer.from(work).equals(Buffer.from(start ?? [])) ||
-				(!committed.includes("\r") &&
-					decode(work) === committed.replaceAll("\n", "\r\n")));
+			start !== null &&
+			(Buffer.from(work).equals(Buffer.from(start)) ||
+				(!start.includes(13) &&
+					Buffer.from(work).equals(
+						Buffer.from(
+							Buffer.from(start).toString("latin1").replaceAll("\n", "\r\n"),
+							"latin1",
+						),
+					)));
 		if ((work !== null || start !== null) && !checkedOut)
 			throw new Refusal(
 				`${file} differs from the last commit. A pnpmfile runs inside pnpm and can rewrite any dependency, so cagr runs only a committed one. If the turn changed it, restore it; if a human did, ask the user to commit it. Then stop again.`,

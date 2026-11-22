@@ -4,7 +4,12 @@ import { mkdir, mkdtemp, realpath, rm, utimes } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { tempRepo } from "../test/repo";
-import { checkLockfile, isLockfile, type LockfileStack } from "./lockfile";
+import {
+	builtinsOnly,
+	checkLockfile,
+	isLockfile,
+	type LockfileStack,
+} from "./lockfile";
 
 const roots = new Set<string>();
 afterEach(async () => {
@@ -390,4 +395,91 @@ test("an absolute yarn-path into the checkout is refused", async () => {
 		{ "yarn.lock": `${lockfile}\n` },
 	);
 	expect(verdict?.message).toContain("by its absolute path in this checkout");
+});
+
+test.each([
+	[
+		"a core module",
+		"const p = require('node:path')\nmodule.exports = {}",
+		true,
+	],
+	[
+		"the words in comments and object keys",
+		"// pnpm does not require this peer, nor import it\nconst e = { import: './a.mjs', require: './a.cjs' }",
+		true,
+	],
+	["a load named in a string", `x = basename("moved from 'old'")`, true],
+	[
+		"member names, require.resolve and a shorthand key",
+		"delete pkg.exports.import; pkg.exports['.'].require; require.resolve('node:fs'); const o = { require }",
+		true,
+	],
+	[
+		"static imports of core modules",
+		"import { a } from 'node:fs'\nimport 'path'",
+		true,
+	],
+	[
+		"a load after a regex that ends in //",
+		"if (/^https?:\\/\\//.test(url)) pkg = require('./rewrite')(pkg)",
+		false,
+	],
+	[
+		"a computed load after a regex holding a quote",
+		"s.replace(/'/g, ''); require(name); x = 'y'",
+		false,
+	],
+	["require passed on as a value", "const r = require; r('x')", false],
+	[
+		"createRequire",
+		"const { createRequire } = require('node:module'); createRequire(__filename)('x')",
+		false,
+	],
+	["a package Bun bundles", "import x from 'undici'", false],
+	["a re-export", "export * from './x'", false],
+	["a member require call", "module.require('semver')", false],
+])("a pnpmfile with %s loads only built-ins: %p", (_, code, expected) => {
+	expect(builtinsOnly(code)).toBe(expected);
+});
+
+test("a pnpmfile that differs from the commit by more than CRLF line ends is refused", async () => {
+	const lockfile = "lockfileVersion: '9.0'\n";
+	const committed = "module.exports = {}\n";
+	const verdict = await editedCheck(
+		"pnpm-lock.yaml",
+		"pnpm",
+		{
+			"package.json": '{ "name": "app" }\n',
+			".pnpmfile.cjs": committed,
+			"pnpm-lock.yaml": lockfile,
+		},
+		{
+			".pnpmfile.cjs": `\uFEFF${committed.replaceAll("\n", "\r\n")}`,
+			"pnpm-lock.yaml": `${lockfile}# edited\n`,
+		},
+	);
+	expect(verdict?.message).toContain(
+		".pnpmfile.cjs differs from the last commit",
+	);
+});
+
+test.each([
+	[
+		"two yarn-path lines that disagree",
+		'yarn-path "./a.cjs"\nyarn-path "./b.cjs"\n',
+	],
+	["a quoted yarn-path key", '"yarn-path" "./"\n'],
+])("a .yarnrc with %s is refused", async (_, yarnrc) => {
+	const lockfile = "# yarn lockfile v1\n";
+	const verdict = await editedCheck(
+		"yarn.lock",
+		"yarn",
+		{
+			"package.json": '{ "name": "app", "version": "1.0.0" }\n',
+			".yarnrc": yarnrc,
+			"yarn.lock": lockfile,
+		},
+		{ "yarn.lock": `${lockfile}\n` },
+	);
+	expect(verdict?.message).toContain("that is not one file in the repo");
 });
