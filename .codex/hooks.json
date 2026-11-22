@@ -5,7 +5,7 @@
 				"hooks": [
 					{
 						"type": "command",
-						"command": "bun \"$(git rev-parse --show-toplevel)\"/src/cli.ts hook session.start --agent codex",
+						"command": "bun \"$(git rev-parse --show-toplevel)\"/src/cli.ts hook session.start --agent codex || { echo 'cagr: cagr is not installed or failed to start. Install cagr or run cagr doctor.' >&2; exit 1; }",
 						"timeout": 10
 					}
 				]
@@ -17,7 +17,7 @@
 				"hooks": [
 					{
 						"type": "command",
-						"command": "bun \"$(git rev-parse --show-toplevel)\"/src/cli.ts hook command.before --agent codex",
+						"command": "bun \"$(git rev-parse --show-toplevel)\"/src/cli.ts hook command.before --agent codex || { echo 'cagr: cagr is not installed or failed to start. Install cagr or run cagr doctor.' >&2; exit 2; }",
 						"timeout": 10
 					}
 				]
@@ -27,7 +27,7 @@
 				"hooks": [
 					{
 						"type": "command",
-						"command": "bun \"$(git rev-parse --show-toplevel)\"/src/cli.ts hook file.before_edit --agent codex",
+						"command": "bun \"$(git rev-parse --show-toplevel)\"/src/cli.ts hook file.before_edit --agent codex || { echo 'cagr: cagr is not installed or failed to start. Install cagr or run cagr doctor.' >&2; exit 2; }",
 						"timeout": 10
 					}
 				]
@@ -39,7 +39,7 @@
 				"hooks": [
 					{
 						"type": "command",
-						"command": "bun \"$(git rev-parse --show-toplevel)\"/src/cli.ts hook file.after_edit --agent codex",
+						"command": "bun \"$(git rev-parse --show-toplevel)\"/src/cli.ts hook file.after_edit --agent codex || { echo 'cagr: cagr is not installed or failed to start. Install cagr or run cagr doctor.' >&2; exit 1; }",
 						"timeout": 60
 					}
 				]
@@ -50,7 +50,7 @@
 				"hooks": [
 					{
 						"type": "command",
-						"command": "bun \"$(git rev-parse --show-toplevel)\"/src/cli.ts hook turn.end --agent codex",
+						"command": "bun \"$(git rev-parse --show-toplevel)\"/src/cli.ts hook turn.end --agent codex || { echo 'cagr: cagr is not installed or failed to start. Install cagr or run cagr doctor.' >&2; exit 1; }",
 						"timeout": 300
 					}
 				]

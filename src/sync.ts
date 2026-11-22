@@ -62,14 +62,20 @@ const wiring: Record<
 };
 
 const ownCommand =
-	/ hook (session\.start|command\.before|file\.before_edit|file\.after_edit|turn\.end) --agent (claude|codex)$/;
+	/ hook (session\.start|command\.before|file\.before_edit|file\.after_edit|turn\.end) --agent (claude|codex)(?: \|\| \{ echo 'cagr: [^']+' >&2; exit [12]; \})?$/;
 
 export function hookCommand(
 	config: Config,
 	agent: AgentName,
 	event: AgentEvent,
 ) {
-	return `${config.agents.command.replaceAll("{root}", wiring[agent].root)} hook ${event} --agent ${agent}`;
+	const command = config.agents.command.replaceAll(
+		"{root}",
+		wiring[agent].root,
+	);
+	const failureCode =
+		event === "command.before" || event === "file.before_edit" ? 2 : 1;
+	return `${command} hook ${event} --agent ${agent} || { echo 'cagr: cagr is not installed or failed to start. Install cagr or run cagr doctor.' >&2; exit ${failureCode}; }`;
 }
 
 /** The agent's hooks file with cagr's entries replaced and everything else kept. */

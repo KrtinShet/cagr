@@ -57,18 +57,34 @@ describe("mergeHooks", () => {
 			{
 				matcher: "Bash",
 				hooks: [
-					{ type: "command", command: own("command.before"), timeout: 10 },
+					{
+						type: "command",
+						command: expect.stringContaining(own("command.before")),
+						timeout: 10,
+					},
 				],
 			},
 			{
 				matcher: "Edit|Write|MultiEdit|NotebookEdit",
 				hooks: [
-					{ type: "command", command: own("file.before_edit"), timeout: 10 },
+					{
+						type: "command",
+						command: expect.stringContaining(own("file.before_edit")),
+						timeout: 10,
+					},
 				],
 			},
 		]);
 		expect(merged.hooks?.Stop).toEqual([
-			{ hooks: [{ type: "command", command: own("turn.end"), timeout: 300 }] },
+			{
+				hooks: [
+					{
+						type: "command",
+						command: expect.stringContaining(own("turn.end")),
+						timeout: 300,
+					},
+				],
+			},
 		]);
 		expect(mergeHooks(merged, config(), "claude")).toEqual(merged);
 	});
@@ -82,7 +98,7 @@ describe("mergeHooks", () => {
 			hooks: [
 				{
 					type: "command",
-					command: own("session.start", "codex"),
+					command: expect.stringContaining(own("session.start", "codex")),
 					timeout: 10,
 				},
 			],
@@ -92,12 +108,87 @@ describe("mergeHooks", () => {
 
 test("{root} in the command becomes each agent's repo root", () => {
 	const repo = config({ agents: { command: "{root}/bin/cagr" } });
-	expect(hookCommand(repo, "claude", "turn.end")).toBe(
+	expect(hookCommand(repo, "claude", "turn.end")).toStartWith(
 		'"$CLAUDE_PROJECT_DIR"/bin/cagr hook turn.end --agent claude',
 	);
-	expect(hookCommand(repo, "codex", "turn.end")).toBe(
+	expect(hookCommand(repo, "codex", "turn.end")).toStartWith(
 		'"$(git rev-parse --show-toplevel)"/bin/cagr hook turn.end --agent codex',
 	);
+});
+
+describe("hook commands", () => {
+	test.each([
+		["command.before", 2],
+		["file.before_edit", 2],
+		["session.start", 1],
+		["file.after_edit", 1],
+		["turn.end", 1],
+	] as const)("%s exits %i when cagr is missing", (event, code) => {
+		const repo = config({ agents: { command: "./cagr-not-installed" } });
+		for (const agent of ["claude", "codex"] as const) {
+			const result = Bun.spawnSync([
+				"sh",
+				"-c",
+				hookCommand(repo, agent, event),
+			]);
+			expect(result.exitCode).toBe(code);
+			expect(result.stderr.toString()).toContain(
+				"cagr is not installed or failed to start",
+			);
+			expect(result.stderr.toString()).toContain(
+				"Install cagr or run cagr doctor",
+			);
+		}
+	});
+
+	test("a crashing cagr refuses before-events", async () => {
+		const cwd = await mkdtemp(join(tmpdir(), "gw-hook-crash-"));
+		try {
+			await writeFile(join(cwd, "cagr"), "kill -TERM $$\n");
+			const repo = config({ agents: { command: "sh ./cagr" } });
+			const result = Bun.spawnSync(
+				["sh", "-c", hookCommand(repo, "codex", "command.before")],
+				{ cwd },
+			);
+			expect(result.exitCode).toBe(2);
+			expect(result.stderr.toString()).toContain(
+				"cagr is not installed or failed to start",
+			);
+		} finally {
+			await rm(cwd, { recursive: true, force: true });
+		}
+	});
+
+	test("passes through cagr's allow, deny, and fail-open results", async () => {
+		const cwd = await mkdtemp(join(tmpdir(), "gw-hook-results-"));
+		try {
+			await writeFile(
+				join(cwd, "cagr.toml"),
+				'[[commands.blocked]]\nmatch = "npm install"\nreason = "Use bun install instead."\n',
+			);
+			const repo = config({
+				agents: { command: `bun "${join(import.meta.dir, "cli.ts")}"` },
+			});
+			const command = hookCommand(repo, "claude", "command.before");
+			const call = (stdin: string) => {
+				const result = Bun.spawnSync(["sh", "-c", command], {
+					cwd,
+					stdin: Buffer.from(stdin),
+				});
+				expect(result.exitCode).toBe(0);
+				expect(result.stderr.toString()).toBe("");
+				return result.stdout.toString();
+			};
+			expect(call('{"tool_input":{"command":"bun install"}}')).toBe("");
+			const deny = JSON.parse(call('{"tool_input":{"command":"npm install"}}'));
+			expect(deny.hookSpecificOutput.permissionDecision).toBe("deny");
+			expect(JSON.parse(call("{")).systemMessage).toContain(
+				"cagr is off for this call because of an error",
+			);
+		} finally {
+			await rm(cwd, { recursive: true, force: true });
+		}
+	});
 });
 
 test("git hook scripts are marked generated and skip when cagr is missing", () => {
