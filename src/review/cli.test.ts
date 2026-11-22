@@ -21,3 +21,8 @@ test("--scan with no globs, or an unknown option, is an error", () => {
 	);
 	expect(() => parseReviewArgs(["--fast"])).toThrow("Unknown option --fast");
 });
+
+test("--full is accepted and forces a full round", () => {
+	expect(parseReviewArgs(["--full"])).toMatchObject({ full: true });
+	expect(parseReviewArgs([])).toMatchObject({ full: false });
+});

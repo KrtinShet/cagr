@@ -22,6 +22,7 @@ The `recommended` preset turns review on. Without a preset, set `[review] enable
 ```sh
 cagr review                      # review the branch's commits since its base
 cagr review --base develop       # compare with another base branch
+cagr review --full               # force a full round of the whole branch
 cagr review --effort deep        # pick the effort for this run
 ```
 
@@ -30,9 +31,9 @@ Before it starts:
 - Tracked files must be committed. If not: "Commit your changes first. The review covers commits, and the gate checks the commit you open the pull request from."
 - The base is `--base`, else `[git] protected_branch`, else `main`. cagr uses `origin/<base>` if it exists, else the local `<base>`. If it finds neither: "Cannot find the base branch "develop". Fetch it, or pass --base <branch>."
 - If the branch has no commits beyond the base, there is nothing to review.
-- If the current commit was already reviewed, it says so and does not run again.
+- If the current commit was already reviewed, it says so and does not run again, unless an Important finding from an earlier round is still open there (the verifier looks again) or you pass `--full`.
 
-The diff leaves out files that match `[review] skip`. A diff over 150,000 characters is cut, with a note and a `--stat` summary. The reviewer gets the commit subjects and bodies for the range.
+The diff leaves out files that match `[review] skip`. A diff over 150,000 characters is cut, with a note and a `--stat` summary. The reviewer gets the commit subjects and bodies for the range, without merge commits, cut at 6,000 characters.
 
 A report looks like this:
 
@@ -100,9 +101,25 @@ Commit the change, run `cagr review` locally, fix the findings in one commit, re
 
 `[review] max_rounds` defaults to 2. It caps rounds that can report new findings. If you set a higher value, each extra round covers only the changes since the previous review. Failed runs do not count toward the cap.
 
-Past the cap, `cagr review` runs only the verifier against the new commits. It checks earlier Important findings, including whether previous fixes still hold. The pull request gate passes when every Important finding is verified fixed or answered on that reviewed head. Nits and pre-existing findings are optional and never require another round. After a rewrite, cagr compares the tree of the last reviewed commit with the current one. Keep the last reviewed commit available locally so cagr can make that comparison.
+Past the cap there is no further full round. What runs depends on the new commits since the last review:
 
-With `[review] status = true`, the pre-push hook sends `cagr/review` as `success` for the pushed commit when its review or verifier-only check passed. It sends `pending` otherwise.
+- If every new commit is a fix commit, `cagr review` runs only the verifier. A fix commit is one where every file it changes held an Important finding in this cycle, or one still open. Files that match `[review] skip` do not count. The verifier checks earlier Important findings, including whether previous fixes still hold.
+- If any new commit is not a fix commit (a new file, a test, any other change), the finders review the new commits' diff, and the verifier checks the earlier findings.
+
+The pull request gate passes when every Important finding is verified fixed or answered on that reviewed head. An older reviewed head passes only while none of the findings known when it was reviewed is open now, so a finding that a later round reopens fails it too. Nits and pre-existing findings are optional and never require another round.
+
+A cycle starts with a full round. If the last reviewed commit is not an ancestor of the current one (after a rebase, an amend, or a branch name reused after a merge), or it no longer exists locally, cagr says so and starts a new cycle: a full round of the branch, and the round count for the cap starts again. Earlier findings stay on the record: open ones are still checked, and the finders do not report them twice.
+
+`cagr review --full` forces a full round of the whole branch, even at a commit already reviewed. It also starts a new cycle. More review never weakens the gate.
+
+If the verifier judged an earlier finding not fixed and you think it was wrong, run `cagr review` again at the same commit: it runs the verifier once more. A finding reported at this commit needs a fix or an answer.
+
+With `[review] status = true`, the pre-push hook and `cagr review answer` send `cagr/review` for the commit:
+
+- `success` when it was reviewed (or verified) and no Important finding is open;
+- `success` with "Unreviewed: the reviewer failed" when the reviewer could not run and no Important finding is open, so a required status fails open;
+- `failure` when it was reviewed and an Important finding is open;
+- `pending` when it has not been reviewed yet.
 
 The record for each branch lives in `<git common dir>/cagr/reviews/<branch>.json`, so every worktree of the repo shares it. Nothing is written to the working tree.
 

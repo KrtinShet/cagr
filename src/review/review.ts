@@ -27,7 +27,9 @@ import {
 	blocking,
 	type Candidate,
 	categories,
+	cycleStart,
 	discoveryRounds,
+	findingFiles,
 	type ReviewFinding,
 	type ReviewRecord,
 	type Round,
@@ -41,6 +43,8 @@ export class ReviewInputError extends Error {}
 export type ReviewOptions = {
 	cwd: string;
 	base?: string;
+	/** Review the whole branch in a full round, even if it was reviewed. Starts a new cycle. */
+	full?: boolean;
 	effort?: Effort;
 	/** Review existing code in these globs instead of a branch's commits. */
 	scan?: string[];
@@ -122,9 +126,6 @@ export async function review(
 		(file
 			? loadRecord(file, branch, baseName)
 			: loadRecord("", branch, baseName));
-	const lastOk = record.rounds.findLast((round) => !round.error);
-
-	const capped = discoveryRounds(record) >= config.review.max_rounds;
 	let from = head;
 	let mergeBase = head;
 	let scope: Round["scope"] = "scan";
@@ -138,21 +139,17 @@ export async function review(
 				file,
 				`No commits on ${branch} beyond ${baseName}, so there is nothing to review.`,
 			);
-		if (lastOk?.head === head && record.rounds.at(-1) === lastOk)
-			return skippedOutcome(
-				record,
-				file,
-				`${head.slice(0, 7)} was already reviewed in round ${lastOk.n}.`,
-			);
-		from = lastOk?.head ?? mergeBase;
-		scope = capped ? "verify" : lastOk ? "diff" : "full";
-		if (
-			lastOk &&
-			!(await run(["git", "cat-file", "-e", `${from}^{commit}`], cwd)).ok
-		)
-			throw new ReviewInputError(
-				`The last reviewed commit ${from} is missing. Fetch it so cagr can compare the fixes against it.`,
-			);
+		const plan = await planRound(record, {
+			head,
+			mergeBase,
+			full: options.full === true,
+			maxRounds: config.review.max_rounds,
+			skip: config.review.skip,
+			cwd,
+			progress,
+		});
+		if (typeof plan === "string") return skippedOutcome(record, file, plan);
+		({ from, scope } = plan);
 		branchFiles = (await gitOut(["diff", "--name-only", mergeBase, head], cwd))
 			.split("\n")
 			.filter(Boolean);
@@ -183,10 +180,18 @@ export async function review(
 		);
 		if (diff.length > maxDiff)
 			diff = `${diff.slice(0, maxDiff)}\n... (diff cut at ${maxDiff} characters; run \`git diff ${from.slice(0, 12)} ${head.slice(0, 12)}\` for the rest)\n\n${await gitOut(["diff", "--stat", from, head], cwd)}`;
-		log = await gitOut(
-			["log", "--format=- %s%n%b", `${from}..${head}`, `^${mergeBase}`],
-			cwd,
-		);
+		log = (
+			await gitOut(
+				[
+					"log",
+					"--no-merges",
+					"--format=- %s%n%b",
+					`${from}..${head}`,
+					`^${mergeBase}`,
+				],
+				cwd,
+			)
+		).slice(0, 6000);
 	}
 	const guidePath = join(config.root, config.review.guide);
 	const context: ReviewContext = {
@@ -203,6 +208,7 @@ export async function review(
 		skip: config.review.skip,
 		scan: options.scan ?? [],
 		previous: record.findings,
+		cycleStart: scope === "full" ? roundNumber : cycleStart(record),
 	};
 
 	const round: Round = {
@@ -238,7 +244,7 @@ export async function review(
 			scope === "verify" ? [] : findersFor(effort, config.review.security);
 		progress(
 			scope === "verify"
-				? `Reached the ${config.review.max_rounds}-round cap. Running only the verifier on the new commits.`
+				? "Running only the verifier on earlier findings."
 				: `Reviewing ${scope === "diff" ? "the new commits" : scope === "scan" ? `${reviewed.length} files` : branch} with ${agent.name}: ${effort} effort, ${risk.tier} risk, ${focuses.length} finder${focuses.length === 1 ? "" : "s"}.`,
 		);
 		const outputs = await Promise.all(
@@ -300,7 +306,6 @@ export async function review(
 		round.summary =
 			scope === "verify" ? "Checked earlier findings." : countLine(found);
 		const passed = blocking(record).length === 0;
-		round.passed = passed;
 		if (!scanning) record.rounds.push(round);
 		if (file) writeRecord(file, record);
 		return {
@@ -316,6 +321,95 @@ export async function review(
 		if (!(error instanceof ReviewerError)) throw error;
 		return failed(record, round, file, error);
 	}
+}
+
+type PlanInput = {
+	head: string;
+	mergeBase: string;
+	full: boolean;
+	maxRounds: number;
+	skip: string[];
+	cwd: string;
+	progress: (line: string) => void;
+};
+
+/**
+ * Picks what the next round covers, or returns why there is nothing to do.
+ * A fix commit changes only files that held an Important finding in this
+ * cycle. Past the round cap, the verifier alone covers fix commits; any other
+ * new commit gets finders on the new commits' diff.
+ */
+async function planRound(
+	record: ReviewRecord,
+	input: PlanInput,
+): Promise<{ from: string; scope: Round["scope"] } | string> {
+	const { head, mergeBase, cwd, progress } = input;
+	const fresh = { from: mergeBase, scope: "full" as const };
+	const lastOk = record.rounds.findLast((round) => !round.error);
+	if (input.full || !lastOk) return fresh;
+	const short = lastOk.head.slice(0, 7);
+	if (
+		!(await run(["git", "cat-file", "-e", `${lastOk.head}^{commit}`], cwd)).ok
+	) {
+		progress(
+			`The last reviewed commit ${short} is gone (amended, rebased or garbage-collected), so this starts a new cycle with a full review.`,
+		);
+		return fresh;
+	}
+	if (
+		!(await run(["git", "merge-base", "--is-ancestor", lastOk.head, head], cwd))
+			.ok
+	) {
+		progress(
+			`The last reviewed commit ${short} is not in this branch's history (a rebase or a reused branch name), so this starts a new cycle with a full review.`,
+		);
+		return fresh;
+	}
+	if (lastOk.head === head) {
+		// A verifier can be wrong about an earlier finding, so let it look again. Findings from this round need a fix or an answer.
+		const recheck = blocking(record).some(
+			(finding) => finding.round < lastOk.n,
+		);
+		return recheck
+			? { from: lastOk.from, scope: "verify" }
+			: `${head.slice(0, 7)} was already reviewed in round ${lastOk.n}.`;
+	}
+	if (discoveryRounds(record) < input.maxRounds)
+		return { from: lastOk.head, scope: "diff" };
+	const covered = findingFiles(record);
+	const commits = (
+		await gitOut(
+			["rev-list", "--no-merges", `${lastOk.head}..${head}`, `^${mergeBase}`],
+			cwd,
+		)
+	)
+		.split("\n")
+		.filter(Boolean);
+	const other: string[] = [];
+	for (const sha of commits) {
+		const files = (
+			await gitOut(
+				["diff-tree", "--no-commit-id", "--name-only", "-r", sha],
+				cwd,
+			)
+		)
+			.split("\n")
+			.filter(
+				(path) =>
+					path !== "" && !input.skip.some((glob) => matchesGlob(glob, path)),
+			);
+		if (files.some((path) => !covered.has(path))) other.push(sha.slice(0, 7));
+	}
+	if (other.length === 0) {
+		progress(
+			`Reached the ${input.maxRounds}-round cap, and the new commits only change files that held an Important finding.`,
+		);
+		return { from: lastOk.head, scope: "verify" };
+	}
+	progress(
+		`Reached the ${input.maxRounds}-round cap, but ${other.join(", ")} change${other.length === 1 ? "s" : ""} files no earlier finding covered, so finders review the new commits.`,
+	);
+	return { from: lastOk.head, scope: "diff" };
 }
 
 function failed(

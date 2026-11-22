@@ -130,9 +130,6 @@ export function answerFinding(
 		);
 	finding.status = "answered";
 	finding.answer = { kind, reason: reason.trim() };
-	const last = record?.rounds.at(-1);
-	if (last && !last.error && record && blocking(record).length === 0)
-		last.passed = true;
 	return finding;
 }
 

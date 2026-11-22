@@ -24,6 +24,8 @@ export type ReviewContext = {
 	skip: string[];
 	scan: string[];
 	previous: ReviewFinding[];
+	/** The round that started the current cycle: fixed findings from before it are not checked again. */
+	cycleStart: number;
 };
 
 const strict = (properties: Record<string, unknown>) => ({
@@ -117,7 +119,9 @@ function commitMessages(context: ReviewContext) {
 export function findingsToVerify(context: ReviewContext) {
 	return context.previous.filter((finding) =>
 		context.scope === "verify"
-			? finding.severity === "important" && finding.status !== "answered"
+			? finding.severity === "important" &&
+				(finding.status === "open" ||
+					(finding.status === "fixed" && finding.round >= context.cycleStart))
 			: finding.status === "open",
 	);
 }

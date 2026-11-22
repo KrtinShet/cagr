@@ -26,13 +26,32 @@ export const reviewOrder =
 	"Commit, run `cagr review`, fix or answer every Important finding, then re-check any new commits. Push once the review passes.";
 
 export const cappedReview =
-	"The round cap has been reached. `cagr review` only verifies earlier findings against the new commits.";
+	"The round cap has been reached. For new commits that only change files with an earlier Important finding, `cagr review` only verifies earlier findings. Other new commits still get finders on their diff.";
 
 export const answerHint = (id: string) =>
 	`If a finding is wrong or intentional, answer it instead: \`cagr review answer ${id} --wrong "<why>"\` (or --intentional, or --minor). A person reads every answer.`;
 
 export const findingLine = (finding: ReviewFinding) =>
 	`${finding.id} ${finding.file}${finding.line > 0 ? `:${finding.line}` : ""}  ${finding.title}`;
+
+/**
+ * The Important findings open against `head`, judged by the record's current
+ * finding states, or null when no round that ran reviewed it. An older head
+ * answers for the findings known when it was reviewed, so a finding that a
+ * later round reopens holds it too.
+ */
+export function openAt(
+	record: ReviewRecord,
+	head: string,
+): ReviewFinding[] | null {
+	if (record.rounds.at(-1)?.head === head) return blocking(record);
+	const prior = record.rounds.findLast(
+		(round) => round.head === head && !round.error,
+	);
+	return prior
+		? blocking(record).filter((finding) => finding.round <= prior.n)
+		: null;
+}
 
 /** Whether the commit `head` may become a pull request. */
 export function gateResult(
@@ -46,9 +65,8 @@ export function gateResult(
 			kind: "deny",
 			reason: `This branch has not been reviewed. ${reviewOrder} Give the review a 15 minute timeout, then run this command again.`,
 		};
-	if (head !== null && last.head !== head) {
-		const prior = record.rounds.findLast((round) => round.head === head);
-		if (prior?.passed && !prior.error) return { kind: "allow" };
+	const open = openAt(record, head ?? last.head);
+	if (open === null) {
 		const next =
 			discoveryRounds(record) >= config.review.max_rounds
 				? cappedReview
@@ -58,9 +76,8 @@ export function gateResult(
 			reason: `This commit differs from the last review (${last.head.slice(0, 7)}). ${next} Fix or answer every Important finding, then push and run this command again.`,
 		};
 	}
-	const open = blocking(record);
 	const list = open.map((finding) => `- ${findingLine(finding)}`).join("\n");
-	if (last.error)
+	if (last.error && (head === null || last.head === head))
 		// Fail open only on what the failed round would have checked: findings already known still hold.
 		return open.length === 0
 			? {

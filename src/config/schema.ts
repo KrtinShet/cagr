@@ -306,7 +306,7 @@ export const configSchema: Node = obj({
 			max_rounds: num({
 				min: 1,
 				description:
-					"Maximum rounds that can report new findings (default 2). After that, reviews only verify earlier findings.",
+					"Rounds per review cycle that run finders on every new commit (default 2). After that, fix commits get only the verifier, and other new commits get finders on their diff.",
 			}),
 			timeout_seconds: num({
 				min: 30,

@@ -84,6 +84,37 @@ test("after an earlier good round, a failed one says the newest commits go out u
 	);
 });
 
+test("an older head is judged by the current finding states, so a reopened finding fails it", () => {
+	const older = "c".repeat(40);
+	const rounds = [
+		round({ n: 1, head: "d".repeat(40) }),
+		round({ n: 2, head: older, scope: "diff" }),
+		round({ n: 3, head, scope: "verify" }),
+	];
+	const fixed = finding({ status: "fixed", fixedIn: older });
+	expect(gateResult(record(rounds, [fixed]), older, settings).kind).toBe(
+		"allow",
+	);
+	const reopened = finding();
+	const result = gateResult(record(rounds, [reopened]), older, settings);
+	expect(result.kind).toBe("deny");
+	expect(result.kind === "deny" && result.reason).toContain("f1 src/a.ts:4");
+	const later = finding({ id: "f2", round: 3 });
+	expect(gateResult(record(rounds, [later]), older, settings).kind).toBe(
+		"allow",
+	);
+});
+
+test("a full round starts a new cycle, so the cap counts from there", () => {
+	const rounds = [
+		round({ n: 1 }),
+		round({ n: 2, scope: "diff" }),
+		round({ n: 3, scope: "full" }),
+	];
+	const result = gateResult(record(rounds, [finding()]), head, settings);
+	expect(result.kind === "deny" && result.reason).not.toContain("round cap");
+});
+
 test("failed rounds and verifier-only checks do not count toward the cap", () => {
 	const rounds = [
 		round({ n: 1 }),

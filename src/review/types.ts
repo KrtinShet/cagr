@@ -43,7 +43,6 @@ export type Round = {
 	reviewer: string;
 	at: string;
 	summary: string;
-	passed?: boolean;
 	/** Set when the reviewer could not run. The gate then lets the PR through and tells the human. */
 	error: string | null;
 };
@@ -70,6 +69,37 @@ export const blocking = (record: ReviewRecord) =>
 		(finding) => finding.status === "open" && finding.severity === "important",
 	);
 
-export const discoveryRounds = (record: ReviewRecord) =>
-	record.rounds.filter((round) => !round.error && round.scope !== "verify")
-		.length;
+/**
+ * The number of the round that started the current review cycle: the last
+ * full round that ran. A rebase, a reused branch name or `--full` starts a new
+ * cycle, and the round cap counts from there.
+ */
+export const cycleStart = (record: ReviewRecord) =>
+	record.rounds.findLast((round) => !round.error && round.scope === "full")
+		?.n ?? 0;
+
+/** Rounds in the current cycle that ran finders. These count toward `[review] max_rounds`. */
+export const discoveryRounds = (record: ReviewRecord) => {
+	const start = cycleStart(record);
+	return record.rounds.filter(
+		(round) => !round.error && round.scope !== "verify" && round.n >= start,
+	).length;
+};
+
+/**
+ * Files that held an Important finding in the current cycle, or one still
+ * open. A commit that changes only these files is a fix commit.
+ */
+export const findingFiles = (record: ReviewRecord) => {
+	const start = cycleStart(record);
+	return new Set(
+		record.findings
+			.filter(
+				(finding) =>
+					finding.severity === "important" &&
+					finding.file !== "" &&
+					(finding.status === "open" || finding.round >= start),
+			)
+			.map((finding) => finding.file),
+	);
+};

@@ -18,8 +18,9 @@ import { type AnswerKind, answerKinds } from "./types";
 
 export const reviewHelp = `Usage: cagr review [options]
 
-  review [--base <branch>] [--effort quick|standard|deep]
-                               Review this branch. After round 1, check only new commits. Past the cap, check earlier findings only.
+  review [--base <branch>] [--full] [--effort quick|standard|deep]
+                               Review this branch. After round 1, check only new commits. Past the cap, the
+                               verifier alone checks fix commits. --full forces a full round.
   review --scan <globs...> [--issue]
                                Review existing code. --issue opens a GitHub issue with the findings.
   review --ci                  In GitHub Actions: review the pull request and post the findings on it.
@@ -54,6 +55,7 @@ export function parseReviewArgs(args: string[]) {
 	const issue = takeFlag(rest, "--issue");
 	const base = take(rest, "--base");
 	const effort = takeEffort(rest);
+	const full = takeFlag(rest, "--full");
 	let scan: string[] | undefined;
 	const scanIndex = rest.indexOf("--scan");
 	if (scanIndex !== -1) {
@@ -68,7 +70,7 @@ export function parseReviewArgs(args: string[]) {
 	}
 	if (rest.length > 0)
 		throw new ReviewInputError(`Unknown option ${rest[0]}.\n\n${reviewHelp}`);
-	return { scan, issue, base, effort };
+	return { scan, issue, base, effort, full };
 }
 
 function takeEffort(args: string[]): Effort | undefined {
@@ -158,10 +160,11 @@ export async function reviewCommand(
 		console.log(result.report);
 		return result.ok ? 0 : 1;
 	}
-	const { scan, issue, base, effort } = parseReviewArgs(rest);
+	const { scan, issue, base, effort, full } = parseReviewArgs(rest);
 	const outcome = await review(config, {
 		cwd,
 		base,
+		full,
 		effort,
 		scan,
 		progress,

@@ -1,9 +1,9 @@
 import type { Config } from "../config/schema";
 import { gitContext } from "../git";
-import { gateResult } from "./gate";
+import { gateResult, openAt } from "./gate";
 import type { Gh } from "./github";
 import { readRecord, recordPath } from "./store";
-import { blocking, type ReviewRecord } from "./types";
+import type { ReviewRecord } from "./types";
 
 export const reviewContext = "cagr/review";
 export const checksContext = "cagr/checks";
@@ -18,7 +18,10 @@ export type CommitStatus = {
 const describe = (text: string) =>
 	text.length <= 140 ? text : `${text.slice(0, 139)}…`;
 
-/** The `cagr/review` status for a commit: the review gate's answer, in GitHub's terms. */
+/**
+ * The `cagr/review` status for a commit: the review gate's answer, in GitHub's
+ * terms. Both the pre-push hook and `cagr review answer` send this.
+ */
 export function reviewStatus(
 	record: ReviewRecord | null,
 	sha: string,
@@ -34,11 +37,11 @@ export function reviewStatus(
 		return gate.notice
 			? status(
 					"success",
-					"The review could not run, so this went out unreviewed. Review it yourself.",
+					"Unreviewed: the reviewer failed and no Important finding is open. Review this commit yourself.",
 				)
 			: status("success", "Passed: no Important finding is open.");
-	const open = record ? blocking(record).length : 0;
-	if (record?.rounds.at(-1)?.head === sha && open > 0)
+	const open = record ? (openAt(record, sha)?.length ?? 0) : 0;
+	if (open > 0)
 		return status(
 			"failure",
 			`${open} Important finding${open === 1 ? "" : "s"} open. Fix or answer ${open === 1 ? "it" : "them"}, then run cagr review.`,
@@ -163,20 +166,14 @@ export async function postStatusAfterPush(
 	const record = git.commonDir
 		? readRecord(recordPath(git.commonDir, options.branch))
 		: null;
-	const gate = gateResult(record, options.sha, config);
-	const status: CommitStatus =
-		gate.kind === "allow" && !gate.notice
-			? {
-					context: reviewContext,
-					state: "success",
-					description: "Passed: no Important finding is open.",
-				}
-			: {
-					context: reviewContext,
-					state: "pending",
-					description:
-						"Run cagr review and fix or answer open Important findings.",
-				};
-	lines.push((await postStatus(gh, options.sha, status)).message);
+	lines.push(
+		(
+			await postStatus(
+				gh,
+				options.sha,
+				reviewStatus(record, options.sha, config),
+			)
+		).message,
+	);
 	return lines;
 }
