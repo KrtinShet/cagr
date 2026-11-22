@@ -11,7 +11,13 @@ import {
 	type ReviewAgent,
 	ReviewerError,
 } from "./agent";
-import { answerHint, type Reach, reachFrom, unresolved } from "./gate";
+import {
+	answerHint,
+	holdsOnError,
+	type Reach,
+	reachFrom,
+	unresolved,
+} from "./gate";
 import {
 	type FinderOutput,
 	type Focus,
@@ -66,10 +72,14 @@ export type ReviewOutcome = {
 	file: string | null;
 	/** Set when there was nothing to review, with why. */
 	skipped: string | null;
+	/** Why open Important findings were not judged again in this run. */
+	held: string[];
 };
 
 const maxDiff = 150_000;
 const maxNits = 3;
+/** Verdicts an open finding may get. Past this, an answer is the only way to close it. */
+export const maxVerdicts = 3;
 
 async function gitOut(args: string[], cwd: string) {
 	const result = await run(["git", ...args], cwd);
@@ -138,6 +148,22 @@ export async function review(
 		: await reachFrom(record, head, cwd);
 	const openNow = () =>
 		scanning ? blocking(record) : unresolved(record, head, reach);
+	const held = scanning
+		? new Map<string, string>()
+		: await heldBack(record, head, cwd);
+	// After a failed round the gate holds only what `holdsOnError` keeps, so the report and CI say the same.
+	const openAfterError = async () => {
+		if (scanning) return blocking(record);
+		const after = await reachFrom(record, head, cwd);
+		return unresolved(record, head, after).filter((finding) =>
+			holdsOnError(finding, after),
+		);
+	};
+	const heldLines = () =>
+		openNow().flatMap((finding) => {
+			const why = held.get(finding.id);
+			return why ? [why] : [];
+		});
 	if (!scanning) {
 		const baseRef = await resolveBase(baseName, cwd);
 		mergeBase = await gitOut(["merge-base", baseRef, head], cwd);
@@ -154,6 +180,7 @@ export async function review(
 			full: options.full === true,
 			maxRounds: config.review.max_rounds,
 			reach,
+			held,
 			cwd,
 			progress,
 		});
@@ -224,7 +251,9 @@ export async function review(
 			.filter((finding) => finding.status === "fixed")
 			.map((finding) => finding.id),
 		spent: record.findings
-			.filter((finding) => judgedAt(record, finding, head))
+			.filter(
+				(finding) => held.has(finding.id) || judgedAt(record, finding, head),
+			)
 			.map((finding) => finding.id),
 		capped:
 			scope !== "full" &&
@@ -249,7 +278,7 @@ export async function review(
 	try {
 		agent = options.agent ?? pickAgent(config.review.reviewer);
 	} catch (error) {
-		return failed(record, round, file, openNow, error as Error);
+		return failed(record, round, file, openAfterError, error as Error);
 	}
 	round.reviewer = agent.name;
 	const ask = (prompt: string, schema: object) =>
@@ -262,8 +291,11 @@ export async function review(
 		} satisfies AgentRequest);
 
 	try {
+		// An empty diff (empty commits, or only skipped files) gives finders nothing to read.
 		const focuses =
-			scope === "verify" ? [] : findersFor(effort, config.review.security);
+			scope === "verify" || (scope === "diff" && diff === "")
+				? []
+				: findersFor(effort, config.review.security);
 		progress(
 			scope === "verify"
 				? "Running only the verifier on earlier findings."
@@ -316,6 +348,8 @@ export async function review(
 		const found = assignIds(capNits(kept), record, roundNumber);
 		const fixed: ReviewFinding[] = [];
 		for (const finding of previous) {
+			if (finding.status === "open")
+				finding.verdicts = (finding.verdicts ?? 0) + 1;
 			if (finding.status === "open" && fixedIds.has(finding.id)) {
 				finding.status = "fixed";
 				finding.fixedIn = head;
@@ -346,10 +380,11 @@ export async function review(
 			passed: open.length === 0,
 			file,
 			skipped: null,
+			held: heldLines(),
 		};
 	} catch (error) {
 		if (!(error instanceof ReviewerError)) throw error;
-		return failed(record, round, file, openNow, error);
+		return failed(record, round, file, openAfterError, error);
 	}
 }
 
@@ -359,6 +394,8 @@ type PlanInput = {
 	full: boolean;
 	maxRounds: number;
 	reach: Reach;
+	/** Open findings the verifier may not judge at this head, with why. */
+	held: Map<string, string>;
 	cwd: string;
 	progress: (line: string) => void;
 };
@@ -384,6 +421,58 @@ function judgedAt(record: ReviewRecord, finding: ReviewFinding, head: string) {
 		ran.filter((round) => round.verified?.includes(finding.id)).length >= 2
 	);
 }
+
+/**
+ * Open findings the verifier may not judge at `head`, each with why. A verdict
+ * on an unchanged file is only a reroll of the model, so a finding is judged
+ * again only when a commit since its last verdict (or since the round that
+ * reported it) changed its file, and at most `maxVerdicts` times. A recheck at
+ * the commit of its last verdict is left to `judgedAt`. A git error leaves the
+ * finding to the verifier.
+ */
+async function heldBack(record: ReviewRecord, head: string, cwd: string) {
+	const held = new Map<string, string>();
+	await Promise.all(
+		record.findings
+			.filter((finding) => finding.status === "open")
+			.map(async (finding) => {
+				if ((finding.verdicts ?? 0) >= maxVerdicts) {
+					held.set(
+						finding.id,
+						`${finding.id} is still open: the verifier judged it ${maxVerdicts} times, the most it may. Answer it with ${answerCommand(finding.id)}.`,
+					);
+					return;
+				}
+				const last = record.rounds.findLast(
+					(round) =>
+						!round.error &&
+						(round.n === finding.round || round.verified?.includes(finding.id)),
+				);
+				if (!last || last.head === head) return;
+				const unchanged = await run(
+					[
+						"git",
+						"diff",
+						"--quiet",
+						last.head,
+						head,
+						"--",
+						...(finding.file ? [`:(literal)${finding.file}`] : []),
+					],
+					cwd,
+				);
+				if (unchanged.ok)
+					held.set(
+						finding.id,
+						`${finding.id} is still open: no commit since the last check touched ${finding.file || "any file"}. Fix it, or answer it with ${answerCommand(finding.id)}.`,
+					);
+			}),
+	);
+	return held;
+}
+
+const answerCommand = (id: string) =>
+	`\`cagr review answer ${id} --wrong "<why>"\` (or --intentional, or --minor)`;
 
 /**
  * Picks what the next round covers, or returns why there is nothing to do.
@@ -435,10 +524,22 @@ async function planRound(
 		);
 		if (earlier.length === 0)
 			return `${head.slice(0, 7)} was already reviewed in round ${lastOk.n}.`;
-		const spent = earlier.filter((finding) => judgedAt(record, finding, head));
-		if (spent.length === earlier.length) {
-			const ids = spent.map((finding) => finding.id).join(", ");
-			return `The verifier already judged ${ids} at ${head.slice(0, 7)} as often as it may, so \`cagr review\` does not judge ${spent.length === 1 ? "it" : "them"} again at this commit. Commit a fix and run \`cagr review\`. ${answerHint(spent[0]?.id ?? "f1")}`;
+		const why = earlier.flatMap((finding) => {
+			const reason = input.held.get(finding.id);
+			return reason ? [reason] : [];
+		});
+		const spent = earlier.filter(
+			(finding) =>
+				!input.held.has(finding.id) && judgedAt(record, finding, head),
+		);
+		if (why.length + spent.length === earlier.length) {
+			if (spent.length > 0) {
+				const ids = spent.map((finding) => finding.id).join(", ");
+				why.push(
+					`The verifier already judged ${ids} at ${head.slice(0, 7)} as often as it may, so \`cagr review\` does not judge ${spent.length === 1 ? "it" : "them"} again at this commit. Commit a fix and run \`cagr review\`. ${answerHint(spent[0]?.id ?? "f1")}`,
+				);
+			}
+			return why.join("\n");
 		}
 		return { from: first.from, scope: "verify", recheckBefore: first.n };
 	}
@@ -449,13 +550,13 @@ async function planRound(
 	return { from: lastOk.head, scope: "diff", recheckBefore: null };
 }
 
-function failed(
+async function failed(
 	record: ReviewRecord,
 	round: Round,
 	file: string | null,
-	openNow: () => ReviewFinding[],
+	openAfter: () => Promise<ReviewFinding[]>,
 	error: Error,
-): ReviewOutcome {
+): Promise<ReviewOutcome> {
 	round.error = error.message;
 	round.summary = "The reviewer could not run.";
 	record.rounds.push(round);
@@ -465,10 +566,11 @@ function failed(
 		round,
 		found: [],
 		fixed: [],
-		open: openNow(),
+		open: await openAfter(),
 		passed: false,
 		file,
 		skipped: null,
+		held: [],
 	};
 }
 
@@ -487,6 +589,7 @@ function skippedOutcome(
 		passed: open.length === 0,
 		file,
 		skipped: why,
+		held: [],
 	};
 }
 

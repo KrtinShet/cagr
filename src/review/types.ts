@@ -31,6 +31,8 @@ export type ReviewFinding = Candidate & {
 	status: "open" | "fixed" | "answered";
 	answer: { kind: AnswerKind; reason: string } | null;
 	fixedIn: string | null;
+	/** Verdicts the verifier gave while the finding was open. Older records lack it. */
+	verdicts?: number;
 };
 
 export type Round = {

@@ -35,7 +35,15 @@ export const findingLine = (finding: ReviewFinding) =>
 	`${finding.id} ${finding.file}${finding.line > 0 ? `:${finding.line}` : ""}  ${finding.title}`;
 
 /** Whether a commit is the judged head or one of its ancestors. */
-export type Reach = (commit: string) => boolean;
+export type Reach = {
+	(commit: string): boolean;
+	/**
+	 * Set only after a failed round: fixed findings whose fix commit the head
+	 * does not contain, but whose file at the head is as the fix left it (a
+	 * rebase, not a reset to before the fix).
+	 */
+	kept?: ReadonlySet<string>;
+};
 
 /**
  * Which commits where findings were judged fixed are `head` or its ancestors.
@@ -68,8 +76,44 @@ export async function reachFrom(
 				reached.add(commit);
 		}),
 	);
-	return (commit) => reached.has(commit);
+	const reach: Reach = (commit) => reached.has(commit);
+	if (record.rounds.at(-1)?.error) {
+		const kept = new Set<string>();
+		await Promise.all(
+			record.findings.map(async (finding) => {
+				if (
+					finding.status !== "fixed" ||
+					!finding.fixedIn ||
+					reached.has(finding.fixedIn)
+				)
+					return;
+				const same = await run(
+					[
+						"git",
+						"diff",
+						"--quiet",
+						finding.fixedIn,
+						target,
+						"--",
+						...(finding.file ? [`:(literal)${finding.file}`] : []),
+					],
+					cwd,
+				);
+				if (same.ok) kept.add(finding.id);
+			}),
+		);
+		reach.kept = kept;
+	}
+	return reach;
 }
+
+/**
+ * Whether an unresolved finding still holds the gate after a failed round:
+ * an open one does, and so does a fix the head does not have. A fix a rebase
+ * carried over unchanged is unchecked, not open, so it fails open.
+ */
+export const holdsOnError = (finding: ReviewFinding, reach?: Reach) =>
+	finding.status === "open" || !reach?.kept?.has(finding.id);
 
 /**
  * The Important findings not closed at `head`: open ones, and fixed ones whose
@@ -136,18 +180,21 @@ export function gateResult(
 			reason: `This commit differs from the last review (${last.head.slice(0, 7)}). ${next} Fix or answer every Important finding, then push and run this command again.`,
 		};
 	}
-	const list = open.map((finding) => `- ${findingLine(finding)}`).join("\n");
-	if (last.error && (head === null || last.head === head))
+	const list = (findings: ReviewFinding[]) =>
+		findings.map((finding) => `- ${findingLine(finding)}`).join("\n");
+	if (last.error && (head === null || last.head === head)) {
 		// Fail open only on what the failed round would have checked: findings already known still hold.
-		return open.length === 0
+		const held = open.filter((finding) => holdsOnError(finding, reach));
+		return held.length === 0
 			? {
 					kind: "allow",
 					notice: `cagr: the review of ${last.head.slice(0, 7)} could not run (${last.error}), so ${record.rounds.some((round) => !round.error) ? "its newest commits go" : "this pull request goes"} out unreviewed. Review it yourself before you approve it.`,
 				}
 			: {
 					kind: "deny",
-					reason: `The last review could not run (${last.error}), and earlier rounds left ${open.length} important problem${open.length === 1 ? "" : "s"} open:\n${list}\n\nFix the findings, commit, and re-check with \`cagr review\` before pushing. ${answerHint(open[0]?.id ?? "f1")}`,
+					reason: `The last review could not run (${last.error}), and earlier rounds left ${held.length} important problem${held.length === 1 ? "" : "s"} open:\n${list(held)}\n\nFix the findings, commit, and re-check with \`cagr review\` before pushing. ${answerHint(held[0]?.id ?? "f1")}`,
 				};
+	}
 	if (open.length === 0) return { kind: "allow" };
 	const capped =
 		discoveryRounds(record) >= config.review.max_rounds
@@ -155,6 +202,6 @@ export function gateResult(
 			: "";
 	return {
 		kind: "deny",
-		reason: `The review found ${open.length} important problem${open.length === 1 ? "" : "s"} still open:\n${list}\n\nFix the findings, commit, and re-check with \`cagr review\` before pushing. ${answerHint(open[0]?.id ?? "f1")}${capped}`,
+		reason: `The review found ${open.length} important problem${open.length === 1 ? "" : "s"} still open:\n${list(open)}\n\nFix the findings, commit, and re-check with \`cagr review\` before pushing. ${answerHint(open[0]?.id ?? "f1")}${capped}`,
 	};
 }

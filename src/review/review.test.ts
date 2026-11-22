@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { resolveConfig } from "../config/load";
 import { tempRepo } from "../test/repo";
 import { type AgentRequest, type ReviewAgent, ReviewerError } from "./agent";
-import { gateResult } from "./gate";
+import { gateResult, reachFrom } from "./gate";
 import { finderSchema, verifierSchema } from "./prompt";
 import { reviewReport } from "./report";
 import {
@@ -719,6 +719,196 @@ describe("review", () => {
 		await review(config, { cwd: repo.root, agent, effort: "quick" });
 		expect(calls[0]?.prompt).not.toContain("SNAPSHOT_TEXT");
 		expect(calls[0]?.prompt).toContain("**/*.snap");
+	});
+});
+
+describe("verdicts on earlier findings", () => {
+	/** A verifier that fails the test if it is asked about f1. */
+	const noVerdictOnF1 = () =>
+		fakeAgent({
+			finder: () => ({ findings: [] }),
+			verifier: (request) => {
+				if (request.prompt.includes("f1 src/a.ts"))
+					throw new Error("f1 was judged again on an unchanged file");
+				return { candidates: [], previous: [] };
+			},
+		});
+
+	/** Round 1 at standard effort reports f1 in src/a.ts. */
+	async function reported() {
+		const repo = await branchRepo();
+		const { agent } = fakeAgent({
+			finder: (_, call) => ({ findings: call === 0 ? [candidate()] : [] }),
+			verifier: () => ({
+				candidates: [
+					{ id: "C1", real: true, severity: "important", reason: "yes" },
+				],
+			}),
+		});
+		const first = await review(repo.config, { cwd: repo.root, agent });
+		expect(first.found.map((entry) => entry.id)).toEqual(["f1"]);
+		const emptyCommit = () =>
+			repo.git("commit", "-q", "--allow-empty", "-m", "fix: retry");
+		return { repo, emptyCommit };
+	}
+
+	test("empty commits get no new verdict, and the finding stays open", async () => {
+		const { repo, emptyCommit } = await reported();
+		for (let attempt = 0; attempt < 3; attempt++) {
+			await emptyCommit();
+			const { agent, calls } = noVerdictOnF1();
+			const outcome = await review(repo.config, { cwd: repo.root, agent });
+			expect(calls).toEqual([]);
+			expect(outcome.round?.scope).toBe("diff");
+			expect(outcome.passed).toBe(false);
+			expect(reviewReport(outcome, 2)).toContain(
+				"f1 is still open: no commit since the last check touched src/a.ts. Fix it, or answer it with `cagr review answer f1",
+			);
+			// The recheck at the same commit is no reroll either.
+			const again = await review(repo.config, { cwd: repo.root, agent });
+			expect(calls).toEqual([]);
+			expect(again.skipped).toContain(
+				"f1 is still open: no commit since the last check touched src/a.ts.",
+			);
+		}
+		// Neither is --full, which runs the finders but does not judge f1.
+		await emptyCommit();
+		const { agent, calls } = noVerdictOnF1();
+		const forced = await review(repo.config, {
+			cwd: repo.root,
+			agent,
+			full: true,
+		});
+		expect(calls.map((call) => call.schema)).toEqual([
+			finderSchema,
+			finderSchema,
+		]);
+		expect(forced.record.findings[0]?.status).toBe("open");
+		expect(forced.record.findings[0]?.verdicts).toBeUndefined();
+		expect(
+			gateResult(forced.record, forced.round?.head ?? "", repo.config).kind,
+		).toBe("deny");
+	});
+
+	test("a commit that touches the finding's file gets a verdict", async () => {
+		const { repo, emptyCommit } = await reported();
+		await emptyCommit();
+		await review(repo.config, { cwd: repo.root, agent: noVerdictOnF1().agent });
+		await repo.commit("fix: handle the session", {
+			"src/a.ts": "export const login = (user) => user?.name;\n",
+		});
+		const { agent, calls } = fakeAgent({
+			finder: () => ({ findings: [] }),
+			verifier: () => ({ previous: [{ id: "f1", fixed: true }] }),
+		});
+		const outcome = await review(repo.config, { cwd: repo.root, agent });
+		const verifiers = calls.filter((call) => call.schema === verifierSchema);
+		expect(verifiers).toHaveLength(1);
+		expect(verifiers[0]?.prompt).toContain("f1 src/a.ts");
+		expect(outcome.fixed.map((entry) => entry.id)).toEqual(["f1"]);
+		expect(outcome.passed).toBe(true);
+	});
+
+	test("a finding gets at most three verdicts, then only an answer closes it", async () => {
+		const { repo } = await reported();
+		const stubborn = () =>
+			fakeAgent({
+				finder: () => ({ findings: [] }),
+				verifier: () => ({ previous: [{ id: "f1", fixed: false }] }),
+			});
+		let edit = 0;
+		const touch = () =>
+			repo.commit(`fix: attempt ${++edit}`, { "src/a.ts": `// ${edit}\n` });
+		await touch();
+		await review(repo.config, { cwd: repo.root, agent: stubborn().agent });
+		// The one recheck at a commit counts toward the cap too.
+		const recheck = await review(repo.config, {
+			cwd: repo.root,
+			agent: stubborn().agent,
+		});
+		expect(recheck.round?.scope).toBe("verify");
+		await touch();
+		const third = await review(repo.config, {
+			cwd: repo.root,
+			agent: stubborn().agent,
+		});
+		expect(third.record.findings[0]?.verdicts).toBe(3);
+		await touch();
+		const lenient = fakeAgent({
+			finder: () => ({ findings: [] }),
+			verifier: () => ({ previous: [{ id: "f1", fixed: true }] }),
+		});
+		const capped = await review(repo.config, {
+			cwd: repo.root,
+			agent: lenient.agent,
+		});
+		expect(
+			lenient.calls.some(
+				(call) =>
+					call.schema === verifierSchema && call.prompt.includes("f1 src/a.ts"),
+			),
+		).toBe(false);
+		expect(capped.passed).toBe(false);
+		expect(reviewReport(capped, 2)).toContain(
+			"f1 is still open: the verifier judged it 3 times, the most it may. Answer it with `cagr review answer f1",
+		);
+		const again = await review(repo.config, {
+			cwd: repo.root,
+			agent: lenient.agent,
+		});
+		expect(again.skipped).toContain("judged it 3 times");
+		expect(again.passed).toBe(false);
+	});
+
+	test("a reviewer error after a rebase does not hold the gate on a fix the rebase kept", async () => {
+		const repo = await branchRepo();
+		const { agent } = fakeAgent({
+			finder: (_, call) => ({ findings: call === 0 ? [candidate()] : [] }),
+			verifier: () => ({ previous: [{ id: "f1", fixed: true }] }),
+		});
+		const options = { cwd: repo.root, effort: "quick" as const };
+		await review(repo.config, { ...options, agent });
+		await repo.commit("fix: handle the session", {
+			"src/a.ts": "user?.name\n",
+		});
+		expect((await review(repo.config, { ...options, agent })).passed).toBe(
+			true,
+		);
+		await repo.git("commit", "-q", "--amend", "-m", "fix: handle a session");
+		const broken: ReviewAgent = {
+			name: "broken",
+			ask: async () => {
+				throw new ReviewerError("claude ran past 600s");
+			},
+		};
+		const outcome = await review(repo.config, { ...options, agent: broken });
+		expect(outcome.round?.scope).toBe("full");
+		expect(outcome.round?.error).toBe("claude ran past 600s");
+		expect(outcome.open).toEqual([]);
+		expect(reviewReport(outcome, 2)).toContain("went out unreviewed");
+		const head = outcome.round?.head ?? "";
+		const gate = gateResult(
+			outcome.record,
+			head,
+			repo.config,
+			await reachFrom(outcome.record, head, repo.root),
+		);
+		expect(gate.kind).toBe("allow");
+		expect(gate.kind === "allow" && gate.notice).toContain("unreviewed");
+		// A rebase that drops the fix still holds the gate.
+		await repo.commit("revert: drop the fix", { "src/a.ts": "user.name\n" });
+		await repo.git("commit", "-q", "--amend", "-m", "fix: drop it");
+		const dropped = await review(repo.config, { ...options, agent: broken });
+		expect(dropped.open.map((entry) => entry.id)).toEqual(["f1"]);
+		const droppedHead = dropped.round?.head ?? "";
+		expect(
+			gateResult(
+				dropped.record,
+				droppedHead,
+				repo.config,
+				await reachFrom(dropped.record, droppedHead, repo.root),
+			).kind,
+		).toBe("deny");
 	});
 });
 
