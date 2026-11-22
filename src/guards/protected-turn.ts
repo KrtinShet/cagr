@@ -26,6 +26,7 @@ import type { CheckResult } from "../stop-decision";
 import { protectedStateDir } from "../turn-state";
 import { gitOptionsWithValue } from "./command";
 import { protectedEntries, protectedEntry } from "./edit";
+import { checkLockfile, isLockfile, type LockfileStack } from "./lockfile";
 
 type Blob = { mode: string; oid: string };
 type IndexEntry = Blob & { stage: string };
@@ -41,6 +42,8 @@ type Snapshot = {
 	branch: string | null;
 	entries: ProtectedFile[];
 	files: Record<string, FileState> | null;
+	/** The stacks at the start of the turn, so turn end knows each lockfile's package manager. */
+	stacks?: LockfileStack[];
 };
 
 const hash = (bytes: string | Uint8Array) =>
@@ -281,6 +284,13 @@ export async function rememberProtected(
 					branch: config.git.protected_branch,
 					entries,
 					files,
+					stacks: config.stack.map(
+						({ paths, exclude_paths, package_manager }) => ({
+							paths,
+							exclude_paths,
+							package_manager,
+						}),
+					),
 				};
 				await writeFile(
 					join(temporary, "snapshot.json"),
@@ -430,7 +440,35 @@ async function protectedBranch(snapshot: Snapshot, deadline: number) {
 	return null;
 }
 
-async function violations(folder: string, deadline: number) {
+/** The lockfile content at the start of the turn: the saved working copy, the staged copy or the commit. */
+async function startingContent(
+	snapshot: Snapshot,
+	folder: string,
+	path: string,
+	before: FileState | undefined,
+	old: Blob | undefined,
+	deadline: number,
+): Promise<Uint8Array | null | undefined> {
+	if (typeof before?.work === "string")
+		return new Uint8Array(await readFile(join(folder, hash(path))));
+	if (before?.work === null) return null;
+	const [entry, ...rest] = before ? before.index : old ? [old] : [];
+	if (!entry) return null;
+	if (rest.length || ("stage" in entry && entry.stage !== "0"))
+		return undefined;
+	const text = await git(
+		snapshot.root,
+		["cat-file", "blob", entry.oid],
+		deadline,
+	);
+	return text === null ? undefined : new TextEncoder().encode(text);
+}
+
+async function violations(
+	folder: string,
+	deadline: number,
+	lockfileDeadline: number,
+) {
 	const snapshot: Snapshot = JSON.parse(
 		await readFile(join(folder, "snapshot.json"), "utf8"),
 	);
@@ -508,9 +546,45 @@ async function violations(folder: string, deadline: number) {
 				(!committed || sameBlob(branch, current))
 			)
 				return null;
+			// A lockfile is checked as one copy: the working copy, with the index and commit unchanged or matching it.
+			const onlyWorkingCopy =
+				!committed && JSON.stringify(index) === JSON.stringify(baseline.index);
+			const [entry, ...others] = index;
+			const oneCopy =
+				work === undefined &&
+				entry?.stage === "0" &&
+				others.length === 0 &&
+				(!committed || sameBlob(current, entry));
+			const checked = isLockfile(path);
+			const starting =
+				checked && (onlyWorkingCopy || oneCopy)
+					? await startingContent(
+							snapshot,
+							folder,
+							path,
+							before,
+							old,
+							deadline,
+						).catch(() => undefined)
+					: undefined;
+			const lockfile =
+				starting === undefined
+					? null
+					: await checkLockfile({
+							root,
+							path,
+							stacks: snapshot.stacks ?? [],
+							baseline: starting,
+							deadline: lockfileDeadline,
+						});
+			if (lockfile && lockfile.message === null) return null;
+			let note = lockfile ? `${lockfile.message} ` : "";
+			if (checked && !onlyWorkingCopy && !oneCopy)
+				note =
+					"cagr checks a lockfile when only its working copy changed, or when the working copy, the index and the last commit hold the same version. Stage and commit the lockfile the package manager wrote, or restore it. ";
 			if (!snapshot.files)
-				return `- ${join(root, path)}\n  Review changes against ${snapshot.head ?? "the empty starting tree"}. Restore only changes made during this turn.`;
-			return `- ${join(root, path)}\n  ${restoration(snapshot, folder, path, baseline, old, committed)}`;
+				return `- ${join(root, path)}\n  ${note}Review changes against ${snapshot.head ?? "the empty starting tree"}. Restore only changes made during this turn.`;
+			return `- ${join(root, path)}\n  ${note}${restoration(snapshot, folder, path, baseline, old, committed)}`;
 		}),
 	);
 	return problems.filter((problem) => problem !== null);
@@ -519,6 +593,7 @@ async function violations(folder: string, deadline: number) {
 export async function checkProtected(
 	file: string,
 	deadline: number,
+	lockfileDeadline = deadline,
 ): Promise<CheckResult | null> {
 	const directory = protectedStateDir(file);
 	if (!existsSync(directory)) return null;
@@ -527,7 +602,9 @@ export async function checkProtected(
 	);
 	const problems = (
 		await Promise.all(
-			folders.map((name) => violations(join(directory, name), deadline)),
+			folders.map((name) =>
+				violations(join(directory, name), deadline, lockfileDeadline),
+			),
 		)
 	).flat();
 	return problems.length

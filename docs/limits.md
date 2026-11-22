@@ -29,6 +29,18 @@ Other limits:
 - v0.1 has one preset, `recommended`. Presets from git URLs are planned for v0.2.
 - cagr does not enforce the approval counts of the risk tiers. Branch protection does.
 
+## Lockfiles
+
+The turn-end lockfile check (see [protected-file](guards.md#lockfiles-written-by-the-package-manager)) proves that the package manager, given the lockfile from the start of the turn and the current manifests, writes the lockfile that is in the checkout. Versions and integrity hashes for packages the manifests did not change come from the starting lockfile, so a hand edit to them blocks. New entries come from the manager's own resolution.
+
+It does not prove:
+
+- That the manifests are right. `package.json` stays editable, and a dependency added there by hand is accepted once the lockfile matches it.
+- That the registry, the manager's cache or the manager config in the repo (`.npmrc`, `bunfig.toml`, `.yarnrc.yml`, Yarn releases and plugins) can be trusted. The check runs whatever manager and config the repo has.
+- Anything about an update that changes versions without changing `package.json`, such as `npm update`. That blocks, and the user runs the update instead.
+
+pnpm, npm and Yarn run offline with scripts off, so a package missing from the cache blocks the stop. bun has no offline switch: it reads its manifest cache and may ask the registry for a package missing from it, writing to its own cache. Yarn 1 has no lockfile-only mode, so it links packages into the temp folder, which is slower in a large repo. The check runs in parallel with the turn-end stack checks and stops at the turn-end deadline. Local packages outside the repo, and workspace manifests that Git ignores, are not copied, so a lockfile that needs them blocks.
+
 ## Troubleshooting
 
 ### The agent hooks do nothing

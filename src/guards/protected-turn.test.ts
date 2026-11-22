@@ -1,9 +1,10 @@
 import { afterEach, expect, test } from "bun:test";
-import { rm } from "node:fs/promises";
+import { copyFile, mkdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { runHook } from "../hook/run-hook";
 import type { HookInput } from "../hook/types";
 import { runShell } from "../run";
+import { localRegistry } from "../test/registry";
 import { tempRepo } from "../test/repo";
 import { clearTurnState, stateFile } from "../turn-state";
 
@@ -330,4 +331,162 @@ test("shell protection covers preset globs at depth and custom globs Git cannot 
 	expect(await custom.before("printf data > infra/schema.txt")).toBe("");
 	await custom.write("infra/schema.txt", "data\n");
 	expect(JSON.parse(await custom.stop()).reason).toContain("infra/schema.txt");
+});
+
+const stackFor = (manager: string) =>
+	`[[stack]]\nlanguage = "typescript"\npackage_manager = "${manager}"\n`;
+
+/** A repo whose JavaScript stack uses `manager`, with pad@1.0.0 locked through a local registry. */
+async function lockedRepo(manager: "bun" | "pnpm" | "npm" | "yarn") {
+	const registry = await localRegistry({
+		pad: ["1.0.0", "1.1.0"],
+		zed: ["2.0.0"],
+	});
+	trash.add(registry.cache);
+	stops.add(registry.stop);
+	const config: Record<string, Record<string, string>> = {
+		bun: {
+			"bunfig.toml": `[install]\nregistry = "${registry.url}"\n[install.cache]\ndir = "${registry.cache}"\n`,
+		},
+		pnpm: {
+			".npmrc": `registry=${registry.url}\nstore-dir=${registry.cache}/store\ncache-dir=${registry.cache}/meta\n`,
+		},
+		npm: { ".npmrc": `registry=${registry.url}\ncache=${registry.cache}\n` },
+		yarn: {
+			".yarnrc": `registry "${registry.url}"\ncache-folder "${registry.cache}"\n`,
+		},
+	};
+	const repo = await setup(
+		{
+			".gitignore": "node_modules\n",
+			"package.json": '{ "name": "app", "version": "1.0.0" }\n',
+			...config[manager],
+		},
+		stackFor(manager),
+	);
+	const add = async (spec: string) => {
+		const result = await runShell(`${manager} add ${spec}`, repo.root);
+		if (!result.ok) throw new Error(result.output);
+	};
+	await add("pad@1.0.0");
+	await repo.commit("chore: add pad", {});
+	const lockfile = {
+		bun: "bun.lock",
+		pnpm: "pnpm-lock.yaml",
+		npm: "package-lock.json",
+		yarn: "yarn.lock",
+	}[manager];
+	const read = () => Bun.file(join(repo.root, lockfile)).text();
+	return {
+		...repo,
+		registry,
+		add,
+		read,
+		head: await repo.git("rev-parse", "HEAD"),
+	};
+}
+
+const stops = new Set<() => Promise<void>>();
+afterEach(async () => {
+	await Promise.all([...stops].map((stop) => stop()));
+	stops.clear();
+});
+
+for (const manager of ["bun", "pnpm", "npm", "yarn"] as const)
+	test.skipIf(manager !== "bun" && Bun.which(manager) === null)(
+		`a lockfile written by ${manager} add passes turn end`,
+		async () => {
+			const repo = await lockedRepo(manager);
+			const before = await repo.read();
+			expect(await repo.before(`${manager} add zed`)).toBe("");
+			await repo.add("zed");
+			expect(await repo.read()).not.toBe(before);
+			expect(await repo.stop()).toBe("");
+		},
+		30_000,
+	);
+
+test("a local tarball added with bun add passes turn end", async () => {
+	const repo = await lockedRepo("bun");
+	await mkdir(join(repo.root, "vendor"));
+	await copyFile(
+		repo.registry.tarball("zed", "2.0.0"),
+		join(repo.root, "vendor/zed.tgz"),
+	);
+	expect(await repo.before("bun add ./vendor/zed.tgz")).toBe("");
+	await repo.add("./vendor/zed.tgz");
+	expect(await repo.read()).toContain("vendor/zed.tgz");
+	expect(await repo.stop()).toBe("");
+});
+
+test.each([
+	["an integrity hash", (text: string) => text.replace(/sha512-./, "sha512-A")],
+	[
+		"a resolved version",
+		(text: string) => text.replace('"pad@1.0.0"', '"pad@1.1.0"'),
+	],
+])(
+	"a hand edit to %s in bun.lock blocks with restore steps",
+	async (_, edit) => {
+		const repo = await lockedRepo("bun");
+		const original = await repo.read();
+		expect(await repo.before("sed -i.bak s/x/y/ bun.lock")).toBe("");
+		await repo.write("bun.lock", edit(original));
+		expect(await repo.read()).not.toBe(original);
+		const { decision, reason } = JSON.parse(await repo.stop());
+		expect(decision).toBe("block");
+		expect(reason).toContain("looks edited by hand");
+		expect(reason).toContain(
+			`restore --source=${repo.head} --staged --worktree -- bun.lock`,
+		);
+	},
+);
+
+test("a lockfile bun cannot rebuild blocks with the fix", async () => {
+	const repo = await lockedRepo("bun");
+	expect(await repo.before("sed -i.bak s/x/y/ bun.lock")).toBe("");
+	await repo.write(
+		"package.json",
+		'{ "name": "app", "version": "1.0.0", "dependencies": { "pad": "1.0.0", "absent": "^1.0.0" } }\n',
+	);
+	await repo.write("bun.lock", (await repo.read()).replace("pad", "pad "));
+	const { decision, reason } = JSON.parse(await repo.stop());
+	expect(decision).toBe("block");
+	expect(reason).toContain("could not check that bun wrote this lockfile");
+	expect(reason).toContain("`bun install`");
+	expect(reason).toContain("ask the user to make the dependency change");
+});
+
+test("a committed lockfile passes, a separately staged one does not", async () => {
+	const repo = await lockedRepo("bun");
+	expect(await repo.before("bun add zed")).toBe("");
+	await repo.add("zed");
+	await repo.git("commit", "-qam", "chore: add zed");
+	expect(await repo.stop()).toBe("");
+
+	expect(await repo.before("bun add pad@1.1.0")).toBe("");
+	await repo.add("pad@1.1.0");
+	await repo.git("add", "bun.lock");
+	await repo.add("pad@1.0.0");
+	expect(JSON.parse(await repo.stop()).reason).toContain(
+		"Stage and commit the lockfile the package manager wrote",
+	);
+});
+
+test("a lockfile from another package manager blocks", async () => {
+	const repo = await lockedRepo("bun");
+	expect(await repo.before("printf '{}' > package-lock.json")).toBe("");
+	await repo.write("package-lock.json", "{}\n");
+	expect(JSON.parse(await repo.stop()).reason).toContain(
+		"uses bun, which does not write package-lock.json",
+	);
+});
+
+test("a lockfile no stack covers names the missing stack", async () => {
+	const repo = await setup({ "bun.lock": "{}\n" });
+	expect(await repo.before("printf x >> bun.lock")).toBe("");
+	await repo.write("bun.lock", "{}x\n");
+	expect(JSON.parse(await repo.stop()).reason).toContain(
+		"only when a [[stack]] with package_manager covers bun.lock",
+	);
 });
