@@ -33,7 +33,7 @@ Sync also leaves these out when you keep your own copy somewhere else GitHub rea
 `.github/workflows/cagr.yml` runs on pull requests (opened, synchronize, reopened, ready_for_review, edited), on the merge queue (`merge_group`), and, when `ci.nightly` is set, every night at 03:00 UTC. It has up to three jobs:
 
 - **`checks`**: on pull requests and the merge queue. It checks out the full history, sets up each package manager your stacks name and installs dependencies (for example `oven-sh/setup-bun@v2` and `bun install --frozen-lockfile`), installs cagr with `ci.install`, and runs `cagr ci`.
-- **`review`**: when `ci.review = true`, on pull requests that are not drafts. It checks out the pull request's head commit, installs Claude Code with `npm install -g @anthropic-ai/claude-code`, installs cagr, and runs `cagr review --ci` with `ANTHROPIC_API_KEY` and `GH_TOKEN`. It has `pull-requests: write` so it can comment.
+- **`review`**: when `ci.review = true`, on pull requests that are not drafts. It first reads the head commit's `cagr/review` status with `GH_TOKEN` and `statuses: read`. If the latest status is `success`, the job logs that review already passed and finishes successfully. The `checks` job still runs. Otherwise, the review job checks out the head, installs Claude Code and cagr, and runs `cagr review --ci` with `ANTHROPIC_API_KEY` and `GH_TOKEN`. It has `pull-requests: write` so it can comment.
 - **`nightly`**: when `ci.nightly` is set, on the schedule. It runs `cagr review --scan '<globs>' --issue`, which opens an issue when it finds something. It has `issues: write`.
 
 The workflow uses `contents: read` by default and cancels an older run of the same pull request when a new one starts.
@@ -166,7 +166,7 @@ cagr ci --install-watch
 
 This installs a launchd agent on macOS or a systemd user timer on Linux. The scheduler starts a pass every five minutes in your user session. Run `cagr doctor` for the install status, last pass time, and log path. Run `cagr ci --uninstall-watch` from the same repo to stop and remove the schedule.
 
-Use `cagr ci --watch` to run a pass now. It skips drafts and any commit that already has `cagr/checks` or `cagr/review`, including pending and failed statuses sent by the pre-push hook or review gate. Use `cagr ci --pr 42` to run or retry an open PR by number. A new commit SHA is eligible for the next pass.
+Use `cagr ci --watch` to run a pass now. It skips drafts. For each head commit, it reads the latest `cagr/checks` and `cagr/review` statuses separately. A status of `success` skips that task. Missing, pending, failed, or error statuses make the watcher run the task and post its result. If both statuses are `success`, the watcher skips the head. Use `cagr ci --pr 42` to run both tasks again for an open PR by number.
 
 Each run fetches the exact PR head and base into a temporary Git worktree under `~/.cache/cagr/`. The base is available to commands as `origin/<base>`. Local CI uses the stack's dependency install commands or an explicit `[ci] install` override, then runs the same checks as `cagr ci`, including Verify. A failed Verify command makes `cagr/checks` fail. Local CI also runs Claude review, posts `cagr/review`, and puts review findings on the PR. The worktree is removed when the run finishes. A scheduled pass runs one PR at a time, and an active pass holds a lock for the checkout.
 

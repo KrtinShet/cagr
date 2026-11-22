@@ -4,6 +4,7 @@ import {
 	mkdirSync,
 	mkdtempSync,
 	readFileSync,
+	rmSync,
 	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -40,6 +41,91 @@ test("the workflow runs the checks, reviews non-draft PRs, and scans nightly", (
 	expect(plain).toContain("astral-sh/setup-uv@v6");
 	expect(plain).not.toContain("review --ci");
 	expect(plain).not.toContain("schedule:");
+});
+
+test("only the review job looks for a successful status before running its steps", () => {
+	const { jobs } = Bun.YAML.parse(workflowYaml(bun)) as {
+		jobs: Record<
+			"checks" | "review" | "nightly",
+			{
+				if: string;
+				permissions?: Record<string, string>;
+				steps: {
+					id?: string;
+					run?: string;
+					if?: string;
+					env?: Record<string, string>;
+				}[];
+			}
+		>;
+	};
+	const { checks, review, nightly } = jobs;
+	const [status, ...reviewSteps] = review.steps;
+	expect(review.if).toBe(
+		"github.event_name == 'pull_request' && !github.event.pull_request.draft",
+	);
+	expect(status?.id).toBe("review-status");
+	expect(review.permissions?.statuses).toBe("read");
+	expect(status?.run).toContain(
+		'gh api "repos/$REPO/commits/$SHA/status?per_page=100" --paginate',
+	);
+	expect(status?.run).toContain(
+		'select((.context | ascii_downcase) == "cagr/review") | .state',
+	);
+	expect(status?.env).toEqual({
+		REPO: "$" + "{{ github.repository }}",
+		SHA: "$" + "{{ github.event.pull_request.head.sha }}",
+		GH_TOKEN: "$" + "{{ github.token }}",
+	});
+	for (const step of reviewSteps)
+		expect(step.if).toBe("steps.review-status.outputs.skip != 'true'");
+	expect(checks.steps).toContainEqual({ run: "cagr ci" });
+	for (const job of [checks, nightly])
+		expect(job.steps.some((step) => step.run?.includes("gh api"))).toBe(false);
+
+	const scratch = mkdtempSync(join(tmpdir(), "gw-review-status-"));
+	try {
+		const output = join(scratch, "output");
+		for (const [state, skip] of [
+			["success", true],
+			["success\nfailure", true],
+			["failure\nsuccess", false],
+			["pending", false],
+			["", false],
+			["unavailable", false],
+		] as const) {
+			writeFileSync(output, "");
+			const result = Bun.spawnSync(
+				[
+					"bash",
+					"-ec",
+					`gh() {
+						if [ "$STATE" = unavailable ]; then return 1; fi
+						printf '%s\\n' "$STATE"
+					}
+					${status?.run}`,
+				],
+				{
+					env: {
+						...process.env,
+						STATE: state,
+						SHA: "test-sha",
+						GITHUB_OUTPUT: output,
+					},
+				},
+			);
+			expect(result.exitCode).toBe(0);
+			expect(readFileSync(output, "utf8")).toBe(skip ? "skip=true\n" : "");
+			if (skip)
+				expect(result.stdout.toString()).toContain(
+					"Skipping review for test-sha",
+				);
+			if (state === "unavailable")
+				expect(result.stdout.toString()).toContain("Running review.");
+		}
+	} finally {
+		rmSync(scratch, { recursive: true, force: true });
+	}
 });
 
 test("the template has a heading per section, and CODEOWNERS comes from [risk] owners", () => {
