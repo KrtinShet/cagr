@@ -25,7 +25,7 @@ import {
 	snapshotNotice,
 } from "../guards/protected-turn";
 import { insideRoot } from "../paths";
-import { gateResult } from "../review/gate";
+import { gateResult, reachFrom } from "../review/gate";
 import { readRecord, recordPath } from "../review/store";
 import { formatLayout, type LayoutRule, layoutFindings } from "../rules/layout";
 import {
@@ -125,7 +125,7 @@ function readText(path: string) {
 	}
 }
 
-/** Reads the branch's review record: two quick git calls (three when the command names a branch) and one file, to stay inside the command budget. */
+/** Reads the branch's review record: two quick git calls (three when the command names a branch), one file, and one parallel ancestry check per commit where a finding was judged fixed, to stay inside the command budget. */
 async function reviewGate(
 	command: string,
 	cwd: string,
@@ -181,7 +181,12 @@ async function reviewGate(
 			};
 	}
 	const record = readRecord(recordPath(git.commonDir, branch));
-	const result = gateResult(record, head, config);
+	const result = gateResult(
+		record,
+		head,
+		config,
+		await reachFrom(record, head, cwd),
+	);
 	if (result.kind === "deny")
 		return {
 			kind: "deny",

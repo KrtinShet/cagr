@@ -204,7 +204,7 @@ async function sendStatuses(
 		];
 	} catch (error) {
 		return [
-			`did not send the GitHub commit statuses: ${(error as Error).message}. Run \`cagr review\` after the push to send cagr/review.`,
+			`did not send the GitHub commit statuses: ${(error as Error).message}. Run \`cagr post-status <sha> --branch <branch>\` to retry after the push.`,
 		];
 	}
 }

@@ -1,9 +1,9 @@
 import type { Config } from "../config/schema";
 import { gitContext } from "../git";
-import { gateResult } from "./gate";
+import { gateResult, openAt, type Reach, reachFrom } from "./gate";
 import type { Gh } from "./github";
 import { readRecord, recordPath } from "./store";
-import { blocking, type ReviewRecord } from "./types";
+import type { ReviewRecord } from "./types";
 
 export const reviewContext = "cagr/review";
 export const checksContext = "cagr/checks";
@@ -18,13 +18,17 @@ export type CommitStatus = {
 const describe = (text: string) =>
 	text.length <= 140 ? text : `${text.slice(0, 139)}…`;
 
-/** The `cagr/review` status for a commit: the review gate's answer, in GitHub's terms. */
+/**
+ * The `cagr/review` status for a commit: the review gate's answer, in GitHub's
+ * terms. Both the pre-push hook and `cagr review answer` send this.
+ */
 export function reviewStatus(
 	record: ReviewRecord | null,
 	sha: string,
 	config: Config,
+	reach?: Reach,
 ): CommitStatus {
-	const gate = gateResult(record, sha, config);
+	const gate = gateResult(record, sha, config, reach);
 	const status = (state: CommitStatus["state"], text: string) => ({
 		context: reviewContext,
 		state,
@@ -34,11 +38,11 @@ export function reviewStatus(
 		return gate.notice
 			? status(
 					"success",
-					"The review could not run, so this went out unreviewed. Review it yourself.",
+					"Unreviewed: the reviewer failed and no Important finding is open. Review this commit yourself.",
 				)
 			: status("success", "Passed: no Important finding is open.");
-	const open = record ? blocking(record).length : 0;
-	if (record?.rounds.at(-1)?.head === sha && open > 0)
+	const open = record ? (openAt(record, sha, reach)?.length ?? 0) : 0;
+	if (open > 0)
 		return status(
 			"failure",
 			`${open} Important finding${open === 1 ? "" : "s"} open. Fix or answer ${open === 1 ? "it" : "them"}, then run cagr review.`,
@@ -104,7 +108,16 @@ export async function sendReviewStatus(
 	if (!git.commonDir || !git.branch || !git.head) return null;
 	const record = readRecord(recordPath(git.commonDir, git.branch));
 	return (
-		await postStatus(gh, git.head, reviewStatus(record, git.head, config))
+		await postStatus(
+			gh,
+			git.head,
+			reviewStatus(
+				record,
+				git.head,
+				config,
+				await reachFrom(record, git.head, cwd),
+			),
+		)
 	).message;
 }
 
@@ -168,7 +181,12 @@ export async function postStatusAfterPush(
 			await postStatus(
 				gh,
 				options.sha,
-				reviewStatus(record, options.sha, config),
+				reviewStatus(
+					record,
+					options.sha,
+					config,
+					await reachFrom(record, options.sha, cwd),
+				),
 			)
 		).message,
 	);

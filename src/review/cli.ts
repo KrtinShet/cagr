@@ -19,7 +19,8 @@ import { type AnswerKind, answerKinds } from "./types";
 export const reviewHelp = `Usage: cagr review [options]
 
   review [--base <branch>] [--full] [--effort quick|standard|deep]
-                               Review this branch's commits with a reviewer agent. After round 1 only new commits.
+                               Review this branch. After round 1, review only new commits, also past the
+                               cap. --full forces a full round.
   review --scan <globs...> [--issue]
                                Review existing code. --issue opens a GitHub issue with the findings.
   review --ci                  In GitHub Actions: review the pull request and post the findings on it.
@@ -134,7 +135,11 @@ export async function reviewCommand(
 		const git = await gitContext(cwd);
 		if (!git.commonDir)
 			throw new ReviewInputError("Run this inside a git repo.");
-		console.log(statsReport(reviewStats(allRecords(git.commonDir))));
+		console.log(
+			statsReport(
+				await reviewStats(allRecords(git.commonDir), git.toplevel ?? cwd),
+			),
+		);
 		return 0;
 	}
 	if (sub === "eval") {

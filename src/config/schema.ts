@@ -306,7 +306,7 @@ export const configSchema: Node = obj({
 			max_rounds: num({
 				min: 1,
 				description:
-					"After this many rounds the reviewer asks the author to step back and rethink the approach.",
+					"Review rounds per cycle (default 2). Only round 1 is a full review. After the cap, new commits still get finders on their diff, and the verifier also checks every open finding and every fix made in the cycle.",
 			}),
 			timeout_seconds: num({
 				min: 30,

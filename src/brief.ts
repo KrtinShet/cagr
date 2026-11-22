@@ -2,6 +2,7 @@ import type { Config } from "./config/schema";
 import { findingCommand } from "./findings/command";
 import { protectedEntries } from "./guards/edit";
 import { ecosystemOf } from "./guards/package-manager";
+import { reviewOrder, reviewPreparation } from "./review/gate";
 import { loadRules, type Rule, RuleError } from "./rules/rules";
 
 /** A short brief for the agent at session start, built from the config. */
@@ -83,10 +84,14 @@ export function brief(
 		lines.push(
 			`- ${rules.length} code rule${rules.length === 1 ? "" : "s"} (${rules.map((rule) => rule.id).join(", ")}). \`cagr explain <id>\` shows one.`,
 		);
-	if (config.review.enabled && config.review.gate.length > 0)
-		lines.push(
-			`- Before ${config.review.gate.map((match) => `\`${match}\``).join(" or ")}, commit and run \`cagr review\` (give it a 15 minute timeout). Fix or answer every Important finding.${config.review.pr_sections.length > 0 ? ` The pull request body needs these headings: ${config.review.pr_sections.join(", ")}.` : ""}`,
-		);
+	if (config.review.enabled) {
+		lines.push(`- ${reviewOrder} Give the review a 15 minute timeout.`);
+		if (config.review.gate.length > 0 && config.review.pr_sections.length > 0)
+			lines.push(
+				`- The pull request body needs these headings: ${config.review.pr_sections.join(", ")}.`,
+			);
+		lines.push("", reviewPreparation);
+	}
 	if (!config.review.agents_may_merge)
 		lines.push("- Do not merge or approve pull requests. A person does that.");
 	for (const rule of config.changes.rules)

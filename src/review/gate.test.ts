@@ -9,14 +9,14 @@ test("no review denies and says to run one", () => {
 	const result = gateResult(null, head, settings);
 	expect(result.kind).toBe("deny");
 	expect(result.kind === "deny" && result.reason).toContain(
-		"Run `cagr review`",
+		"Commit, run `cagr review`",
 	);
 });
 
 test("a commit after the review denies until the new commits are reviewed", () => {
 	const result = gateResult(record([round()]), "c".repeat(40), settings);
 	expect(result.kind === "deny" && result.reason).toContain(
-		"You committed after the last review",
+		"This commit differs from the last review",
 	);
 });
 
@@ -26,7 +26,7 @@ test("open Important findings deny and name each one with how to answer it", () 
 	const reason = result.kind === "deny" ? result.reason : "";
 	expect(reason).toContain("f1 src/a.ts:4  Crash on empty list");
 	expect(reason).toContain("cagr review answer f1 --wrong");
-	expect(reason).not.toContain("Step back");
+	expect(reason).not.toContain("round cap");
 });
 
 test("nits, answered and fixed findings do not hold the gate", () => {
@@ -40,10 +40,12 @@ test("nits, answered and fixed findings do not hold the gate", () => {
 	});
 });
 
-test("after max_rounds the denial tells the author to step back", () => {
-	const rounds = [round({ n: 1 }), round({ n: 2 }), round({ n: 3 })];
+test("after max_rounds the denial says no further full round runs", () => {
+	const rounds = [round({ n: 1 }), round({ n: 2, scope: "diff" })];
 	const result = gateResult(record(rounds, [finding()]), head, settings);
-	expect(result.kind === "deny" && result.reason).toContain("Step back");
+	expect(result.kind === "deny" && result.reason).toContain(
+		"no further full round runs",
+	);
 });
 
 test("a review that could not run lets the PR through and tells the human", () => {
@@ -82,15 +84,69 @@ test("after an earlier good round, a failed one says the newest commits go out u
 	);
 });
 
-test("the step-back message counts only rounds that ran", () => {
+test("an older head is judged by the current finding states, so a reopened finding fails it", () => {
+	const older = "c".repeat(40);
+	const rounds = [
+		round({ n: 1, head: "d".repeat(40) }),
+		round({ n: 2, head: older, scope: "diff" }),
+		round({ n: 3, head, scope: "verify" }),
+	];
+	const fixed = finding({ status: "fixed", fixedIn: older });
+	expect(gateResult(record(rounds, [fixed]), older, settings).kind).toBe(
+		"allow",
+	);
+	const reopened = finding();
+	const result = gateResult(record(rounds, [reopened]), older, settings);
+	expect(result.kind).toBe("deny");
+	expect(result.kind === "deny" && result.reason).toContain("f1 src/a.ts:4");
+	const later = finding({ id: "f2", round: 3 });
+	expect(gateResult(record(rounds, [later]), older, settings).kind).toBe(
+		"allow",
+	);
+});
+
+test("a fix judged on a later commit does not pass an older head", () => {
+	const older = "c".repeat(40);
+	const rounds = [
+		round({ n: 1, head: older }),
+		round({ n: 2, head, from: older, scope: "diff" }),
+	];
+	const later = finding({ status: "fixed", fixedIn: head });
+	expect(gateResult(record(rounds, [later]), head, settings).kind).toBe(
+		"allow",
+	);
+	const result = gateResult(record(rounds, [later]), older, settings);
+	expect(result.kind === "deny" && result.reason).toContain("f1 src/a.ts:4");
+	// An older record with no fix commit: fixed only at the last reviewed head.
+	const unknown = finding({ status: "fixed", fixedIn: null });
+	expect(gateResult(record(rounds, [unknown]), head, settings).kind).toBe(
+		"allow",
+	);
+	expect(gateResult(record(rounds, [unknown]), older, settings).kind).toBe(
+		"deny",
+	);
+	const answered = finding({ status: "answered" });
+	expect(gateResult(record(rounds, [answered]), older, settings).kind).toBe(
+		"allow",
+	);
+});
+
+test("a full round starts a new cycle, so the cap counts from there", () => {
+	const rounds = [
+		round({ n: 1 }),
+		round({ n: 2, scope: "diff" }),
+		round({ n: 3, scope: "full" }),
+	];
+	const result = gateResult(record(rounds, [finding()]), head, settings);
+	expect(result.kind === "deny" && result.reason).not.toContain("round cap");
+});
+
+test("failed rounds and verifier-only checks do not count toward the cap", () => {
 	const rounds = [
 		round({ n: 1 }),
 		round({ n: 2, error: "x" }),
-		round({ n: 3 }),
-		round({ n: 4 }),
+		round({ n: 2, scope: "verify" }),
 	];
 	const result = gateResult(record(rounds, [finding()]), head, settings);
-	expect(result.kind === "deny" && result.reason).toContain(
-		"has had 3 review rounds",
-	);
+	expect(result.kind === "deny" && result.reason).not.toContain("round cap");
 });

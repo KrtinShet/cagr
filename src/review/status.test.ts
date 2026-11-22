@@ -66,8 +66,50 @@ test("a review that could not run is success that says so", () => {
 		settings,
 	);
 	expect(status.state).toBe("success");
-	expect(status.description).toContain("went out unreviewed");
+	expect(status.description).toContain("Unreviewed: the reviewer failed");
 	expect(status.description.length).toBeLessThanOrEqual(140);
+});
+
+test("both status paths send the same state: unreviewed success on a reviewer error, failure on open findings", async () => {
+	const repo = await tempRepo();
+	await repo.git("checkout", "-q", "-b", "feat/x");
+	const sha = await repo.commit("feat: x", { "src/a.ts": "x\n" });
+	const file = recordPath(join(repo.root, ".git"), "feat/x");
+	const sent = async (saved: ReturnType<typeof record>) => {
+		writeRecord(file, saved);
+		const viaAnswer = fakeGh();
+		await sendReviewStatus(settings, repo.root, viaAnswer.gh);
+		const viaPush = fakeGh();
+		await postStatusAfterPush(
+			settings,
+			repo.root,
+			{ sha, branch: "feat/x", checks: null, waitSeconds: 0 },
+			viaPush.gh,
+		);
+		const post = (calls: string[][]) =>
+			calls.find((args) => args[2] === "POST");
+		const pair = [post(viaAnswer.calls), post(viaPush.calls)].map((args) => [
+			field(args, "state"),
+			field(args, "description"),
+		]);
+		expect(pair[0]).toEqual(pair[1]);
+		return pair[0];
+	};
+	const unreviewed = await sent(
+		record([
+			round({ head: "c".repeat(40) }),
+			round({ n: 2, head: sha, error: "claude timed out" }),
+		]),
+	);
+	expect(unreviewed?.[0]).toBe("success");
+	expect(unreviewed?.[1]).toContain("Unreviewed: the reviewer failed");
+	expect((await sent(record([round({ head: sha })], [finding()])))?.[0]).toBe(
+		"failure",
+	);
+	expect((await sent(record([round({ head: sha })])))?.[0]).toBe("success");
+	expect((await sent(record([round({ head: "c".repeat(40) })])))?.[0]).toBe(
+		"pending",
+	);
 });
 
 test("postStatus calls the statuses API with the state and context", async () => {
@@ -171,6 +213,60 @@ test("after a push it waits for GitHub to have the commit, then sends both statu
 		"The pre-push commands passed: bun run verify",
 	);
 	expect(lines).toHaveLength(2);
+});
+
+test("post-status is pending without a review of the pushed SHA and failure while a finding is open, including after the cap", async () => {
+	const repo = await tempRepo();
+	const first = await repo.git("rev-parse", "HEAD");
+	const second = await repo.commit("fix: first review finding", {
+		"src/a.ts": "first fix\n",
+	});
+	const third = await repo.commit("fix: second review finding", {
+		"src/a.ts": "second fix\n",
+	});
+	const file = recordPath(join(repo.root, ".git"), "feat/x");
+	const saved = record(
+		[
+			round({ head: first }),
+			round({ n: 2, head: second, from: first, scope: "diff" }),
+		],
+		[finding()],
+	);
+	const state = async (sha: string) => {
+		const { gh, calls } = fakeGh();
+		writeRecord(file, saved);
+		await postStatusAfterPush(
+			settings,
+			repo.root,
+			{ sha, branch: "feat/x", checks: null, waitSeconds: 0 },
+			gh,
+		);
+		return field(
+			calls.find((args) => args[2] === "POST"),
+			"state",
+		);
+	};
+	expect(await state(third)).toBe("pending");
+	expect(await state(second)).toBe("failure");
+	saved.rounds.push(
+		round({ n: 3, head: third, from: second, scope: "verify" }),
+	);
+	expect(await state(third)).toBe("failure");
+	const issue = saved.findings[0];
+	if (!issue) throw new Error("Missing fixture finding");
+	issue.status = "fixed";
+	issue.fixedIn = third;
+	expect(await state(third)).toBe("success");
+	// Fixed on third, which second does not contain: a reset to second still fails.
+	expect(await state(second)).toBe("failure");
+	const extra = await repo.commit("feat: unrelated", {
+		"src/b.ts": "unreviewed\n",
+	});
+	expect(await state(extra)).toBe("pending");
+	saved.rounds.push(
+		round({ n: 4, head: extra, scope: "verify", error: "timeout" }),
+	);
+	expect(await state(extra)).toBe("success");
 });
 
 test("after a push, gh that is not logged in stops the wait and the note says so", async () => {

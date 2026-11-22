@@ -37,7 +37,7 @@ export type Round = {
 	n: number;
 	head: string;
 	from: string;
-	scope: "full" | "diff" | "scan";
+	scope: "full" | "diff" | "verify" | "scan";
 	effort: Effort;
 	tier: RiskTier;
 	reviewer: string;
@@ -45,6 +45,8 @@ export type Round = {
 	summary: string;
 	/** Set when the reviewer could not run. The gate then lets the PR through and tells the human. */
 	error: string | null;
+	/** The earlier findings the verifier judged in this round. Older records lack it. */
+	verified?: string[];
 };
 
 export type ReviewRecord = {
@@ -68,3 +70,20 @@ export const blocking = (record: ReviewRecord) =>
 	record.findings.filter(
 		(finding) => finding.status === "open" && finding.severity === "important",
 	);
+
+/**
+ * The number of the round that started the current review cycle: the last
+ * full round that ran. A rebase, a reused branch name or `--full` starts a new
+ * cycle, and the round cap counts from there.
+ */
+export const cycleStart = (record: ReviewRecord) =>
+	record.rounds.findLast((round) => !round.error && round.scope === "full")
+		?.n ?? 0;
+
+/** Rounds in the current cycle that ran finders. These count toward `[review] max_rounds`. */
+export const discoveryRounds = (record: ReviewRecord) => {
+	const start = cycleStart(record);
+	return record.rounds.filter(
+		(round) => !round.error && round.scope !== "verify" && round.n >= start,
+	).length;
+};

@@ -11,11 +11,13 @@ import {
 	type ReviewAgent,
 	ReviewerError,
 } from "./agent";
+import { answerHint, type Reach, reachFrom, unresolved } from "./gate";
 import {
 	type FinderOutput,
 	type Focus,
 	finderPrompt,
 	finderSchema,
+	findingsToVerify,
 	type ReviewContext,
 	type VerifierOutput,
 	verifierPrompt,
@@ -26,6 +28,8 @@ import {
 	blocking,
 	type Candidate,
 	categories,
+	cycleStart,
+	discoveryRounds,
 	type ReviewFinding,
 	type ReviewRecord,
 	type Round,
@@ -39,6 +43,7 @@ export class ReviewInputError extends Error {}
 export type ReviewOptions = {
 	cwd: string;
 	base?: string;
+	/** Review the whole branch in a full round, even if it was reviewed. Starts a new cycle. */
 	full?: boolean;
 	effort?: Effort;
 	/** Review existing code in these globs instead of a branch's commits. */
@@ -55,6 +60,8 @@ export type ReviewOutcome = {
 	round: Round | null;
 	found: ReviewFinding[];
 	fixed: ReviewFinding[];
+	/** Important findings not closed at the reviewed head, including fixes judged on a commit it does not contain. */
+	open: ReviewFinding[];
 	passed: boolean;
 	file: string | null;
 	/** Set when there was nothing to review, with why. */
@@ -85,9 +92,6 @@ export async function resolveBase(name: string, cwd: string) {
 		`Cannot find the base branch "${name}". Fetch it, or pass --base <branch>.`,
 	);
 }
-
-const isAncestor = async (older: string, newer: string, cwd: string) =>
-	(await run(["git", "merge-base", "--is-ancestor", older, newer], cwd)).ok;
 
 export async function review(
 	config: Config,
@@ -124,32 +128,38 @@ export async function review(
 		(file
 			? loadRecord(file, branch, baseName)
 			: loadRecord("", branch, baseName));
-	const lastOk = record.rounds.findLast((round) => !round.error);
-
 	let from = head;
+	let mergeBase = head;
 	let scope: Round["scope"] = "scan";
+	let recheckBefore: number | null = null;
 	let branchFiles: string[] = [];
+	const reach: Reach = scanning
+		? () => false
+		: await reachFrom(record, head, cwd);
+	const openNow = () =>
+		scanning ? blocking(record) : unresolved(record, head, reach);
 	if (!scanning) {
 		const baseRef = await resolveBase(baseName, cwd);
-		const mergeBase = await gitOut(["merge-base", baseRef, head], cwd);
+		mergeBase = await gitOut(["merge-base", baseRef, head], cwd);
 		if (mergeBase === head)
 			return skippedOutcome(
 				record,
 				file,
+				openNow(),
 				`No commits on ${branch} beyond ${baseName}, so there is nothing to review.`,
 			);
-		if (lastOk?.head === head && !options.full)
-			return skippedOutcome(
-				record,
-				file,
-				`${head.slice(0, 7)} was already reviewed in round ${lastOk.n}.`,
-			);
-		const incremental =
-			!options.full &&
-			lastOk !== undefined &&
-			(await isAncestor(lastOk.head, head, cwd));
-		from = incremental && lastOk ? lastOk.head : mergeBase;
-		scope = incremental ? "diff" : "full";
+		const plan = await planRound(record, {
+			head,
+			mergeBase,
+			full: options.full === true,
+			maxRounds: config.review.max_rounds,
+			reach,
+			cwd,
+			progress,
+		});
+		if (typeof plan === "string")
+			return skippedOutcome(record, file, openNow(), plan);
+		({ from, scope, recheckBefore } = plan);
 		branchFiles = (await gitOut(["diff", "--name-only", mergeBase, head], cwd))
 			.split("\n")
 			.filter(Boolean);
@@ -182,7 +192,13 @@ export async function review(
 			diff = `${diff.slice(0, maxDiff)}\n... (diff cut at ${maxDiff} characters; run \`git diff ${from.slice(0, 12)} ${head.slice(0, 12)}\` for the rest)\n\n${await gitOut(["diff", "--stat", from, head], cwd)}`;
 		log = (
 			await gitOut(
-				["log", "--no-merges", "--format=- %s%n%b", `${from}..${head}`],
+				[
+					"log",
+					"--no-merges",
+					"--format=- %s%n%b",
+					`${from}..${head}`,
+					`^${mergeBase}`,
+				],
 				cwd,
 			)
 		).slice(0, 6000);
@@ -196,14 +212,24 @@ export async function review(
 		tier: risk.tier,
 		tierReasons: risk.reasons,
 		effort,
-		round: roundNumber,
-		maxRounds: config.review.max_rounds,
 		log,
 		diff,
 		guide: existsSync(guidePath) ? readFileSync(guidePath, "utf8") : null,
 		skip: config.review.skip,
 		scan: options.scan ?? [],
 		previous: record.findings,
+		cycleStart: scope === "full" ? roundNumber : cycleStart(record),
+		recheckBefore,
+		stale: unresolved(record, head, reach)
+			.filter((finding) => finding.status === "fixed")
+			.map((finding) => finding.id),
+		spent: record.findings
+			.filter((finding) => judgedAt(record, finding, head))
+			.map((finding) => finding.id),
+		capped:
+			scope !== "full" &&
+			scope !== "scan" &&
+			discoveryRounds(record) >= config.review.max_rounds,
 	};
 
 	const round: Round = {
@@ -217,12 +243,13 @@ export async function review(
 		at: now().toISOString(),
 		summary: "",
 		error: null,
+		verified: [],
 	};
 	let agent: ReviewAgent;
 	try {
 		agent = options.agent ?? pickAgent(config.review.reviewer);
 	} catch (error) {
-		return failed(record, round, file, error as Error);
+		return failed(record, round, file, openNow, error as Error);
 	}
 	round.reviewer = agent.name;
 	const ask = (prompt: string, schema: object) =>
@@ -235,9 +262,12 @@ export async function review(
 		} satisfies AgentRequest);
 
 	try {
-		const focuses = findersFor(effort, config.review.security);
+		const focuses =
+			scope === "verify" ? [] : findersFor(effort, config.review.security);
 		progress(
-			`Reviewing ${scope === "diff" ? "the new commits" : scope === "scan" ? `${reviewed.length} files` : branch} with ${agent.name}: ${effort} effort, ${risk.tier} risk, ${focuses.length} finder${focuses.length === 1 ? "" : "s"}.`,
+			scope === "verify"
+				? "Running only the verifier on earlier findings."
+				: `Reviewing ${scope === "diff" ? "the new commits" : scope === "scan" ? `${reviewed.length} files` : branch} with ${agent.name}: ${effort} effort, ${risk.tier} risk, ${focuses.length} finder${focuses.length === 1 ? "" : "s"}.`,
 		);
 		const outputs = await Promise.all(
 			focuses.map(async (focus) =>
@@ -248,18 +278,29 @@ export async function review(
 			outputs.flatMap((output) => output.findings),
 			record.findings,
 		);
-		const open = record.findings.filter((finding) => finding.status === "open");
-		const verifiers = effort === "deep" ? 3 : effort === "standard" ? 1 : 0;
+		const previous = findingsToVerify(context);
+		const verifiers =
+			effort === "deep"
+				? 3
+				: effort === "standard" || scope === "verify" || previous.length > 0
+					? 1
+					: 0;
 		let kept = candidates;
-		let fixedIds = new Set(outputs[0]?.fixed ?? []);
-		if (verifiers > 0 && (candidates.length > 0 || open.length > 0)) {
+		let fixedIds = new Set<string>();
+		if (
+			scope === "verify" ||
+			(verifiers > 0 &&
+				((effort !== "quick" && candidates.length > 0) || previous.length > 0))
+		) {
 			progress(
-				`Checking ${candidates.length} candidate finding${candidates.length === 1 ? "" : "s"} with ${verifiers} verifier${verifiers === 1 ? "" : "s"}.`,
+				`Checking ${candidates.length} candidate finding${candidates.length === 1 ? "" : "s"} and ${previous.length} earlier finding${previous.length === 1 ? "" : "s"} with ${verifiers} verifier${verifiers === 1 ? "" : "s"}.`,
 			);
-			const keyed = candidates.map((candidate, index) => ({
-				...candidate,
-				key: `C${index + 1}`,
-			}));
+			const keyed = (effort === "quick" ? [] : candidates).map(
+				(candidate, index) => ({
+					...candidate,
+					key: `C${index + 1}`,
+				}),
+			);
 			const votes = await Promise.all(
 				Array.from({ length: verifiers }, async () =>
 					normalizeVerifier(
@@ -267,41 +308,152 @@ export async function review(
 					),
 				),
 			);
-			const verdict = tally(keyed, votes, open);
-			kept = verdict.kept;
+			round.verified = previous.map((finding) => finding.id);
+			const verdict = tally(keyed, votes, previous);
+			if (effort !== "quick") kept = verdict.kept;
 			fixedIds = verdict.fixed;
 		}
 		const found = assignIds(capNits(kept), record, roundNumber);
 		const fixed: ReviewFinding[] = [];
-		for (const finding of record.findings)
+		for (const finding of previous) {
 			if (finding.status === "open" && fixedIds.has(finding.id)) {
 				finding.status = "fixed";
 				finding.fixedIn = head;
 				fixed.push(finding);
+			} else if (
+				context.stale.includes(finding.id) &&
+				fixedIds.has(finding.id)
+			) {
+				// Confirmed on history the old fix commit is not part of, so this head is the fix commit now.
+				finding.fixedIn = head;
+			} else if (finding.status === "fixed" && !fixedIds.has(finding.id)) {
+				finding.status = "open";
+				finding.fixedIn = null;
 			}
+		}
 		record.findings.push(...found);
-		round.summary = countLine(found);
+		round.summary =
+			scope === "verify" ? "Checked earlier findings." : countLine(found);
 		if (!scanning) record.rounds.push(round);
+		const open = openNow();
 		if (file) writeRecord(file, record);
 		return {
 			record,
 			round,
 			found,
 			fixed,
-			passed: blocking(record).length === 0,
+			open,
+			passed: open.length === 0,
 			file,
 			skipped: null,
 		};
 	} catch (error) {
 		if (!(error instanceof ReviewerError)) throw error;
-		return failed(record, round, file, error);
+		return failed(record, round, file, openNow, error);
 	}
+}
+
+type PlanInput = {
+	head: string;
+	mergeBase: string;
+	full: boolean;
+	maxRounds: number;
+	reach: Reach;
+	cwd: string;
+	progress: (line: string) => void;
+};
+
+type Plan = {
+	from: string;
+	scope: Round["scope"];
+	recheckBefore: number | null;
+};
+
+/**
+ * Whether the verifier may not judge `finding` again at `head`. A finding
+ * reported at this commit needs a fix or an answer, so it is never judged
+ * here. Otherwise it gets two verdicts per commit: the first review there and
+ * one recheck.
+ */
+function judgedAt(record: ReviewRecord, finding: ReviewFinding, head: string) {
+	const ran = record.rounds.filter(
+		(round) => !round.error && round.head === head,
+	);
+	return (
+		ran.some((round) => round.n === finding.round) ||
+		ran.filter((round) => round.verified?.includes(finding.id)).length >= 2
+	);
+}
+
+/**
+ * Picks what the next round covers, or returns why there is nothing to do.
+ * New commits always get finders on their diff, before and past the round
+ * cap: the cap only stops further full rounds.
+ */
+async function planRound(
+	record: ReviewRecord,
+	input: PlanInput,
+): Promise<Plan | string> {
+	const { head, mergeBase, cwd, progress } = input;
+	const fresh = {
+		from: mergeBase,
+		scope: "full" as const,
+		recheckBefore: null,
+	};
+	const lastOk = record.rounds.findLast((round) => !round.error);
+	if (input.full || !lastOk) return fresh;
+	const short = lastOk.head.slice(0, 7);
+	if (
+		!(await run(["git", "cat-file", "-e", `${lastOk.head}^{commit}`], cwd)).ok
+	) {
+		progress(
+			`The last reviewed commit ${short} is gone (amended, rebased or garbage-collected), so this starts a new cycle with a full review.`,
+		);
+		return fresh;
+	}
+	if (
+		!(await run(["git", "merge-base", "--is-ancestor", lastOk.head, head], cwd))
+			.ok
+	) {
+		progress(
+			`The last reviewed commit ${short} is not in this branch's history (a rebase or a reused branch name), so this starts a new cycle with a full review.`,
+		);
+		return fresh;
+	}
+	if (lastOk.head === head) {
+		// A verifier can be wrong about an earlier finding, so it may look once
+		// more. Findings reported at this commit need a fix or an answer, so the
+		// boundary is the first round that reviewed it, not the latest recheck.
+		let first = lastOk;
+		for (const round of record.rounds.toReversed()) {
+			if (round.error) continue;
+			if (round.head !== head) break;
+			first = round;
+		}
+		const earlier = unresolved(record, head, input.reach).filter(
+			(finding) => finding.round < first.n,
+		);
+		if (earlier.length === 0)
+			return `${head.slice(0, 7)} was already reviewed in round ${lastOk.n}.`;
+		const spent = earlier.filter((finding) => judgedAt(record, finding, head));
+		if (spent.length === earlier.length) {
+			const ids = spent.map((finding) => finding.id).join(", ");
+			return `The verifier already judged ${ids} at ${head.slice(0, 7)} as often as it may, so \`cagr review\` does not judge ${spent.length === 1 ? "it" : "them"} again at this commit. Commit a fix and run \`cagr review\`. ${answerHint(spent[0]?.id ?? "f1")}`;
+		}
+		return { from: first.from, scope: "verify", recheckBefore: first.n };
+	}
+	if (discoveryRounds(record) >= input.maxRounds)
+		progress(
+			`Reached the ${input.maxRounds}-round cap, so no further full round runs: finders review the new commits, and the verifier checks earlier findings.`,
+		);
+	return { from: lastOk.head, scope: "diff", recheckBefore: null };
 }
 
 function failed(
 	record: ReviewRecord,
 	round: Round,
 	file: string | null,
+	openNow: () => ReviewFinding[],
 	error: Error,
 ): ReviewOutcome {
 	round.error = error.message;
@@ -313,6 +465,7 @@ function failed(
 		round,
 		found: [],
 		fixed: [],
+		open: openNow(),
 		passed: false,
 		file,
 		skipped: null,
@@ -322,6 +475,7 @@ function failed(
 function skippedOutcome(
 	record: ReviewRecord,
 	file: string | null,
+	open: ReviewFinding[],
 	why: string,
 ): ReviewOutcome {
 	return {
@@ -329,7 +483,8 @@ function skippedOutcome(
 		round: null,
 		found: [],
 		fixed: [],
-		passed: blocking(record).length === 0,
+		open,
+		passed: open.length === 0,
 		file,
 		skipped: why,
 	};
@@ -377,9 +532,6 @@ export function normalizeFinder(raw: unknown): FinderOutput {
 		findings: (Array.isArray(entry.findings) ? entry.findings : [])
 			.map(normalizeCandidate)
 			.filter((candidate): candidate is Candidate => candidate !== null),
-		fixed: (Array.isArray(entry.fixed) ? entry.fixed : []).filter(
-			(id): id is string => typeof id === "string",
-		),
 	};
 }
 

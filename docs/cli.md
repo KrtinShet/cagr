@@ -125,7 +125,7 @@ cagr review help
 | ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
 | `review`                                              | Review this branch's commits. After round 1, only the new ones.                                         |
 | `--base <branch>`                                     | Compare with this base instead of the protected branch.                                                 |
-| `--full`                                              | Review the whole branch, even if the commit was reviewed or earlier rounds exist.                       |
+| `--full`                                              | Force a full round of the whole branch, even at a reviewed commit. Starts a new review cycle.           |
 | `--effort <level>`                                    | Use this effort for this run.                                                                           |
 | `--scan <globs...>`                                   | Review the tracked files that match, instead of the branch's commits.                                   |
 | `--issue`                                             | With `--scan`: open a GitHub issue with the findings.                                                   |

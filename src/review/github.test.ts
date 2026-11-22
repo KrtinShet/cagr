@@ -275,6 +275,28 @@ test("a reviewer that cannot run still fails the check while earlier findings ar
 	expect(result.ok).toBe(false);
 });
 
+test("a reviewer that cannot run still fails the check on a fix the head does not contain", async () => {
+	const { repo, config, env, head } = await prRepo();
+	const fix = await repo.commit("fix: a", {
+		"src/a.ts": "export const a = 2;\n",
+	});
+	await repo.git("reset", "-q", "--hard", head);
+	const state = encodeState(
+		record(
+			[round({ head }), round({ n: 2, head: fix, from: head, scope: "diff" })],
+			[finding({ status: "fixed", fixedIn: fix })],
+		),
+	);
+	const { gh } = fakeGh({ comments: [{ id: 99, body: state }] });
+	const result = await ciReview(config, repo.root, {
+		gh,
+		env,
+		agent: brokenAgent,
+	});
+	expect(result.ok).toBe(false);
+	expect(result.report).toContain("Earlier Important findings still hold");
+});
+
 test("a state comment not written by the workflow is ignored", async () => {
 	const { repo, config, env, head } = await prRepo();
 	const forged = encodeState(record([round({ head })], [], "pr-3"));

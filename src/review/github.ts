@@ -4,12 +4,7 @@ import { run } from "../run";
 import type { ReviewAgent } from "./agent";
 import { reviewReport } from "./report";
 import { ReviewInputError, type ReviewOutcome, review } from "./review";
-import {
-	blocking,
-	emptyRecord,
-	type ReviewFinding,
-	type ReviewRecord,
-} from "./types";
+import { emptyRecord, type ReviewFinding, type ReviewRecord } from "./types";
 
 /** Runs `gh` with args, optional stdin, and returns stdout. Injected in tests. */
 export type Gh = (args: string[], stdin?: string) => Promise<string>;
@@ -220,8 +215,8 @@ async function saveState(
 	pr: PullRequest,
 	existing: Comment | null,
 	record: ReviewRecord,
+	open: ReviewFinding[],
 ) {
-	const open = blocking(record);
 	const body = `**cagr review**: ${open.length === 0 ? "no Important finding open." : `${open.length} Important finding${open.length === 1 ? "" : "s"} open (${open.map((finding) => finding.id).join(", ")}).`}\n\n${encodeState(record)}`;
 	const path = existing
 		? `repos/${pr.repo}/issues/comments/${existing.id}`
@@ -290,20 +285,20 @@ export async function ciReview(
 			},
 		);
 	let saved = "";
-	await saveState(gh, pr, existing, outcome.record).catch((error: Error) => {
-		saved = `\n\nThe review state could not be saved to the pull request, so the next run starts over: ${error.message}`;
-		if (readOnlyToken.test(error.message))
-			saved += options.local
-				? "\nRun `gh auth login` with an account that can post to this pull request."
-				: "\nThe token cannot write to this pull request. GitHub gives pull requests from forks a read-only token and no secrets, so this job cannot review them. Review fork pull requests by hand, or run `cagr review` on a branch in this repo.";
-	});
+	await saveState(gh, pr, existing, outcome.record, outcome.open).catch(
+		(error: Error) => {
+			saved = `\n\nThe review state could not be saved to the pull request, so the next run starts over: ${error.message}`;
+			if (readOnlyToken.test(error.message))
+				saved += options.local
+					? "\nRun `gh auth login` with an account that can post to this pull request."
+					: "\nThe token cannot write to this pull request. GitHub gives pull requests from forks a read-only token and no secrets, so this job cannot review them. Review fork pull requests by hand, or run `cagr review` on a branch in this repo.";
+		},
+	);
 	const report = `${reviewReport(outcome, config.review.max_rounds)}${posted}${saved}`;
-	// Fail open: a reviewer that could not run does not hold the pull request, but findings already open still do.
+	// Fail open: a reviewer that could not run does not hold the pull request, but findings not closed at this head still do.
 	return {
 		complete: !outcome.round?.error && posted === "" && saved === "",
-		ok: outcome.round?.error
-			? blocking(outcome.record).length === 0
-			: outcome.passed,
+		ok: outcome.round?.error ? outcome.open.length === 0 : outcome.passed,
 		report,
 	};
 }

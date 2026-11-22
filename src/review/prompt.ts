@@ -4,6 +4,7 @@ import {
 	type Candidate,
 	categories,
 	type ReviewFinding,
+	type Round,
 	severities,
 } from "./types";
 
@@ -13,18 +14,26 @@ export type ReviewContext = {
 	branch: string;
 	from: string;
 	head: string;
-	scope: "full" | "diff" | "scan";
+	scope: Round["scope"];
 	tier: RiskTier;
 	tierReasons: string[];
 	effort: Effort;
-	round: number;
-	maxRounds: number;
 	log: string;
 	diff: string;
 	guide: string | null;
 	skip: string[];
 	scan: string[];
 	previous: ReviewFinding[];
+	/** The round that started the current cycle: fixed findings from before it are not checked again. */
+	cycleStart: number;
+	/** Set on a recheck of an already reviewed commit: only findings from rounds before this one are verified again. */
+	recheckBefore: number | null;
+	/** Fixed findings whose fix was judged on a commit this head does not contain: the verifier checks them again. */
+	stale: string[];
+	/** Findings the verifier already judged twice at this head: they are not judged again here. */
+	spent: string[];
+	/** Past the round cap: findings fixed in this cycle are checked again, in case a later commit broke the fix. */
+	capped: boolean;
 };
 
 const strict = (properties: Record<string, unknown>) => ({
@@ -60,11 +69,6 @@ export const finderSchema = strict({
 		description: 'Starts with the count, like "2 important, 1 nit."',
 	},
 	findings: { type: "array", items: candidateSchema },
-	fixed: {
-		type: "array",
-		items: { type: "string" },
-		description: "Ids of earlier open findings this commit fixed.",
-	},
 });
 
 export const verifierSchema = strict({
@@ -90,7 +94,6 @@ export const verifierSchema = strict({
 export type FinderOutput = {
 	summary: string;
 	findings: Candidate[];
-	fixed: string[];
 };
 export type VerifierOutput = {
 	candidates: {
@@ -110,6 +113,37 @@ const focusText: Record<Focus, string> = {
 		"Behavior end to end: does the change do what its commits say? Edge cases, missing tests for new behavior, changed public interfaces and their callers, config, migration and compatibility effects.",
 };
 
+const calibration = [
+	'Severity "important" requires a concrete failing input or state and its consequence. Without both, use "nit".',
+	"Do not report a choice the commit body names as deliberate unless it causes a bug or a security hole.",
+];
+
+function commitMessages(context: ReviewContext) {
+	return context.log.trim() === ""
+		? []
+		: ["", "## Commit messages", context.log.trim()];
+}
+
+export function findingsToVerify(context: ReviewContext) {
+	const { recheckBefore } = context;
+	return context.previous.filter((finding) => {
+		if (context.spent.includes(finding.id)) return false;
+		if (recheckBefore !== null && finding.round >= recheckBefore) return false;
+		if (context.stale.includes(finding.id)) return true;
+		const recheckFix =
+			finding.severity === "important" &&
+			finding.status === "fixed" &&
+			finding.round >= context.cycleStart;
+		if (context.scope === "verify")
+			return (
+				recheckFix ||
+				(finding.severity === "important" && finding.status === "open")
+			);
+		if (context.capped) return recheckFix || finding.status === "open";
+		return finding.status === "open";
+	});
+}
+
 function scopeText(context: ReviewContext) {
 	if (context.scope === "scan")
 		return `You are reviewing existing code in ${context.scan.join(", ")} at ${context.head.slice(0, 12)} for bugs that have not surfaced yet. List the files with \`git ls-files\`.`;
@@ -126,11 +160,10 @@ function shared(context: ReviewContext) {
 		scopeText(context),
 		`Risk tier: ${context.tier}${context.tierReasons.length > 0 ? ` (${context.tierReasons.join("; ")})` : ""}.`,
 	];
-	if (context.log.trim() !== "")
+	if (context.scope === "full")
 		parts.push(
 			"",
-			"The author's intent, from the commit messages:",
-			context.log.trim(),
+			"This is the only full review. Later rounds see only the commits added after it, so anything you miss now ships. Report every instance of every class now.",
 		);
 	parts.push(
 		"",
@@ -139,7 +172,8 @@ function shared(context: ReviewContext) {
 		"- Report a finding only with evidence: a file, a line, and what goes wrong for which input or state.",
 		"- For a bug fix, check that it fixes the root cause and not one symptom.",
 		"- When you find a bug, look for the same class of bug elsewhere in the change, report each instance, and name the class in bug_class.",
-		'- severity "important": a bug, a security hole, data loss, a broken contract, or new behavior with no test that could break. "nit": small and worth fixing. "pre-existing": a real problem the change did not introduce.',
+		...calibration.map((line) => `- ${line}`),
+		'- Severity "pre-existing" is for a problem the change did not introduce.',
 		'- Do not report style, formatting, naming or cleanup-only issues; linters handle those. If you report one anyway, set category to "style".',
 		"- At most 3 nits.",
 		"- If there is nothing to fix, return no findings and say so plainly in the summary.",
@@ -163,12 +197,6 @@ function shared(context: ReviewContext) {
 					`- ${findingLine(finding)} [${finding.severity}, ${finding.status}${finding.answer ? `, answered ${finding.answer.kind}: ${finding.answer.reason}` : ""}]`,
 			),
 		);
-	if (context.round > context.maxRounds)
-		parts.push(
-			"",
-			"## Round limit",
-			`This is review round ${context.round}; the cap is ${context.maxRounds}. Report only important problems in the new commits. If the same kind of problem keeps coming back, say in the summary that the author should step back and reconsider the approach.`,
-		);
 	return parts;
 }
 
@@ -178,18 +206,12 @@ function diffSection(context: ReviewContext) {
 }
 
 export function finderPrompt(context: ReviewContext, focus: Focus) {
-	const open = context.previous.filter((finding) => finding.status === "open");
 	return [
 		...shared(context),
 		"",
 		"## Your focus",
 		focusText[focus],
-		...(open.length > 0
-			? [
-					"",
-					`In \`fixed\`, list the ids of these open findings that the code at ${context.head.slice(0, 12)} no longer has: ${open.map((finding) => finding.id).join(", ")}.`,
-				]
-			: []),
+		...commitMessages(context),
 		...diffSection(context),
 	].join("\n");
 }
@@ -198,15 +220,18 @@ export function verifierPrompt(
 	context: ReviewContext,
 	candidates: (Candidate & { key: string })[],
 ) {
-	const open = context.previous.filter((finding) => finding.status === "open");
+	const previous = findingsToVerify(context);
 	return [
 		`You check other reviewers' findings on branch ${context.branch} (${context.from.slice(0, 12)}..${context.head.slice(0, 12)}), independently, in a fresh context. Do not change any file.`,
 		"",
-		"For each candidate, read the code and decide whether it is real: the file and line exist at the reviewed commit and the failure happens as described. Speculative, style-only, and already-handled findings are not real. You may change the severity.",
-		...(open.length > 0
+		context.scope === "verify"
+			? "This commit was already reviewed. Check the earlier findings below again at this commit. Return an empty candidates list."
+			: "For each candidate, read the code and decide whether it is real: the file and line exist at the reviewed commit and the failure happens as described. Speculative, style-only, and already-handled findings are not real. You may change the severity.",
+		...calibration,
+		...(previous.length > 0
 			? [
 					"",
-					`Then, for each previous open finding, decide whether the code at ${context.head.slice(0, 12)} has fixed it.`,
+					`For each earlier finding below, read the diff and the code at ${context.head.slice(0, 12)}. Return a fixed or not fixed verdict and the evidence for it. A previously fixed finding needs confirmation that the fix still holds.`,
 				]
 			: []),
 		...(context.guide
@@ -220,16 +245,17 @@ export function verifierPrompt(
 						`- ${candidate.key} [${candidate.severity}/${candidate.category}] ${candidate.file}:${candidate.line} ${candidate.title}\n  ${candidate.detail.replace(/\n/g, "\n  ")}`,
 				)
 			: ["(none)"]),
-		...(open.length > 0
+		...(previous.length > 0
 			? [
 					"",
-					"## Previous open findings",
-					...open.map(
+					"## Earlier findings to verify",
+					...previous.map(
 						(finding) =>
-							`- ${findingLine(finding)}\n  ${finding.detail.replace(/\n/g, "\n  ")}`,
+							`- ${findingLine(finding)} [${finding.status}]\n  ${finding.detail.replace(/\n/g, "\n  ")}`,
 					),
 				]
 			: []),
+		...commitMessages(context),
 		...diffSection(context),
 	].join("\n");
 }

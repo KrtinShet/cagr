@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { tempRepo } from "../test/repo";
 import { finding, head, record, round } from "../test/review";
 import {
 	AnswerError,
@@ -49,7 +50,7 @@ test("status says whether the last review covers the current commit", () => {
 	);
 });
 
-test("stats count rounds to pass, answers by kind, and reviewer errors", () => {
+test("stats count rounds to pass, answers by kind, and reviewer errors", async () => {
 	const records = [
 		record([round()], [finding({ status: "fixed" })], "a"),
 		record([round(), round({ n: 2 })], [], "b"),
@@ -66,7 +67,7 @@ test("stats count rounds to pass, answers by kind, and reviewer errors", () => {
 		),
 		record([round({ error: "boom" })], [], "d"),
 	];
-	const stats = reviewStats(records);
+	const stats = await reviewStats(records, ".");
 	expect(stats.branches).toBe(3);
 	expect(stats.passed).toBe(2);
 	expect(stats.meanRounds).toBe(1.5);
@@ -77,5 +78,51 @@ test("stats count rounds to pass, answers by kind, and reviewer errors", () => {
 	expect(text).toContain("3 branches reviewed, 2 passing.");
 	expect(text).toContain("Noise: 33% of findings were answered as wrong.");
 	expect(text).toContain("failed to run 1 time.");
-	expect(statsReport(reviewStats([]))).toBe("No reviews yet.");
+	expect(statsReport(await reviewStats([], "."))).toBe("No reviews yet.");
+});
+
+test("stats count later findings on added or replaced lines since round one", async () => {
+	const repo = await tempRepo();
+	const first = await repo.commit("feat: original", {
+		"src/a.ts": "unchanged one\noriginal\nunchanged two\n",
+	});
+	const second = await repo.commit("fix: revise original", {
+		"src/a.ts": "unchanged one\nreplaced\nnew\nunchanged two\n",
+	});
+	const saved = record(
+		[
+			round({ head: first }),
+			round({ n: 2, head: second, from: first, scope: "diff" }),
+		],
+		[1, 2, 3, 4, 0].map((line) =>
+			finding({ id: `f${line + 1}`, round: 2, line }),
+		),
+	);
+	const stats = await reviewStats([saved], repo.root);
+	expect(stats.fixLineShare).toBe(0.5);
+	expect(statsReport(stats)).toContain(
+		"Later-round findings on fix lines: 50%.",
+	);
+});
+
+test("stats compare a later round with the full round that started its cycle", async () => {
+	const repo = await tempRepo();
+	const first = await repo.commit("feat: original", {
+		"src/a.ts": "one\ntwo\nthree\n",
+	});
+	const rebased = await repo.commit("feat: rebased", {
+		"src/a.ts": "one\nTWO\nthree\n",
+	});
+	const third = await repo.commit("fix: last line", {
+		"src/a.ts": "one\nTWO\nTHREE\n",
+	});
+	const saved = record(
+		[
+			round({ head: first }),
+			round({ n: 2, head: rebased, scope: "full" }),
+			round({ n: 3, head: third, from: rebased, scope: "diff" }),
+		],
+		[finding({ round: 3, line: 2 })],
+	);
+	expect((await reviewStats([saved], repo.root)).fixLineShare).toBe(0);
 });

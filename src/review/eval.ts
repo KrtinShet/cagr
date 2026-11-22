@@ -152,7 +152,6 @@ export async function runEvals(
 			const outcome = await review(config, {
 				cwd: tree,
 				base: testCase.base,
-				full: true,
 				effort: options.effort,
 				agent: options.agent,
 				record: emptyRecord(testCase.name, testCase.base),

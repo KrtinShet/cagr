@@ -1,8 +1,16 @@
-import { answerHint, findingLine, runReview } from "./gate";
+import { run } from "../run";
+import {
+	answerHint,
+	cappedReview,
+	findingLine,
+	reviewPreparation,
+	runReview,
+} from "./gate";
 import type { ReviewOutcome } from "./review";
 import {
 	type AnswerKind,
 	blocking,
+	discoveryRounds,
 	type ReviewFinding,
 	type ReviewRecord,
 } from "./types";
@@ -23,16 +31,21 @@ export function reviewReport(
 	maxRounds: number,
 ): string {
 	if (outcome.skipped) {
-		const open = blocking(outcome.record);
+		const open = outcome.open;
 		return open.length > 0
 			? `${outcome.skipped}\n\nStill open:\n${open.map(block).join("\n")}\n\nFix them, commit, and run \`cagr review\` again. ${answerHint(open[0]?.id ?? "f1")}`
 			: outcome.skipped;
 	}
 	const round = outcome.round;
-	if (round?.error)
-		return `The reviewer could not run: ${round.error}\n\nThe gate lets the pull request through and tells the human it went out unreviewed. Fix the reviewer and run \`cagr review\` again if you can.`;
+	if (round?.error) {
+		const gate =
+			outcome.open.length === 0
+				? "The pull request gate will tell the human this commit went out unreviewed."
+				: "Earlier Important findings still hold the pull request gate.";
+		return `The reviewer could not run: ${round.error}\n\n${gate} Fix the reviewer and run \`cagr review\` again.\n\n${reviewPreparation}`;
+	}
 	const sections: string[] = [
-		`Round ${round?.n ?? 1}${round ? ` (${round.scope}, ${round.effort}, ${round.tier} risk, ${round.reviewer})` : ""}: ${round?.summary ?? ""}`,
+		`${round?.scope === "verify" ? "Verifier-only check" : `Round ${round?.n ?? 1}`}${round ? ` (${round.scope}, ${round.effort}, ${round.tier} risk, ${round.reviewer})` : ""}: ${round?.summary ?? ""}`,
 	];
 	if (outcome.fixed.length > 0)
 		sections.push(
@@ -48,7 +61,7 @@ export function reviewReport(
 		sections.push(
 			`Pre-existing (not from this branch, optional):\n${of("pre-existing").map(block).join("\n")}`,
 		);
-	const open = blocking(outcome.record);
+	const open = outcome.open;
 	const older = open.filter((finding) => !outcome.found.includes(finding));
 	if (older.length > 0)
 		sections.push(
@@ -56,17 +69,21 @@ export function reviewReport(
 		);
 	if (open.length === 0)
 		sections.push(
-			"Passed. No Important finding is open, so the gate lets the pull request through.",
+			"Passed. No Important finding is open. Push the reviewed commits, then open or mark the pull request ready.",
 		);
 	else {
 		const steps = `Next: fix each Important finding, commit, and run \`cagr review\` again. It reviews only the new commits. ${answerHint(open[0]?.id ?? "f1")}`;
-		const rounds = outcome.record.rounds.filter((entry) => !entry.error).length;
-		sections.push(
-			rounds >= maxRounds
-				? `${steps}\n\nThis is round ${rounds} of ${maxRounds}. Step back before another round: if findings keep coming, the approach may be wrong. Rethink it, or answer the findings and let a person decide.`
-				: steps,
-		);
+		sections.push(steps);
+		if (discoveryRounds(outcome.record) >= maxRounds)
+			sections.push(cappedReview);
 	}
+	if (
+		round?.scope === "verify" &&
+		open.length === 0 &&
+		discoveryRounds(outcome.record) >= maxRounds
+	)
+		sections.push(cappedReview);
+	sections.push(reviewPreparation);
 	return sections.join("\n\n");
 }
 
@@ -131,10 +148,72 @@ export type ReviewStats = {
 	answers: Record<AnswerKind, number>;
 	fixed: number;
 	errors: number;
+	fixLineShare: number | null;
 };
 
+async function fixLineShare(records: ReviewRecord[], cwd: string) {
+	let changed = 0;
+	let located = 0;
+	for (const record of records) {
+		for (const round of record.rounds) {
+			if (round.error || round.scope !== "diff") continue;
+			// Each cycle starts with a full round: compare with the one that started this round's cycle.
+			const first = record.rounds.findLast(
+				(earlier) =>
+					!earlier.error && earlier.scope === "full" && earlier.n < round.n,
+			);
+			if (!first) continue;
+			const byFile = Map.groupBy(
+				record.findings.filter(
+					(finding) =>
+						finding.round === round.n &&
+						finding.line > 0 &&
+						finding.file !== "",
+				),
+				(finding) => finding.file,
+			);
+			for (const [file, findings] of byFile) {
+				const diff = await run(
+					[
+						"git",
+						"diff",
+						"--no-color",
+						"--no-ext-diff",
+						"--no-textconv",
+						"--no-renames",
+						"--unified=0",
+						first.head,
+						round.head,
+						"--",
+						`:(top,literal)${file}`,
+					],
+					cwd,
+				);
+				if (!diff.ok) continue;
+				const ranges = [
+					...diff.stdout.matchAll(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/gm),
+				].map((match) => ({
+					start: Number(match[1]),
+					length: Number(match[2] ?? 1),
+				}));
+				located += findings.length;
+				changed += findings.filter((finding) =>
+					ranges.some(
+						({ start, length }) =>
+							start <= finding.line && finding.line < start + length,
+					),
+				).length;
+			}
+		}
+	}
+	return located > 0 ? changed / located : null;
+}
+
 /** Rounds-to-pass and how findings were handled, across every branch's record. */
-export function reviewStats(records: ReviewRecord[]): ReviewStats {
+export async function reviewStats(
+	records: ReviewRecord[],
+	cwd: string,
+): Promise<ReviewStats> {
 	const ran = records.filter((record) =>
 		record.rounds.some((round) => !round.error),
 	);
@@ -159,6 +238,7 @@ export function reviewStats(records: ReviewRecord[]): ReviewStats {
 		passedFirstRound: share(passedRounds.filter((n) => n === 1).length),
 		fiveOrMore: share(passedRounds.filter((n) => n >= 5).length),
 		findings: findings.length,
+		fixLineShare: await fixLineShare(records, cwd),
 		important: findings.filter((finding) => finding.severity === "important")
 			.length,
 		answers,
@@ -179,6 +259,7 @@ export function statsReport(stats: ReviewStats): string {
 	return [
 		`${stats.branches} branch${stats.branches === 1 ? "" : "es"} reviewed, ${stats.passed} passing.`,
 		`Rounds to pass: mean ${stats.meanRounds === null ? "n/a" : stats.meanRounds.toFixed(1)}, ${percent(stats.passedFirstRound)} in one round, ${percent(stats.fiveOrMore)} needed five or more.`,
+		`Later-round findings on fix lines: ${percent(stats.fixLineShare)}.`,
 		`Findings: ${stats.findings} (${stats.important} important). Fixed: ${stats.fixed}. Answered: ${answered} (wrong ${stats.answers.wrong}, intentional ${stats.answers.intentional}, minor ${stats.answers.minor}).`,
 		...(stats.findings > 0
 			? [
