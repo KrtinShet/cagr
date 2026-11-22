@@ -464,6 +464,59 @@ describe("review", () => {
 		]);
 		expect(outcome.passed).toBe(false);
 		expect(reviewReport(outcome, 3)).not.toContain("round cap");
+		const third = fakeAgent({
+			finder: () => ({ findings: [] }),
+			verifier: () => ({ previous: [{ id: "f2", fixed: true }] }),
+		});
+		const repeat = await review(repo.config, {
+			...options,
+			agent: third.agent,
+		});
+		expect(third.calls[0]?.prompt ?? "").not.toContain("f2 src/b.ts");
+		expect(
+			repeat.record.findings.find((entry) => entry.id === "f2")?.status,
+		).toBe("open");
+	});
+
+	test("past the cap, a finder round still verifies open nits", async () => {
+		const repo = await branchRepo();
+		const { agent } = fakeAgent({
+			finder: (_, call) => ({
+				findings: call === 0 ? [candidate({ severity: "nit" })] : [],
+			}),
+		});
+		const options = { cwd: repo.root, effort: "quick" as const };
+		await review(repo.config, { ...options, agent });
+		await repo.commit("feat: more", { "src/c.ts": "c\n" });
+		await review(repo.config, { ...options, agent });
+		await repo.commit("feat: tidy", { "src/a.ts": "user?.name\n" });
+		const next = fakeAgent({
+			finder: () => ({ findings: [] }),
+			verifier: () => ({ previous: [{ id: "f1", fixed: true }] }),
+		});
+		const outcome = await review(repo.config, {
+			...options,
+			agent: next.agent,
+		});
+		expect(outcome.round?.scope).toBe("diff");
+		expect(outcome.fixed.map((entry) => entry.id)).toEqual(["f1"]);
+	});
+
+	test("past the cap with nothing open, a commit to skipped paths alone is not verifier-only", async () => {
+		const { repo } = await cappedRepo();
+		const config = resolveConfig(
+			{ review: { enabled: true, skip: ["**/*.snap"] } },
+			repo.root,
+			join(repo.root, "cagr.toml"),
+		);
+		await repo.commit("chore: snapshots", { "src/a.snap": "snap\n" });
+		const { agent } = fakeAgent({ finder: () => ({ findings: [] }) });
+		const outcome = await review(config, {
+			cwd: repo.root,
+			agent,
+			effort: "quick",
+		});
+		expect(outcome.round?.scope).toBe("diff");
 	});
 
 	test("a rebased branch starts a new cycle with a full round", async () => {

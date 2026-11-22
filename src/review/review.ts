@@ -381,12 +381,18 @@ async function planRound(
 		return fresh;
 	}
 	if (lastOk.head === head) {
-		// A verifier can be wrong about an earlier finding, so let it look again. Findings from this round need a fix or an answer.
-		const recheck = blocking(record).some(
-			(finding) => finding.round < lastOk.n,
-		);
+		// A verifier can be wrong about an earlier finding, so let it look again.
+		// Findings reported at this commit need a fix or an answer, so the
+		// boundary is the first round that reviewed it, not the latest recheck.
+		let first = lastOk;
+		for (const round of record.rounds.toReversed()) {
+			if (round.error) continue;
+			if (round.head !== head) break;
+			first = round;
+		}
+		const recheck = blocking(record).some((finding) => finding.round < first.n);
 		return recheck
-			? { from: lastOk.from, scope: "verify", recheckBefore: lastOk.n }
+			? { from: first.from, scope: "verify", recheckBefore: first.n }
 			: `${head.slice(0, 7)} was already reviewed in round ${lastOk.n}.`;
 	}
 	const diff = {
@@ -429,7 +435,7 @@ async function planRound(
 			);
 		if (files.some((path) => !covered.has(path))) other.push(sha.slice(0, 7));
 	}
-	if (commits.length > 0 && other.length === 0) {
+	if (covered.size > 0 && commits.length > 0 && other.length === 0) {
 		progress(
 			`Reached the ${input.maxRounds}-round cap, and the new commits only change files with an open Important finding.`,
 		);

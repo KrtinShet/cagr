@@ -122,15 +122,20 @@ function commitMessages(context: ReviewContext) {
 
 export function findingsToVerify(context: ReviewContext) {
 	const { recheckBefore } = context;
-	return context.previous.filter((finding) =>
-		recheckBefore !== null && finding.round >= recheckBefore
-			? false
-			: context.scope === "verify" || context.capped
-				? finding.severity === "important" &&
-					(finding.status === "open" ||
-						(finding.status === "fixed" && finding.round >= context.cycleStart))
-				: finding.status === "open",
-	);
+	return context.previous.filter((finding) => {
+		if (recheckBefore !== null && finding.round >= recheckBefore) return false;
+		const recheckFix =
+			finding.severity === "important" &&
+			finding.status === "fixed" &&
+			finding.round >= context.cycleStart;
+		if (context.scope === "verify")
+			return (
+				recheckFix ||
+				(finding.severity === "important" && finding.status === "open")
+			);
+		if (context.capped) return recheckFix || finding.status === "open";
+		return finding.status === "open";
+	});
 }
 
 function scopeText(context: ReviewContext) {
