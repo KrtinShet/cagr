@@ -172,3 +172,122 @@ test("temp folders a killed check left behind are removed after an hour", async 
 	expect(existsSync(old)).toBe(false);
 	expect(existsSync(recent)).toBe(true);
 });
+
+/** A repo with `committed` in its last commit and `edited` written over it, checked against `path`. */
+async function editedCheck(
+	path: string,
+	manager: LockfileStack["package_manager"],
+	committed: Record<string, string>,
+	edited: Record<string, string>,
+) {
+	const repo = await tempRepo();
+	roots.add(repo.root);
+	const head = await repo.commit("chore: add project", committed);
+	for (const [file, text] of Object.entries(edited))
+		await repo.write(file, text);
+	return checkLockfile({
+		root: repo.root,
+		path,
+		stacks: [stack(manager)],
+		baseline: new TextEncoder().encode(committed[path] ?? ""),
+		head,
+		deadline: performance.now() + 10_000,
+	});
+}
+
+test("a packageManager changed during the turn is for a human", async () => {
+	const verdict = await editedCheck(
+		"pnpm-lock.yaml",
+		"pnpm",
+		{
+			"package.json": '{ "name": "app", "packageManager": "pnpm@11.22.0" }\n',
+			"pnpm-lock.yaml": "lockfileVersion: '9.0'\n",
+		},
+		{
+			"package.json": '{ "name": "app", "packageManager": "pnpm@10.0.0" }\n',
+			"pnpm-lock.yaml": "lockfileVersion: '9.0'\n# edited\n",
+		},
+	);
+	expect(verdict?.message).toContain(
+		"packageManager field in package.json changed during the turn, from pnpm@11.22.0 to pnpm@10.0.0",
+	);
+});
+
+test("a Yarn 1 lockfile in a repo pinned to Yarn 2 or later is not rebuilt", async () => {
+	const lockfile = "# yarn lockfile v1\n";
+	const verdict = await editedCheck(
+		"yarn.lock",
+		"yarn",
+		{
+			"package.json": '{ "name": "app", "packageManager": "yarn@4.10.3" }\n',
+			"yarn.lock": lockfile,
+		},
+		{ "yarn.lock": `${lockfile}\n` },
+	);
+	expect(verdict?.message).toContain("checks Yarn 1 lockfiles only");
+});
+
+test("a pnpmfile that loads a module from the repo is not run", async () => {
+	const lockfile = "lockfileVersion: '9.0'\n";
+	const verdict = await editedCheck(
+		"pnpm-lock.yaml",
+		"pnpm",
+		{
+			"package.json": '{ "name": "app" }\n',
+			".pnpmfile.cjs":
+				"const path = require('node:path')\nconst hooks = require('./tools/hooks')\nmodule.exports = { hooks }\n",
+			"tools/hooks.js": "module.exports = {}\n",
+			"pnpm-lock.yaml": lockfile,
+		},
+		{ "pnpm-lock.yaml": `${lockfile}# edited\n` },
+	);
+	expect(verdict?.message).toContain(
+		".pnpmfile.cjs loads a module that is not a Node built-in",
+	);
+});
+
+test("a pnpm setting changed in the root package.json is for a human", async () => {
+	const lockfile = "lockfileVersion: '9.0'\n";
+	const verdict = await editedCheck(
+		"pnpm-lock.yaml",
+		"pnpm",
+		{
+			"package.json": '{ "name": "app" }\n',
+			"pnpm-lock.yaml": lockfile,
+		},
+		{
+			"package.json":
+				'{ "name": "app", "pnpm": { "overrides": { "pad": "1.1.0" } } }\n',
+			"pnpm-lock.yaml": `${lockfile}# edited\n`,
+		},
+	);
+	expect(verdict?.message).toContain(
+		"The pnpm field in package.json changed during the turn",
+	);
+});
+
+test.skipIf(Bun.which("yarn") === null)(
+	"Yarn 1 runs the yarn-path release from the starting commit",
+	async () => {
+		const lockfile = "# yarn lockfile v1\n";
+		const edited = `${lockfile}# edited\n`;
+		const verdict = await editedCheck(
+			"yarn.lock",
+			"yarn",
+			{
+				"package.json": '{ "name": "app", "version": "1.0.0" }\n',
+				".yarnrc": 'yarn-path "./tools/yarn.cjs"\n',
+				"tools/package.json": '{ "name": "tools", "version": "1.0.0" }\n',
+				"tools/yarn.cjs": "process.exit(3)\n",
+				"yarn.lock": lockfile,
+			},
+			{
+				"package.json":
+					'{ "name": "app", "version": "1.0.0", "dependencies": { "tools": "file:tools" } }\n',
+				"tools/yarn.cjs": `require("node:fs").writeFileSync("yarn.lock", ${JSON.stringify(edited)})\n`,
+				"yarn.lock": edited,
+			},
+		);
+		expect(verdict?.message).toContain("could not check that yarn wrote");
+	},
+);

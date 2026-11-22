@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeAll, expect, test } from "bun:test";
+import { afterEach, expect, test } from "bun:test";
 import {
 	copyFile,
 	mkdir,
@@ -14,18 +14,11 @@ import type { HookInput } from "../hook/types";
 import { runShell } from "../run";
 import { localRegistry } from "../test/registry";
 import { tempRepo } from "../test/repo";
+import { roomySnapshots } from "../test/snapshot";
 import { clearTurnState, stateFile } from "../turn-state";
 import { snapshotBudget } from "./protected-turn";
 
-// The real budget is tight, and a loaded test machine can miss it and change what turn end reports.
-const budget = { ...snapshotBudget };
-beforeAll(() => {
-	snapshotBudget.commandMs = 10_000;
-	snapshotBudget.toolMs = 10_000;
-});
-afterAll(() => {
-	Object.assign(snapshotBudget, budget);
-});
+roomySnapshots();
 
 const policy = 'extends = ["recommended"]\n';
 const trash = new Set<string>();
@@ -655,7 +648,12 @@ for (const manager of ["bun", "pnpm", "npm", "yarn"] as const)
 			trash.add(planted);
 			await writeFile(
 				join(planted, "package.json"),
-				JSON.stringify({ name: "planted", private: true, workspaces: ["**"] }),
+				JSON.stringify({
+					name: "planted",
+					private: true,
+					workspaces: ["**"],
+					packageManager: "yarn@4.10.3",
+				}),
 			);
 			await writeFile(
 				join(planted, "pnpm-workspace.yaml"),
@@ -672,7 +670,7 @@ for (const manager of ["bun", "pnpm", "npm", "yarn"] as const)
 	);
 
 const pnpmfile =
-	"module.exports = { hooks: { readPackage(pkg) { pkg.description = 'seen'; return pkg } } }\n";
+	"const { basename } = require('node:path')\nmodule.exports = { hooks: { readPackage(pkg) { pkg.description = basename('seen'); return pkg } } }\n";
 
 test.skipIf(missing("pnpm"))(
 	"pnpm add in a repo with a pnpmfile passes turn end",
@@ -759,4 +757,34 @@ test("a repeated key in bun.lock blocks", async () => {
 	const { decision, reason } = JSON.parse(await repo.stop());
 	expect(decision).toBe("block");
 	expect(reason).toContain("looks edited by hand");
+});
+
+test.skipIf(missing("pnpm"))(
+	"a pnpmfile checked out with CRLF line ends passes turn end",
+	async () => {
+		const repo = await lockedRepo("pnpm", {
+			".gitattributes": ".pnpmfile.cjs eol=crlf\n",
+			".pnpmfile.cjs": pnpmfile.replaceAll("\n", "\r\n"),
+		});
+		expect(
+			await repo.git("cat-file", "blob", "HEAD:.pnpmfile.cjs"),
+		).not.toContain("\r");
+		expect(await repo.before("pnpm add zed")).toBe("");
+		await repo.add("zed");
+		expect(await repo.stop()).toBe("");
+	},
+	30_000,
+);
+
+test("a lockfile whose starting copy cannot be read says so", async () => {
+	const repo = await lockedRepo("bun");
+	expect(await repo.before("bun add zed")).toBe("");
+	await repo.add("zed");
+	const oid = await repo.git("rev-parse", "HEAD:bun.lock");
+	await rm(join(repo.root, ".git/objects", oid.slice(0, 2), oid.slice(2)));
+	const { decision, reason } = JSON.parse(await repo.stop());
+	expect(decision).toBe("block");
+	expect(reason).toContain(
+		"could not read this lockfile as it was at the start of the turn",
+	);
 });

@@ -3,9 +3,12 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { resolveConfig } from "../config/load";
 import { tempRepo } from "../test/repo";
+import { roomySnapshots } from "../test/snapshot";
 import { readTurnState, stateFile } from "../turn-state";
 import { handle } from "./handlers";
 import type { HookInput } from "./types";
+
+roomySnapshots();
 
 let root: string;
 let session: string;

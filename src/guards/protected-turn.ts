@@ -26,7 +26,12 @@ import type { CheckResult } from "../stop-decision";
 import { protectedStateDir } from "../turn-state";
 import { gitOptionsWithValue } from "./command";
 import { protectedEntries, protectedEntry } from "./edit";
-import { checkLockfile, isLockfile, type LockfileStack } from "./lockfile";
+import {
+	checkLockfile,
+	gitBlob,
+	isLockfile,
+	type LockfileStack,
+} from "./lockfile";
 
 type Blob = { mode: string; oid: string };
 type IndexEntry = Blob & { stage: string };
@@ -462,12 +467,13 @@ async function startingContent(
 	if (!entry) return null;
 	if (rest.length || ("stage" in entry && entry.stage !== "0"))
 		return undefined;
-	const text = await git(
-		snapshot.root,
-		["cat-file", "blob", entry.oid],
-		deadline,
+	return (
+		(await gitBlob(
+			snapshot.root,
+			entry.oid,
+			Math.floor(deadline - performance.now()),
+		)) ?? undefined
 	);
-	return text === null ? undefined : new TextEncoder().encode(text);
 }
 
 async function violations(
@@ -586,6 +592,9 @@ async function violations(
 						});
 			if (lockfile && lockfile.message === null) return null;
 			let note = lockfile ? `${lockfile.message} ` : "";
+			if (checked && (onlyWorkingCopy || oneCopy) && starting === undefined)
+				note =
+					"cagr could not read this lockfile as it was at the start of the turn, so it could not check that the package manager wrote it. Stop again to retry, or restore it. ";
 			if (checked && !onlyWorkingCopy && !oneCopy)
 				note =
 					"cagr checks a lockfile when only its working copy changed, or when the working copy, the index and the last commit hold the same version. Stage and commit the lockfile the package manager wrote, or restore it. ";

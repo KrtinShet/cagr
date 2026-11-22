@@ -11,6 +11,7 @@ import {
 	symlink,
 	writeFile,
 } from "node:fs/promises";
+import { builtinModules } from "node:module";
 import { homedir, tmpdir } from "node:os";
 import {
 	basename,
@@ -68,6 +69,9 @@ const dependencyFields = [
 	"resolutions",
 	"patchedDependencies",
 ];
+
+const yarnBerry =
+	"cagr checks Yarn 1 lockfiles only. Yarn 2 and later can load plugins and releases from outside the repo, so cagr does not run them. Restore the file and ask the user to run the yarn command.";
 
 export const isLockfile = (path: string) =>
 	Object.hasOwn(writers, basename(path));
@@ -179,6 +183,27 @@ function localRefs(manifest: string, text: string): string[] {
 
 /** A verdict for a change a human must make. Its message is the whole reason. */
 class Refusal extends Error {}
+
+/** A git object's bytes, read without a text decode so a BOM, CRLF or invalid UTF-8 survives. Null when git cannot read it. */
+export async function gitBlob(root: string, object: string, timeoutMs: number) {
+	const child = Bun.spawn(["git", "cat-file", "blob", object], {
+		cwd: root,
+		stdin: "ignore",
+		stdout: "pipe",
+		stderr: "ignore",
+		env: { ...process.env, GIT_OPTIONAL_LOCKS: "0" },
+		timeout: Math.max(1, timeoutMs),
+		killSignal: "SIGKILL",
+	});
+	const [bytes, code] = await Promise.all([
+		new Response(child.stdout).bytes(),
+		child.exited,
+	]);
+	return code === 0 ? bytes : null;
+}
+
+const decode = (bytes: Uint8Array | null) =>
+	bytes === null ? null : new TextDecoder().decode(bytes);
 
 const unquote = (key: string) =>
 	key.startsWith('"')
@@ -294,17 +319,13 @@ async function copyInputs(
 				.filter(Boolean)
 		: [];
 	const inHead = new Set(committed);
+	/** A file's bytes in the starting commit, or null when it has none. */
 	const fromHead = async (file: string) => {
 		if (!head) return null;
-		if (inHead.has(file)) return gitRun(["show", `${head}:${file}`]);
-		const outside = await run(
-			["git", "cat-file", "blob", `${head}:${file}`],
-			root,
-			{
-				timeoutMs: timeoutMs(),
-			},
-		);
-		return outside.ok ? outside.stdout : null;
+		const bytes = await gitBlob(root, `${head}:${file}`, timeoutMs());
+		if (bytes === null && inHead.has(file))
+			throw new Error(`git could not read ${file} from ${head}.`);
+		return bytes;
 	};
 	const listed = await run(
 		[
@@ -350,7 +371,7 @@ async function copyInputs(
 			existsSync(source) && !lstatSync(source).isSymbolicLink()
 				? await readFile(source, "utf8")
 				: null;
-		const text = workspaceFor(file, work, await fromHead(file));
+		const text = workspaceFor(file, work, decode(await fromHead(file)));
 		if (text === null) continue;
 		await mkdir(dirname(join(target, file)), { recursive: true });
 		await writeFile(join(target, file), text);
@@ -384,12 +405,51 @@ async function copyInputs(
 			configDirs.some((dir) => inProject(file).startsWith(dir))
 		) {
 			await mkdir(dirname(join(target, file)), { recursive: true });
-			await writeFile(
-				join(target, file),
-				await gitRun(["show", `${head}:${file}`]),
-			);
+			await writeFile(join(target, file), (await fromHead(file)) ?? "");
 		}
+	const yarnrc = decode(await fromHead(posix.join(project, ".yarnrc")));
+	const yarnPath =
+		yarnrc && /^\s*yarn-path\s+(?:"([^"]*)"|(\S+))/m.exec(yarnrc);
+	const release = yarnPath ? (yarnPath[1] ?? yarnPath[2] ?? "") : "";
+	// Yarn 1 runs the release the committed .yarnrc names, so it must come from the commit too.
+	if (release && !isAbsolute(release)) {
+		const file = posix.normalize(posix.join(project, release));
+		if (file === ".." || file.startsWith("../"))
+			throw new Refusal(
+				`The committed .yarnrc runs a yarn-path outside the repo, ${release}, which the check cannot take from the commit. Restore the lockfile and ask the user to run the yarn command.`,
+			);
+		const bytes = await fromHead(file);
+		await rm(join(target, file), { force: true, recursive: true });
+		if (bytes) {
+			await mkdir(dirname(join(target, file)), { recursive: true });
+			await writeFile(join(target, file), bytes);
+		}
+	}
 	return fromHead;
+}
+
+/** The packageManager Corepack picks for `project`: the nearest package.json at or above it that sets one. */
+async function packageManagerOf(
+	project: string,
+	read: (file: string) => Promise<string | null>,
+) {
+	for (let dir = project; ; dir = posix.dirname(dir)) {
+		const text = await read(posix.join(dir, "package.json"));
+		try {
+			const value =
+				text === null ? undefined : JSON.parse(text)?.packageManager;
+			if (typeof value === "string") return value;
+		} catch {}
+		if (dir === ".") return null;
+	}
+}
+
+/** The working copy's package.json text, or null for none or a symlink. */
+async function workingText(root: string, file: string) {
+	const source = join(root, file);
+	return existsSync(source) && !lstatSync(source).isSymbolicLink()
+		? readFile(source, "utf8")
+		: null;
 }
 
 /** The folder pnpm treats as the workspace root: the nearest one in the copy with a pnpm-workspace.yaml, else the lockfile's own. */
@@ -401,32 +461,75 @@ function workspaceRoot(repo: string, project: string) {
 	return project;
 }
 
+/** Whether a pnpmfile loads only Node built-ins. Anything else resolves to files in the temp folder or its parents, which the agent can write. */
+function builtinsOnly(text: string) {
+	const keywords =
+		(text.match(/\b(?:require|import)\b/g)?.length ?? 0) +
+		(text.match(/\bfrom\s*["']/g)?.length ?? 0);
+	let covered = 0;
+	for (const [load, keyword = "", name = ""] of text.matchAll(
+		/\b(require|import)\s*\(\s*["']([^"']+)["']\s*\)|\bimport\s+(?:[\w$*{},\s]+?\s+from\s+)?["']([^"']+)["']/g,
+	)) {
+		const module = (name || load.match(/["']([^"']+)["']/)?.[1] || "").replace(
+			/^node:/,
+			"",
+		);
+		if (!builtinModules.includes(module)) return false;
+		covered += keyword ? 1 : /\bfrom\b/.test(load) ? 2 : 1;
+	}
+	return covered === keywords;
+}
+
 /**
- * A pnpmfile runs inside pnpm and changes the lockfile, so the check runs the
- * one from the starting commit. A working copy that differs is refused.
+ * A pnpmfile runs inside pnpm and changes the lockfile, so the check runs it
+ * only when it matches the starting commit, as Git would store it, and loads
+ * only Node built-ins.
  */
 async function copyPnpmfiles(
 	root: string,
+	head: string | null,
 	workspace: string,
 	target: string,
-	fromHead: (file: string) => Promise<string | null>,
+	deadline: number,
 ) {
+	const timeoutMs = () => Math.max(1, Math.floor(deadline - performance.now()));
 	for (const name of pnpmfiles) {
 		const file = posix.join(workspace, name);
 		const source = join(root, file);
 		const work = existsSync(source)
 			? new Uint8Array(await readFile(source))
 			: null;
-		const start = await fromHead(file);
-		const startBytes = start === null ? null : new TextEncoder().encode(start);
-		if (
-			(work === null) !== (startBytes === null) ||
-			(work && startBytes && !Buffer.from(work).equals(Buffer.from(startBytes)))
-		)
+		const start = head
+			? await run(
+					["git", "rev-parse", "--verify", "--quiet", `${head}:${file}`],
+					root,
+					{
+						timeoutMs: timeoutMs(),
+					},
+				)
+			: null;
+		const hashed = work
+			? await run(
+					["git", "hash-object", `--path=${file}`, "--", source],
+					root,
+					{
+						timeoutMs: timeoutMs(),
+					},
+				)
+			: null;
+		const startOid = start?.ok ? start.stdout.trim() : null;
+		if (hashed && !hashed.ok)
+			throw new Error(`git hash-object failed: ${hashed.output.trim()}`);
+		if ((startOid ?? "") !== (hashed?.stdout.trim() ?? ""))
 			throw new Refusal(
 				`${file} differs from the last commit. A pnpmfile runs inside pnpm and can rewrite any dependency, so changing it is a gate change for a human. Restore ${file} and ask the user to make the change.`,
 			);
-		if (startBytes) await writeFile(join(target, file), startBytes);
+		if (!work) continue;
+		if (!builtinsOnly(new TextDecoder().decode(work)))
+			throw new Refusal(
+				`${file} loads a module that is not a Node built-in. In the check that module would come from the temp folder, which the agent can write, so cagr does not run it. Restore the lockfile and ask the user to run the pnpm command.`,
+			);
+		await writeFile(join(target, file), work);
 	}
 }
 
@@ -475,6 +578,7 @@ async function isolatedEnv(home: string) {
 			),
 		COREPACK_ENABLE_NETWORK: "0",
 		COREPACK_ENABLE_DOWNLOAD_PROMPT: "0",
+		COREPACK_ENV_FILE: "0",
 	};
 }
 
@@ -507,39 +611,72 @@ async function regenerate(
 	// The real path, since npm reads a --prefix through a symlinked tmpdir as another folder.
 	const folder = await realpath(await mkdtemp(join(tmpdir(), tempPrefix)));
 	try {
-		// Managers look in parent folders for a workspace root. bun and Yarn stop at this one, which has no packages.
-		await writeFile(
-			join(folder, "package.json"),
-			JSON.stringify({ private: true, workspaces: [] }),
-		);
 		const repo = join(folder, "repo");
 		const home = join(folder, "home");
 		await mkdir(home);
 		const fromHead = await copyInputs(root, head, path, repo, deadline);
+		const project = posix.dirname(path);
+		const pinned = await packageManagerOf(project, async (file) =>
+			decode(await fromHead(file)),
+		);
+		const working = await packageManagerOf(project, (file) =>
+			workingText(root, file),
+		);
+		if (pinned !== working)
+			throw new Refusal(
+				`The packageManager field in package.json changed during the turn, from ${pinned ?? "none"} to ${working ?? "none"}. It picks the version Corepack runs, so a human makes that change. Restore it and ask the user to make the change.`,
+			);
+		if (manager === "yarn" && /^yarn@(?:[2-9]|\d\d)/.test(pinned ?? ""))
+			throw new Refusal(yarnBerry);
+		// Managers look in parent folders for a workspace root, and Corepack for a packageManager. bun and Yarn stop at this one, which has no packages.
+		await writeFile(
+			join(folder, "package.json"),
+			JSON.stringify({
+				private: true,
+				workspaces: [],
+				...(pinned ? { packageManager: pinned } : {}),
+			}),
+		);
 		const file = join(repo, path);
 		if (lockfile) await writeFile(file, lockfile);
-		const project = dirname(file);
+		const folderOf = dirname(file);
 		const argv = [...spec.argv];
 		const env: Record<string, string> = {
 			...(await isolatedEnv(home)),
+			// With no packageManager in the repo, Corepack would keep looking above the temp folder.
+			...(pinned ? {} : { COREPACK_ENABLE_PROJECT_SPEC: "0" }),
 			...spec.env,
 		};
-		if (manager === "npm") argv.push("--prefix", project);
+		if (manager === "npm") argv.push("--prefix", folderOf);
 		if (manager === "pnpm") {
-			const workspace = workspaceRoot(repo, project);
+			const workspace = workspaceRoot(repo, folderOf);
+			const relativeRoot =
+				relative(repo, workspace).split(sep).join("/") || ".";
 			env.NPM_CONFIG_WORKSPACE_DIR = workspace;
-			await copyPnpmfiles(
-				root,
-				relative(repo, workspace).split(sep).join("/") || ".",
-				repo,
-				fromHead,
-			);
+			await copyPnpmfiles(root, head, relativeRoot, repo, deadline);
+			const manifest = posix.join(relativeRoot, "package.json");
+			const settings = (text: string | null) => {
+				try {
+					return JSON.stringify(
+						sortKeys(text === null ? undefined : JSON.parse(text)?.pnpm),
+					);
+				} catch {
+					return "";
+				}
+			};
+			if (
+				settings(await workingText(root, manifest)) !==
+				settings(decode(await fromHead(manifest)))
+			)
+				throw new Refusal(
+					`The pnpm field in ${manifest} changed during the turn. It holds pnpm settings such as overrides and which packages run build scripts, so a human makes that change. Restore it and ask the user to make the change.`,
+				);
 		}
-		if (spec.yarnrc && existsSync(join(project, ".yarnrc")))
-			argv.push("--use-yarnrc", join(project, ".yarnrc"));
+		if (spec.yarnrc && existsSync(join(folderOf, ".yarnrc")))
+			argv.push("--use-yarnrc", join(folderOf, ".yarnrc"));
 		const timeoutMs = Math.floor(deadline - performance.now());
 		if (timeoutMs <= 0) throw new Error("No time was left to run it.");
-		const result = await run(argv, project, {
+		const result = await run(argv, folderOf, {
 			timeoutMs,
 			env,
 			processGroup: true,
@@ -651,7 +788,7 @@ export async function checkLockfile(options: {
 		const spec = command(writer, baseline ?? current);
 		if (!spec)
 			return {
-				message: `cagr checks Yarn 1 lockfiles only. Yarn 2 and later can load plugins and releases from outside the repo, so cagr does not run them. Restore the file and ask the user to run the yarn command.`,
+				message: yarnBerry,
 			};
 		const rewritten = await regenerate(
 			writer,
