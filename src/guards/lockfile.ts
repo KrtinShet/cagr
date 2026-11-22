@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { existsSync, lstatSync } from "node:fs";
 import {
 	cp,
@@ -6,7 +5,6 @@ import {
 	mkdir,
 	mkdtemp,
 	readFile,
-	rename,
 	rm,
 	writeFile,
 } from "node:fs/promises";
@@ -33,8 +31,8 @@ const writers: Record<string, Writer> = {
 
 const manifests = new Set(["package.json", "pnpm-workspace.yaml"]);
 /** Config that picks the registry, the cache or code the manager runs. It comes from the starting commit, since the agent can write the working copy. */
-const configs = new Set([".npmrc", "bunfig.toml", ".yarnrc", ".yarnrc.yml"]);
-const configDirs = [".yarn/releases/", ".yarn/plugins/"];
+const configs = new Set([".npmrc", "bunfig.toml", ".yarnrc"]);
+const configDirs = [".yarn/releases/"];
 const corepackOffline = {
 	COREPACK_ENABLE_NETWORK: "0",
 	COREPACK_ENABLE_DOWNLOAD_PROMPT: "0",
@@ -73,11 +71,11 @@ type Command = {
 	argv: string[];
 	env?: Record<string, string>;
 	/** Yarn reads rc files from every parent folder, and the temp folder's parents are writable. */
-	yarnrc?: 1 | 2;
+	yarnrc?: boolean;
 };
 
 /** The command, and its environment, that makes the manager rewrite only the lockfile without the network or scripts. The starting lockfile, when there is one, picks the Yarn major version, since the current one is under check. */
-function command(manager: Writer, lockfile: Uint8Array): Command {
+function command(manager: Writer, lockfile: Uint8Array): Command | null {
 	switch (manager) {
 		case "bun":
 			return {
@@ -110,17 +108,8 @@ function command(manager: Writer, lockfile: Uint8Array): Command {
 				],
 			};
 		case "yarn":
-			if (/^__metadata:/m.test(new TextDecoder().decode(lockfile)))
-				return {
-					argv: ["yarn", "install", "--mode=update-lockfile"],
-					yarnrc: 2,
-					env: {
-						YARN_ENABLE_NETWORK: "0",
-						YARN_ENABLE_SCRIPTS: "0",
-						YARN_ENABLE_IMMUTABLE_INSTALLS: "0",
-						YARN_ENABLE_TELEMETRY: "0",
-					},
-				};
+			// Yarn 2 and later load plugins and releases named in rc files from any parent folder, so cagr does not run them.
+			if (/^__metadata:/m.test(new TextDecoder().decode(lockfile))) return null;
 			// Yarn 1 has no lockfile-only mode. It installs into the temp copy.
 			return {
 				argv: [
@@ -134,7 +123,7 @@ function command(manager: Writer, lockfile: Uint8Array): Command {
 					"--no-progress",
 					"--no-default-rc",
 				],
-				yarnrc: 1,
+				yarnrc: true,
 			};
 	}
 }
@@ -212,7 +201,7 @@ async function copyInputs(
 	const refs = new Set<string>();
 	for (const file of files) {
 		const source = join(root, file);
-		if (!existsSync(source)) continue;
+		if (!existsSync(source) || lstatSync(source).isSymbolicLink()) continue;
 		await mkdir(dirname(join(target, file)), { recursive: true });
 		await cp(source, join(target, file));
 		if (basename(file) === "package.json")
@@ -279,29 +268,9 @@ async function regenerate(
 		if (lockfile) await writeFile(file, lockfile);
 		const project = dirname(file);
 		const argv = [...spec.argv];
-		const env: Record<string, string> = { ...corepackOffline, ...spec.env };
-		if (spec.yarnrc === 1 && existsSync(join(project, ".yarnrc")))
+		const env = { ...corepackOffline, ...spec.env };
+		if (spec.yarnrc && existsSync(join(project, ".yarnrc")))
 			argv.push("--use-yarnrc", join(project, ".yarnrc"));
-		if (spec.yarnrc === 2) {
-			const rc = join(project, ".yarnrc.yml");
-			const settings = existsSync(rc)
-				? (Bun.YAML.parse(await readFile(rc, "utf8")) as {
-						yarnPath?: unknown;
-					} | null)
-				: null;
-			const release =
-				typeof settings?.yarnPath === "string" && !isAbsolute(settings.yarnPath)
-					? join(project, settings.yarnPath)
-					: null;
-			// Run the committed release directly, so no launcher reads rc files from the temp folder's parents.
-			if (release && existsSync(release)) {
-				argv.splice(0, 1, "node", release);
-				env.YARN_IGNORE_PATH = "1";
-			}
-			// A name nobody else knows, so only the committed config is read.
-			env.YARN_RC_FILENAME = `.cagr-yarnrc-${randomUUID()}.yml`;
-			if (existsSync(rc)) await rename(rc, join(project, env.YARN_RC_FILENAME));
-		}
 		const timeoutMs = Math.floor(deadline - performance.now());
 		if (timeoutMs <= 0) throw new Error("No time was left to run it.");
 		const result = await run(argv, project, {
@@ -389,6 +358,10 @@ export async function checkLockfile(options: {
 	try {
 		const current = new Uint8Array(await readFile(join(root, path)));
 		const spec = command(writer, baseline ?? current);
+		if (!spec)
+			return {
+				message: `cagr checks Yarn 1 lockfiles only. Yarn 2 and later can load plugins and releases from outside the repo, so cagr does not run them. Restore the file and ask the user to run the yarn command.`,
+			};
 		const rewritten = await regenerate(
 			spec,
 			root,

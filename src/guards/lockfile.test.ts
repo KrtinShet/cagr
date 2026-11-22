@@ -86,6 +86,22 @@ test("a deleted lockfile, or a folder in its place, asks for a restore", async (
 	expect(verdict?.message).toContain("bun.lock is not a regular file");
 });
 
+test("a Yarn 2 or later lockfile is not rebuilt", async () => {
+	const repo = await tempRepo();
+	roots.add(repo.root);
+	const berry = "__metadata:\n  version: 8\n";
+	await repo.write("yarn.lock", berry);
+	const verdict = await checkLockfile({
+		root: repo.root,
+		path: "yarn.lock",
+		stacks: [stack("yarn")],
+		baseline: new TextEncoder().encode(berry),
+		head: null,
+		deadline: performance.now() + 10_000,
+	});
+	expect(verdict?.message).toContain("checks Yarn 1 lockfiles only");
+});
+
 test("other files are left to the plain protected-file check", async () => {
 	expect(await check("Cargo.lock", [stack("bun")])).toBeNull();
 });
