@@ -52,7 +52,7 @@ cd dist/npm/cagr && bun publish --access public
 Run `bun publish --access public` in the matching `dist/npm/cagr-*` folder for a new platform package. Then set up trusted publishing on it:
 
 1. On npmjs.com, open the package, then **Settings**, then **Trusted publishing**.
-2. Choose **GitHub Actions** and enter: owner `krtinshet`, repository `cagr`, workflow file `release.yml`. Leave the environment empty.
+2. Choose **GitHub Actions** and enter: owner `KrtinShet`, repository `cagr`, workflow file `release.yml`. Leave the environment empty.
 3. Save. Do this for `@krtinshet/cagr` and for each of the 7 `cagr-*` packages.
 
 Once all 8 are set up, also choose **Require two-factor authentication and disallow tokens** under Publishing access, so only the workflow can publish. Then turn npm publishing on in the workflow: `gh variable set NPM_PUBLISH --body true`.
