@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import {
 	cp,
@@ -5,6 +6,7 @@ import {
 	mkdir,
 	mkdtemp,
 	readFile,
+	rename,
 	rm,
 	writeFile,
 } from "node:fs/promises";
@@ -67,7 +69,12 @@ function managerFor(stacks: LockfileStack[], path: string, writer: Writer) {
 	return managers.includes(writer) ? writer : managers[0];
 }
 
-type Command = { argv: string[]; env?: Record<string, string> };
+type Command = {
+	argv: string[];
+	env?: Record<string, string>;
+	/** Yarn reads rc files from every parent folder, and the temp folder's parents are writable. */
+	yarnrc?: 1 | 2;
+};
 
 /** The command, and its environment, that makes the manager rewrite only the lockfile without the network or scripts. The starting lockfile, when there is one, picks the Yarn major version, since the current one is under check. */
 function command(manager: Writer, lockfile: Uint8Array): Command {
@@ -106,6 +113,7 @@ function command(manager: Writer, lockfile: Uint8Array): Command {
 			if (/^__metadata:/m.test(new TextDecoder().decode(lockfile)))
 				return {
 					argv: ["yarn", "install", "--mode=update-lockfile"],
+					yarnrc: 2,
 					env: {
 						YARN_ENABLE_NETWORK: "0",
 						YARN_ENABLE_SCRIPTS: "0",
@@ -124,7 +132,9 @@ function command(manager: Writer, lockfile: Uint8Array): Command {
 					"--non-interactive",
 					"--no-bin-links",
 					"--no-progress",
+					"--no-default-rc",
 				],
+				yarnrc: 1,
 			};
 	}
 }
@@ -176,28 +186,6 @@ async function copyInputs(
 			throw new Error(`git ${args[0]} failed: ${result.output.trim()}`);
 		return result.stdout;
 	};
-	if (head) {
-		const tree = await gitRun([
-			"ls-tree",
-			"-r",
-			"-z",
-			"--name-only",
-			head,
-			"--",
-			project,
-		]);
-		for (const file of tree.split("\0"))
-			if (
-				configs.has(basename(file)) ||
-				configDirs.some((dir) => inProject(file).startsWith(dir))
-			) {
-				await mkdir(dirname(join(target, file)), { recursive: true });
-				await writeFile(
-					join(target, file),
-					await gitRun(["show", `${head}:${file}`]),
-				);
-			}
-	}
 	const listed = await run(
 		[
 			"git",
@@ -240,7 +228,7 @@ async function copyInputs(
 				if (performance.now() > deadline)
 					throw new Error(`Copying the local package ${ref} ran out of time.`);
 				// Config and lockfiles come from the starting commit and the turn's baseline, never a local package copy.
-				const name = basename(from);
+				const name = basename(from).toLowerCase();
 				return !(
 					/^(node_modules|\.git|\.yarn)$/.test(name) ||
 					configs.has(name) ||
@@ -248,6 +236,29 @@ async function copyInputs(
 				);
 			},
 		});
+	}
+	// Written last, so no copy above can replace it, even under another letter case.
+	if (head) {
+		const tree = await gitRun([
+			"ls-tree",
+			"-r",
+			"-z",
+			"--name-only",
+			head,
+			"--",
+			project,
+		]);
+		for (const file of tree.split("\0"))
+			if (
+				configs.has(basename(file)) ||
+				configDirs.some((dir) => inProject(file).startsWith(dir))
+			) {
+				await mkdir(dirname(join(target, file)), { recursive: true });
+				await writeFile(
+					join(target, file),
+					await gitRun(["show", `${head}:${file}`]),
+				);
+			}
 	}
 }
 
@@ -264,11 +275,25 @@ async function regenerate(
 		await copyInputs(root, head, path, folder, deadline);
 		const file = join(folder, path);
 		if (lockfile) await writeFile(file, lockfile);
+		const project = dirname(file);
+		const argv = [...spec.argv];
+		const env: Record<string, string> = { ...corepackOffline, ...spec.env };
+		if (spec.yarnrc === 1 && existsSync(join(project, ".yarnrc")))
+			argv.push("--use-yarnrc", join(project, ".yarnrc"));
+		if (spec.yarnrc === 2) {
+			// A name nobody else knows, so only the committed config is read.
+			env.YARN_RC_FILENAME = `.cagr-yarnrc-${randomUUID()}.yml`;
+			if (existsSync(join(project, ".yarnrc.yml")))
+				await rename(
+					join(project, ".yarnrc.yml"),
+					join(project, env.YARN_RC_FILENAME),
+				);
+		}
 		const timeoutMs = Math.floor(deadline - performance.now());
 		if (timeoutMs <= 0) throw new Error("No time was left to run it.");
-		const result = await run(spec.argv, dirname(file), {
+		const result = await run(argv, project, {
 			timeoutMs,
-			env: { ...corepackOffline, ...spec.env },
+			env,
 			processGroup: true,
 		});
 		const shown = spec.argv.join(" ");
