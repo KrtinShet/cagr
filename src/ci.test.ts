@@ -44,6 +44,9 @@ test("a clean branch passes every check and reports its risk tier", async () => 
 	const result = await ci(config, { cwd: repo.root, base: "main", env: {} });
 	expect(ciReport(result)).not.toContain("FAIL");
 	expect(result.ok).toBe(true);
+	expect(result.checks.some(({ name }) => name === "Pull request title")).toBe(
+		false,
+	);
 	expect(result.tier).toBe("medium");
 });
 
@@ -53,11 +56,16 @@ test("an empty GITHUB_BASE_REF, as on merge_group, falls back to the protected b
 		{ "src/a.ts": "export const a = 1;\n" },
 		"feat: add a",
 	);
+	const event = join(mkdtempSync(join(tmpdir(), "gw-ev-")), "event.json");
+	writeFileSync(event, JSON.stringify({ merge_group: {} }));
 	const result = await ci(config, {
 		cwd: repo.root,
-		env: { GITHUB_BASE_REF: "" },
+		env: { GITHUB_BASE_REF: "", GITHUB_EVENT_PATH: event },
 	});
 	expect(result.ok).toBe(true);
+	expect(result.checks.some(({ name }) => name === "Pull request title")).toBe(
+		false,
+	);
 });
 
 test("bad commit subjects, failing checks and edits that change files all fail", async () => {
@@ -95,6 +103,7 @@ test("the pull request body is checked against the sections", async () => {
 		JSON.stringify({
 			pull_request: {
 				head: { sha: await repo.git("rev-parse", "HEAD") },
+				title: "feat: add a",
 				body: "## Testing\nran it",
 			},
 		}),
@@ -108,6 +117,71 @@ test("the pull request body is checked against the sections", async () => {
 		(entry) => entry.name === "Pull request body",
 	);
 	expect(body?.output).toContain('lacks "## Risk", "## How to revert"');
+});
+
+test.each([
+	{
+		case: "an invalid title fails",
+		title: "Added stuff",
+		enabled: true,
+		problem: "does not match",
+	},
+	{
+		case: "a valid title passes",
+		title: "feat(ci): add file",
+		enabled: true,
+	},
+	{
+		case: "a long title fails",
+		title: `feat: ${"a".repeat(67)}`,
+		enabled: true,
+		problem: "Keep it to 72 or fewer",
+	},
+	{
+		case: "a missing title fails",
+		enabled: true,
+		problem: "Restore valid pull request event JSON",
+	},
+	{
+		case: "the check is skipped when commit_message is off",
+		title: "Added stuff",
+		enabled: false,
+	},
+])("pull request title: $case", async ({ title, enabled, problem }) => {
+	const { repo, config } = await branch(
+		{
+			...stack({}),
+			git: { commit_message: enabled ? "conventional" : "off" },
+			review: { pr_sections: [] },
+		},
+		{ "src/a.ts": "1\n" },
+		"feat: add a",
+	);
+	const event = join(mkdtempSync(join(tmpdir(), "gw-ev-")), "event.json");
+	writeFileSync(
+		event,
+		JSON.stringify({
+			pull_request: {
+				head: { sha: await repo.git("rev-parse", "HEAD") },
+				title,
+			},
+		}),
+	);
+	const result = await ci(config, {
+		cwd: repo.root,
+		base: "main",
+		env: { GITHUB_EVENT_PATH: event },
+	});
+	const titleCheck = result.checks.find(
+		({ name }) => name === "Pull request title",
+	);
+	const failed = result.checks.filter(({ ok }) => !ok).map(({ name }) => name);
+	expect(result.ok).toBe(!problem);
+	expect(failed).toEqual(problem ? ["Pull request title"] : []);
+	expect(titleCheck?.ok).toBe(enabled ? !problem : undefined);
+	if (problem) expect(titleCheck?.output).toContain(problem);
+	if (problem && title)
+		expect(titleCheck?.output).toContain("gh pr edit --title");
 });
 
 test("annotations escape what GitHub would read as syntax", () => {

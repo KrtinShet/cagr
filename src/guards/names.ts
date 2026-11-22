@@ -23,6 +23,7 @@ const exempt = /^(Merge |Revert |fixup! |squash! )/;
 export function commitMessageFinding(
 	text: string,
 	config: Config,
+	subjectLabel = "Commit subject",
 ): Finding | null {
 	const rule = config.git.commit_message;
 	if (!rule) return null;
@@ -32,7 +33,7 @@ export function commitMessageFinding(
 		return {
 			id: "commit-message",
 			reason: [
-				`Commit subject "${subject}" does not match ${rule.label}.`,
+				`${subjectLabel} "${subject}" does not match ${rule.label}.`,
 				`Example: ${rule.example}.`,
 				rule.hint,
 			]
@@ -42,7 +43,7 @@ export function commitMessageFinding(
 	if (rule.maxLength && subject.length > rule.maxLength)
 		return {
 			id: "commit-message",
-			reason: `Commit subject is ${subject.length} characters. Keep it to ${rule.maxLength} or fewer; put detail in the body.`,
+			reason: `${subjectLabel} is ${subject.length} characters. Keep it to ${rule.maxLength} or fewer; put detail in the body.`,
 		};
 	return null;
 }
