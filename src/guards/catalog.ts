@@ -1,4 +1,5 @@
 import type { Config } from "../config/schema";
+import { protectedEntries } from "./edit";
 import { packageManagerSummary } from "./package-manager";
 
 export type GuardInfo = {
@@ -72,22 +73,30 @@ export const guards: GuardInfo[] = [
 		config: "[git] block_hook_skips, skip_env, hooks_path",
 	},
 	{
+		id: "gate-edit-env",
+		group: "deny",
+		summary: (config) =>
+			`setting the human-only switch ${config.files.gate_edit_env}`,
+		event: "command.before",
+		catches: "Assigning the human-only gate edit variable.",
+		fix: "Tell the user which gate file you would change and why.",
+		config: "[files] gate_edit_env",
+	},
+	{
 		id: "protected-file",
 		group: "deny",
 		summary: (config) =>
-			config.files.protected.length > 0
-				? config.files.protected
-						.map(
-							(file) =>
-								`edits to ${file.glob}${file.except.length > 0 ? ` (except ${file.except.join(", ")})` : ""}`,
-						)
-						.join("; ")
-				: null,
-		event: "file.before_edit",
+			protectedEntries(config.files)
+				.map(
+					(file) =>
+						`edits to ${file.glob}${file.except.length > 0 ? ` (except ${file.except.join(", ")})` : ""}`,
+				)
+				.join("; ") || null,
+		event: "file.before_edit, turn.end",
 		catches:
-			"An edit to a file that matches [files] protected and none of its except globs.",
-		fix: "The entry's reason says what to do instead.",
-		config: "[files] protected = [{ glob, except, reason }]",
+			"Direct edits, shell writes and commits to files that match [[files.protected]] and none of the entry's except globs.",
+		fix: "Follow the entry's reason for direct edits. For shell writes and commits, follow the restore steps at turn end.",
+		config: "[[files.protected]] glob, except, reason, gate",
 	},
 	{
 		id: "blocked-command",

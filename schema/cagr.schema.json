@@ -238,6 +238,11 @@
 			"type": "object",
 			"additionalProperties": false,
 			"properties": {
+				"gate_edit_env": {
+					"type": "string",
+					"minLength": 1,
+					"description": "A human sets this variable to 1 when starting a session to allow gate edits. Defaults to CAGR_ALLOW_GATE_EDIT."
+				},
 				"protected": {
 					"type": "array",
 					"items": {
@@ -254,6 +259,10 @@
 									"type": "string"
 								},
 								"description": "Globs that stay editable."
+							},
+							"gate": {
+								"type": "boolean",
+								"description": "Allow a human to open this file for the session. Defaults to false."
 							},
 							"reason": {
 								"type": "string",

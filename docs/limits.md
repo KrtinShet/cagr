@@ -10,8 +10,12 @@ nav_order: 12
 cagr is a guard against slips, not a security boundary. It catches the mistakes an agent makes while it tries to do the right thing. An agent that wants to get around it can:
 
 - Hide a command from the command guards with `sh -c "..."`, `eval`, a script file, or a variable.
-- Edit a file through the shell (`sed -i`, `cat >`, a script). Only edits made with the agent's edit tools are seen as edits, so the protected-file guard and the after-edit checks do not see these, and the end-of-turn checks run only when the agent used an edit tool in that turn. `cagr ci` still checks every file the branch changed.
+- Write an ignored file through the shell. The protected-file check uses Git at turn end, so it cannot see new or untracked ignored files such as `.env`. Direct edit tools still check those paths.
 - Skip the git hooks once with `CAGR_SKIP=1`, if it is not blocked from setting the variable. That variable is meant for humans.
+
+The turn-end protected-file check covers shell writes in the checkout where the tool runs and in checkouts named by direct edits, literal `cd` or `git -C` targets. cagr cannot attribute an arbitrary script's writes to other checkouts. If Git cannot capture the baseline within the hook budget, cagr lets the tool call through and reports that the snapshot failed. Shell writes also do not trigger after-edit linting. The regular edit-based turn checks still depend on edit tools, and `cagr ci` checks the branch's changes.
+
+cagr keeps temporary copies of protected files that already have unstaged changes so it can tell the agent how to recover them. It removes the copies when the turn passes or reaches the stop limit. A session that ends without a stop hook can leave its copies in cagr's temporary session directory.
 
 The review gate sees `gh` commands only. A pull request opened in the browser or through another client gets past it. Branch protection with the `checks` and `review` jobs as required checks closes that gap. `cagr doctor --github` checks that.
 

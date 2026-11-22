@@ -317,10 +317,13 @@ function applyDefaults(
 			};
 		}),
 		files: {
+			gate_edit_env:
+				(files.gate_edit_env as string | undefined) ?? "CAGR_ALLOW_GATE_EDIT",
 			protected: ((files.protected as RawConfig[] | undefined) ?? []).map(
 				(entry) => ({
 					glob: entry.glob as string,
 					except: (entry.except as string[] | undefined) ?? [],
+					gate: (entry.gate as boolean | undefined) ?? false,
 					reason: entry.reason as string,
 				}),
 			),

@@ -27,7 +27,8 @@ Guards run at these events (see [Hooks and events](hooks-and-events.md)):
 | [protected-branch](#protected-branch) | command.before, pre-push         | `[git] protected_branch`                           | When a branch is set (`recommended`: `main`) |
 | [force-push](#force-push)             | command.before, pre-push         | `[git] block_force_push`                           | With `recommended`                           |
 | [hook-skip](#hook-skip)               | command.before                   | `[git] block_hook_skips`, `skip_env`, `hooks_path` | With `recommended`                           |
-| [protected-file](#protected-file)     | file.before_edit                 | `[files] protected`                                | With `recommended` (`.env*`, lockfiles, lint configs)      |
+| [protected-file](#protected-file) | file.before_edit, turn.end | `[[files.protected]]` | With `recommended` (env, lockfiles, lint configs, gate files) |
+| [gate-edit-env](#gate-edit-env) | command.before | `[files] gate_edit_env` | Always |
 | [blocked-command](#blocked-command)   | command.before                   | `[commands] blocked`                               | When you list commands                       |
 | [worktree-only](#worktree-only)       | command.before, file.before_edit | `[git] worktree_only`, `worktree_dir`              | No                                           |
 | [branch-name](#branch-name)           | pre-push                         | `[git] branch_name`, `commit_types`                | With `recommended`                           |
@@ -109,7 +110,9 @@ CAGR_SKIP is for humans only. Fix what the hook reports instead.
 
 ## protected-file
 
-**Blocks** an edit to a file that matches a `[files] protected` glob and none of its `except` globs. It runs before the edit, so the file never changes.
+**Blocks** an edit tool from changing a file that matches a `[[files.protected]]` glob and none of its `except` globs. At turn end it also checks shell writes, staged changes, and commits, even in a turn that used only shell commands.
+
+cagr compares each checkout with its state before the first tool call it sees there. Existing user edits stay in the baseline. Files that match the protected branch are allowed, using `origin/<protected_branch>` when it exists and the local branch otherwise. For a change the agent must undo, the stop message shows how to restore the file, including its staged copy and any committed reversal. After three failed stops, cagr lets the agent finish and reports what still failed.
 
 **Message:** the entry's `reason`. With `recommended`:
 
@@ -128,7 +131,13 @@ reason = "Migrations are generated. Run `bun run db:migrate --name <change>` ins
 
 Write the `reason` as what to do instead. Entries add to the preset's, so you cannot remove `.env*` or the lockfiles by leaving them out. `cagr check <files...>` also runs this check, so you can test a glob.
 
-This guard sees edits made with the agent's edit tools. An edit made through the shell (`sed -i`, `cat >`) is a command, not an edit. See [Limits](limits.md).
+Set `gate = true` on an entry to let a human open it for a session. The recommended preset marks cagr config, hooks, GitHub workflows, CODEOWNERS and lint configs this way. See [Limits](limits.md) for which shell writes cagr can see.
+
+## gate-edit-env
+
+**Blocks** commands that assign the configured gate-edit variable. The default is `CAGR_ALLOW_GATE_EDIT`. A human can start the agent session with `CAGR_ALLOW_GATE_EDIT=1` to open entries marked `gate = true`.
+
+**Configure** the variable name with `[files] gate_edit_env`.
 
 ## blocked-command
 

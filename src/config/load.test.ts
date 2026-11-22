@@ -96,6 +96,13 @@ describe("presets", () => {
 			files: { protected: [{ glob: "secrets/**", reason: "No." }] },
 		});
 		expect(config.files.protected.map((entry) => entry.glob)).toEqual([
+			"cagr.toml",
+			".cagr/**",
+			".githooks/**",
+			".claude/settings.json",
+			".codex/hooks.json",
+			".github/workflows/**",
+			".github/CODEOWNERS",
 			"biome.json",
 			"biome.jsonc",
 			"eslint.config.*",
@@ -260,6 +267,13 @@ describe("fragments in .cagr/", () => {
 		});
 		const config = loadConfig(dir);
 		expect(config?.files.protected.map((entry) => entry.glob)).toEqual([
+			"cagr.toml",
+			".cagr/**",
+			".githooks/**",
+			".claude/settings.json",
+			".codex/hooks.json",
+			".github/workflows/**",
+			".github/CODEOWNERS",
 			"biome.json",
 			"biome.jsonc",
 			"eslint.config.*",

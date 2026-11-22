@@ -1,5 +1,6 @@
 import type { Config } from "./config/schema";
 import { findingCommand } from "./findings/command";
+import { protectedEntries } from "./guards/edit";
 import { ecosystemOf } from "./guards/package-manager";
 import { loadRules, type Rule, RuleError } from "./rules/rules";
 
@@ -13,7 +14,7 @@ export function brief(
 	];
 	if (config.suppressions.enabled)
 		lines.push(
-			"- Do not add suppression comments or edit lint configs. Fix the cause, or tell the user which rule gets in the way and why.",
+			"- Do not add suppression comments. Fix the cause, or tell the user which rule gets in the way and why.",
 		);
 	const managers = new Map<string, string[]>();
 	for (const stack of config.stack) {
@@ -46,9 +47,10 @@ export function brief(
 			`work in a worktree under ${config.git.worktree_dir}/, not in the main checkout`,
 		);
 	if (git.length > 0) lines.push(`- Git: ${git.join("; ")}.`);
-	if (config.files.protected.length > 0)
+	const protectedFiles = protectedEntries(config.files);
+	if (protectedFiles.length > 0)
 		lines.push(
-			`- Do not edit: ${config.files.protected.map((entry) => entry.glob).join(", ")}.`,
+			`- Do not edit: ${protectedFiles.map((entry) => entry.glob).join(", ")}.`,
 		);
 	if (config.commands.blocked.length > 0)
 		lines.push(

@@ -34,6 +34,11 @@ export async function recordEdits(file: string, files: string[]) {
 	});
 }
 
+export const protectedStateDir = (file: string) => `${file}.protected`;
+
 export async function clearTurnState(file: string) {
-	await rm(file, { force: true });
+	await Promise.all([
+		rm(file, { force: true }),
+		rm(protectedStateDir(file), { recursive: true, force: true }),
+	]);
 }

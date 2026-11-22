@@ -53,6 +53,20 @@ export const builtinPresets: Record<string, RawConfig> = {
 		files: {
 			protected: [
 				...[
+					"cagr.toml",
+					".cagr/**",
+					".githooks/**",
+					".claude/settings.json",
+					".codex/hooks.json",
+					".github/workflows/**",
+					".github/CODEOWNERS",
+				].map((glob) => ({
+					glob,
+					gate: true,
+					reason:
+						"This file is part of the gate that checks your work. Say what you would change and why, and let the user make the edit.",
+				})),
+				...[
 					"biome.json",
 					"biome.jsonc",
 					"eslint.config.*",
@@ -65,6 +79,7 @@ export const builtinPresets: Record<string, RawConfig> = {
 					".oxlintrc.json",
 				].map((glob) => ({
 					glob,
+					gate: true,
 					reason:
 						"Do not weaken the lint config. Tell the user which rule gets in the way and why.",
 				})),

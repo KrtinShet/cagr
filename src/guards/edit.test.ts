@@ -50,3 +50,35 @@ test("blocks edits in the main checkout when worktree_only is on", () => {
 	expect(editFinding(`${worktree}/a.ts`, gerb, main)).toBeNull();
 	expect(editFinding("/repository/a.ts", gerb, main)).toBeNull();
 });
+
+test.each([
+	"cagr.toml",
+	".cagr/rules/lint.yml",
+	".githooks/pre-push",
+	".claude/settings.json",
+	".codex/hooks.json",
+	".github/workflows/ci.yml",
+	".github/CODEOWNERS",
+	"biome.json",
+])("protects the gate file %s with the recommended preset", (path) => {
+	expect(inWorktree(path)?.id).toBe("protected-file");
+});
+
+test("the configured human switch opens gate files only", () => {
+	const cfg = config({
+		extends: ["recommended"],
+		files: { gate_edit_env: "TEST_OPEN_GATE" },
+	});
+	const edit = (path: string) => editFinding(`/repo/${path}`, cfg, noWorktrees);
+	process.env.TEST_OPEN_GATE = "0";
+	try {
+		expect(edit("cagr.toml")?.id).toBe("protected-file");
+		process.env.TEST_OPEN_GATE = "1";
+		expect(edit("cagr.toml")).toBeNull();
+		expect(edit("biome.json")).toBeNull();
+		expect(edit(".env")?.id).toBe("protected-file");
+		expect(edit("bun.lock")?.id).toBe("protected-file");
+	} finally {
+		delete process.env.TEST_OPEN_GATE;
+	}
+});
