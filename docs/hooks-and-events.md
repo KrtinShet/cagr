@@ -131,13 +131,15 @@ cagr records how long each hook and each command took, and keeps the last 200 ti
 
 ## Fail-open
 
-If cagr itself fails, it lets the call through and says why. A bug in cagr, a broken config or a crash never stops your agent:
+If cagr catches an error while handling a hook, such as a broken config, it lets the call through and tells the human why:
 
 ```
 cagr is off for this call because of an error. <the error>
 ```
 
-The human sees this notice, so the error is not silent. Fix the config (`cagr doctor` names the problem) and the next call is checked again.
+Run `cagr doctor` to check the config.
+
+If the cagr binary is missing, cannot start, or crashes before giving a result, `command.before` and `file.before_edit` refuse the call because the repo is configured to use cagr. `session.start`, `file.after_edit` and `turn.end` print the same error to stderr and let the agent continue. Install cagr or run `cagr doctor` to find the problem.
 
 Other fail-open cases:
 

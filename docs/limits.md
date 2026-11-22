@@ -15,7 +15,7 @@ cagr is a guard against slips, not a security boundary. It catches the mistakes 
 
 The review gate sees `gh` commands only. A pull request opened in the browser or through another client gets past it. Branch protection with the `checks` and `review` jobs as required checks closes that gap. `cagr doctor --github` checks that.
 
-If cagr itself fails, it lets the call through and says why, so a bug in cagr never stops your agent. See [Fail-open](hooks-and-events.md#fail-open).
+If cagr catches an error, it lets the call through and tells the human why. If the cagr binary is missing or cannot run, `command.before` and `file.before_edit` refuse the call because the repo is configured to use cagr. The other agent hooks warn and let the agent continue. Install cagr or run `cagr doctor` to find the problem. See [Fail-open](hooks-and-events.md#fail-open).
 
 Do not use cagr to hold back an agent you do not trust. Use a sandbox for that.
 
