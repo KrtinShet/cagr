@@ -225,9 +225,9 @@ the pull request title. A squash merge can use that title as the commit subject.
 
 The gate denies the command when:
 
-- The branch has no review: "This branch has not been reviewed. Run `cagr review`. It starts a reviewer agent in a fresh context and takes a few minutes, so give the command a 15 minute timeout. Fix or answer what it finds, then run this command again."
-- There are commits after the last review: "You committed after the last review (abc1234). Run `cagr review` ... It reviews only the new commits."
-- Important findings are open. It lists them (`- f1 src/deals.ts:42  title`), then says: "Fix the findings, commit, and re-check with `cagr review` before pushing", or answer them with `cagr review answer`. After `max_rounds` rounds, review checks only whether earlier Important findings were fixed.
+- The branch has no review: "This branch has not been reviewed. Commit, run `cagr review`, fix or answer every Important finding, then re-check any new commits. Push once the review passes. Give the review a 15 minute timeout, then run this command again."
+- The commit was not reviewed: "This commit differs from the last review (abc1234). Run `cagr review` to check the new commits. ..." An older commit that a round reviewed passes while none of the findings known then is open.
+- Important findings are open. It lists them (`- f1 src/deals.ts:42  title`), then says: "Fix the findings, commit, and re-check with `cagr review` before pushing", or answer them with `cagr review answer`. After `max_rounds` rounds, fix commits get only the verifier; other new commits still get finders on their diff. See [Rounds](review.md#rounds).
 - `HEAD` is detached. It says to `git switch <branch>` or pass `--head <branch>`.
 - `--head` names a branch that does not exist locally.
 - `gh pr ready` names a pull request by number or URL. cagr cannot tell which branch that is, so it says to check out the pull request's branch and run `gh pr ready` there with no argument. `markPullRequestReadyForReview` through `gh api` is denied the same way.

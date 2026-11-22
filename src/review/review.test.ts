@@ -15,6 +15,7 @@ import {
 	review,
 	tally,
 } from "./review";
+import { writeRecord } from "./store";
 import { type Candidate, discoveryRounds, type ReviewFinding } from "./types";
 
 const candidate = (extra: Partial<Candidate> = {}): Candidate => ({
@@ -351,6 +352,118 @@ describe("review", () => {
 			verifierSchema,
 		]);
 		expect(outcome.passed).toBe(true);
+	});
+
+	/** Round 1 reports f1 in src/a.ts, round 2 leaves it open: the cap of 2 is reached. */
+	async function cappedWithFinding() {
+		const repo = await branchRepo();
+		const { agent } = fakeAgent({
+			finder: (_, call) => ({ findings: call === 0 ? [candidate()] : [] }),
+			verifier: () => ({ previous: [{ id: "f1", fixed: false }] }),
+		});
+		const options = { cwd: repo.root, effort: "quick" as const };
+		await review(repo.config, { ...options, agent });
+		await repo.commit("fix: first attempt", { "src/a.ts": "broken\n" });
+		const second = await review(repo.config, { ...options, agent });
+		expect(second.passed).toBe(false);
+		return { repo, options, second };
+	}
+
+	test("past the cap, a merge is never a fix commit, so finders review it", async () => {
+		const { repo, options } = await cappedWithFinding();
+		await repo.git("checkout", "-q", "-b", "side");
+		await repo.commit("fix: handle the session", {
+			"src/a.ts": "user?.name\n",
+		});
+		await repo.git("checkout", "-q", "feat/login");
+		await repo.git("merge", "-q", "--no-ff", "-m", "Merge branch side", "side");
+		const { agent, calls } = fakeAgent({
+			finder: () => ({ findings: [] }),
+			verifier: () => ({ previous: [{ id: "f1", fixed: true }] }),
+		});
+		const outcome = await review(repo.config, { ...options, agent });
+		expect(outcome.round?.scope).toBe("diff");
+		expect(calls.map((call) => call.schema)).toEqual([
+			finderSchema,
+			verifierSchema,
+		]);
+	});
+
+	test.each(["answered", "fixed"] as const)(
+		"past the cap, a commit to a file whose finding is %s gets finders",
+		async (status) => {
+			const { repo, options, second } = await cappedWithFinding();
+			const f1 = second.record.findings[0];
+			if (!f1) throw new Error("Missing f1");
+			f1.status = status;
+			if (status === "answered")
+				answerFinding(
+					second.record,
+					"f1",
+					"wrong",
+					"The session is always set.",
+				);
+			writeRecord(second.file ?? "", second.record);
+			await repo.commit("feat(auth): more login", {
+				"src/a.ts": "export const login = (user) => user.id;\n",
+			});
+			const { agent, calls } = fakeAgent({ finder: () => ({ findings: [] }) });
+			const outcome = await review(repo.config, { ...options, agent });
+			expect(outcome.round?.scope).toBe("diff");
+			expect(calls[0]?.schema).toBe(finderSchema);
+		},
+	);
+
+	test("a recheck at the same head verifies only findings from earlier rounds", async () => {
+		const repo = await branchRepo();
+		const { agent } = fakeAgent({
+			finder: (_, call) => ({
+				findings:
+					call === 0
+						? [candidate()]
+						: [
+								candidate({
+									file: "src/b.ts",
+									line: 1,
+									title: "Other bug here",
+								}),
+							],
+			}),
+			verifier: () => ({ previous: [{ id: "f1", fixed: false }] }),
+		});
+		const options = { cwd: repo.root, effort: "quick" as const };
+		await review(repo.config, { ...options, agent });
+		await repo.commit("fix: first attempt", {
+			"src/a.ts": "broken\n",
+			"src/b.ts": "other\n",
+		});
+		const second = await review(repo.config, { ...options, agent });
+		expect(second.found.map((entry) => entry.id)).toEqual(["f2"]);
+		const again = fakeAgent({
+			finder: () => ({ findings: [] }),
+			verifier: () => ({
+				previous: [
+					{ id: "f1", fixed: true },
+					{ id: "f2", fixed: true },
+				],
+			}),
+		});
+		const outcome = await review(repo.config, {
+			...options,
+			agent: again.agent,
+		});
+		const prompt = again.calls[0]?.prompt ?? "";
+		expect(prompt).toContain("already reviewed");
+		expect(prompt).toContain("f1 src/a.ts");
+		expect(prompt).not.toContain("f2 src/b.ts");
+		expect(
+			outcome.record.findings.map((entry) => [entry.id, entry.status]),
+		).toEqual([
+			["f1", "fixed"],
+			["f2", "open"],
+		]);
+		expect(outcome.passed).toBe(false);
+		expect(reviewReport(outcome, 3)).not.toContain("round cap");
 	});
 
 	test("a rebased branch starts a new cycle with a full round", async () => {

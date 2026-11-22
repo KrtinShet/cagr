@@ -85,21 +85,3 @@ export const discoveryRounds = (record: ReviewRecord) => {
 		(round) => !round.error && round.scope !== "verify" && round.n >= start,
 	).length;
 };
-
-/**
- * Files that held an Important finding in the current cycle, or one still
- * open. A commit that changes only these files is a fix commit.
- */
-export const findingFiles = (record: ReviewRecord) => {
-	const start = cycleStart(record);
-	return new Set(
-		record.findings
-			.filter(
-				(finding) =>
-					finding.severity === "important" &&
-					finding.file !== "" &&
-					(finding.status === "open" || finding.round >= start),
-			)
-			.map((finding) => finding.file),
-	);
-};

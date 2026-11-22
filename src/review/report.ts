@@ -77,7 +77,11 @@ export function reviewReport(
 		if (discoveryRounds(outcome.record) >= maxRounds)
 			sections.push(cappedReview);
 	}
-	if (round?.scope === "verify" && open.length === 0)
+	if (
+		round?.scope === "verify" &&
+		open.length === 0 &&
+		discoveryRounds(outcome.record) >= maxRounds
+	)
 		sections.push(cappedReview);
 	sections.push(reviewPreparation);
 	return sections.join("\n\n");
@@ -151,12 +155,14 @@ async function fixLineShare(records: ReviewRecord[], cwd: string) {
 	let changed = 0;
 	let located = 0;
 	for (const record of records) {
-		const first = record.rounds.find(
-			(round) => !round.error && round.scope === "full",
-		);
-		if (!first) continue;
 		for (const round of record.rounds) {
-			if (round.n <= first.n || round.error || round.scope !== "diff") continue;
+			if (round.error || round.scope !== "diff") continue;
+			// Each cycle starts with a full round: compare with the one that started this round's cycle.
+			const first = record.rounds.findLast(
+				(earlier) =>
+					!earlier.error && earlier.scope === "full" && earlier.n < round.n,
+			);
+			if (!first) continue;
 			const byFile = Map.groupBy(
 				record.findings.filter(
 					(finding) =>

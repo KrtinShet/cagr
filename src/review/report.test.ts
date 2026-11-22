@@ -104,3 +104,25 @@ test("stats count later findings on added or replaced lines since round one", as
 		"Later-round findings on fix lines: 50%.",
 	);
 });
+
+test("stats compare a later round with the full round that started its cycle", async () => {
+	const repo = await tempRepo();
+	const first = await repo.commit("feat: original", {
+		"src/a.ts": "one\ntwo\nthree\n",
+	});
+	const rebased = await repo.commit("feat: rebased", {
+		"src/a.ts": "one\nTWO\nthree\n",
+	});
+	const third = await repo.commit("fix: last line", {
+		"src/a.ts": "one\nTWO\nTHREE\n",
+	});
+	const saved = record(
+		[
+			round({ head: first }),
+			round({ n: 2, head: rebased, scope: "full" }),
+			round({ n: 3, head: third, from: rebased, scope: "diff" }),
+		],
+		[finding({ round: 3, line: 2 })],
+	);
+	expect((await reviewStats([saved], repo.root)).fixLineShare).toBe(0);
+});

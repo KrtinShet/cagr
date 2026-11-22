@@ -103,8 +103,8 @@ Commit the change, run `cagr review` locally, fix the findings in one commit, re
 
 Past the cap there is no further full round. What runs depends on the new commits since the last review:
 
-- If every new commit is a fix commit, `cagr review` runs only the verifier. A fix commit is one where every file it changes held an Important finding in this cycle, or one still open. Files that match `[review] skip` do not count. The verifier checks earlier Important findings, including whether previous fixes still hold.
-- If any new commit is not a fix commit (a new file, a test, any other change), the finders review the new commits' diff, and the verifier checks the earlier findings.
+- If every new commit is a fix commit, `cagr review` runs only the verifier. A fix commit is not a merge, and every file it changes has an open Important finding. Files that match `[review] skip` do not count. A file whose finding was fixed or answered no longer counts. The verifier checks the open findings, and whether fixes made in this cycle still hold.
+- If any new commit is not a fix commit (a merge, a new file, a test, a change to any other file), the finders review the new commits' diff, and the verifier checks the same earlier findings.
 
 The pull request gate passes when every Important finding is verified fixed or answered on that reviewed head. An older reviewed head passes only while none of the findings known when it was reviewed is open now, so a finding that a later round reopens fails it too. Nits and pre-existing findings are optional and never require another round.
 
@@ -112,7 +112,7 @@ A cycle starts with a full round. If the last reviewed commit is not an ancestor
 
 `cagr review --full` forces a full round of the whole branch, even at a commit already reviewed. It also starts a new cycle. More review never weakens the gate.
 
-If the verifier judged an earlier finding not fixed and you think it was wrong, run `cagr review` again at the same commit: it runs the verifier once more. A finding reported at this commit needs a fix or an answer.
+If the verifier judged an earlier finding not fixed and you think it was wrong, run `cagr review` again at the same commit: it runs the verifier once more on the findings from earlier rounds. A finding reported at this commit needs a fix or an answer.
 
 With `[review] status = true`, the pre-push hook and `cagr review answer` send `cagr/review` for the commit:
 

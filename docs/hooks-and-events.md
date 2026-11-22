@@ -34,7 +34,13 @@ cagr checks this repo. When it blocks something, its message says what to do ins
 - Do not edit: .env*, {bun.lock,bun.lockb,package-lock.json,pnpm-lock.yaml,yarn.lock,uv.lock,poetry.lock,Pipfile.lock,Cargo.lock,go.sum}.
 - typescript (**): after each edit `bunx biome check --write --no-errors-on-unmatched {files}` run on the changed files; before you finish `bun run lint`, `bun run check-types` must pass.
 - Do not run: `prisma db push`.
-- Before `gh pr create` or `gh pr ready`, commit and run `cagr review` (give it a 15 minute timeout). Fix or answer every Important finding. The pull request body needs these headings: Testing, Risk, How to revert.
+- Commit, run `cagr review`, fix or answer every Important finding, then re-check any new commits. Push once the review passes. Give the review a 15 minute timeout.
+- The pull request body needs these headings: Testing, Risk, How to revert.
+
+- Before `cagr review`, make sure each new behavior or bug fix has a test that fails without it.
+- Put the intent and any deliberate trade-offs in the commit body.
+- Fix every finding in one commit, covering the whole bug class.
+- Run the targeted tests before asking for the next round.
 - Do not merge or approve pull requests. A person does that.
 ```
 

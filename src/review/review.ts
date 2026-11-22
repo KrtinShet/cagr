@@ -29,7 +29,6 @@ import {
 	categories,
 	cycleStart,
 	discoveryRounds,
-	findingFiles,
 	type ReviewFinding,
 	type ReviewRecord,
 	type Round,
@@ -129,6 +128,7 @@ export async function review(
 	let from = head;
 	let mergeBase = head;
 	let scope: Round["scope"] = "scan";
+	let recheckBefore: number | null = null;
 	let branchFiles: string[] = [];
 	if (!scanning) {
 		const baseRef = await resolveBase(baseName, cwd);
@@ -149,7 +149,7 @@ export async function review(
 			progress,
 		});
 		if (typeof plan === "string") return skippedOutcome(record, file, plan);
-		({ from, scope } = plan);
+		({ from, scope, recheckBefore } = plan);
 		branchFiles = (await gitOut(["diff", "--name-only", mergeBase, head], cwd))
 			.split("\n")
 			.filter(Boolean);
@@ -209,6 +209,11 @@ export async function review(
 		scan: options.scan ?? [],
 		previous: record.findings,
 		cycleStart: scope === "full" ? roundNumber : cycleStart(record),
+		recheckBefore,
+		capped:
+			scope !== "full" &&
+			scope !== "scan" &&
+			discoveryRounds(record) >= config.review.max_rounds,
 	};
 
 	const round: Round = {
@@ -333,18 +338,28 @@ type PlanInput = {
 	progress: (line: string) => void;
 };
 
+type Plan = {
+	from: string;
+	scope: Round["scope"];
+	recheckBefore: number | null;
+};
+
 /**
  * Picks what the next round covers, or returns why there is nothing to do.
- * A fix commit changes only files that held an Important finding in this
- * cycle. Past the round cap, the verifier alone covers fix commits; any other
- * new commit gets finders on the new commits' diff.
+ * A fix commit is a commit that is not a merge and changes only files with an
+ * open Important finding. Past the round cap, the verifier alone covers fix
+ * commits; if any new commit is not one, finders review the new commits' diff.
  */
 async function planRound(
 	record: ReviewRecord,
 	input: PlanInput,
-): Promise<{ from: string; scope: Round["scope"] } | string> {
+): Promise<Plan | string> {
 	const { head, mergeBase, cwd, progress } = input;
-	const fresh = { from: mergeBase, scope: "full" as const };
+	const fresh = {
+		from: mergeBase,
+		scope: "full" as const,
+		recheckBefore: null,
+	};
 	const lastOk = record.rounds.findLast((round) => !round.error);
 	if (input.full || !lastOk) return fresh;
 	const short = lastOk.head.slice(0, 7);
@@ -371,22 +386,36 @@ async function planRound(
 			(finding) => finding.round < lastOk.n,
 		);
 		return recheck
-			? { from: lastOk.from, scope: "verify" }
+			? { from: lastOk.from, scope: "verify", recheckBefore: lastOk.n }
 			: `${head.slice(0, 7)} was already reviewed in round ${lastOk.n}.`;
 	}
-	if (discoveryRounds(record) < input.maxRounds)
-		return { from: lastOk.head, scope: "diff" };
-	const covered = findingFiles(record);
+	const diff = {
+		from: lastOk.head,
+		scope: "diff" as const,
+		recheckBefore: null,
+	};
+	if (discoveryRounds(record) < input.maxRounds) return diff;
+	const covered = new Set(
+		blocking(record)
+			.map((finding) => finding.file)
+			.filter(Boolean),
+	);
 	const commits = (
 		await gitOut(
-			["rev-list", "--no-merges", `${lastOk.head}..${head}`, `^${mergeBase}`],
+			["rev-list", "--parents", `${lastOk.head}..${head}`, `^${mergeBase}`],
 			cwd,
 		)
 	)
 		.split("\n")
-		.filter(Boolean);
+		.filter(Boolean)
+		.map((line) => line.split(" "));
 	const other: string[] = [];
-	for (const sha of commits) {
+	for (const [sha = "", ...parents] of commits) {
+		// A merge can bring in any code, through its conflict resolution, so it is never a fix commit.
+		if (parents.length > 1) {
+			other.push(sha.slice(0, 7));
+			continue;
+		}
 		const files = (
 			await gitOut(
 				["diff-tree", "--no-commit-id", "--name-only", "-r", sha],
@@ -400,16 +429,16 @@ async function planRound(
 			);
 		if (files.some((path) => !covered.has(path))) other.push(sha.slice(0, 7));
 	}
-	if (other.length === 0) {
+	if (commits.length > 0 && other.length === 0) {
 		progress(
-			`Reached the ${input.maxRounds}-round cap, and the new commits only change files that held an Important finding.`,
+			`Reached the ${input.maxRounds}-round cap, and the new commits only change files with an open Important finding.`,
 		);
-		return { from: lastOk.head, scope: "verify" };
+		return { ...diff, scope: "verify" };
 	}
 	progress(
-		`Reached the ${input.maxRounds}-round cap, but ${other.join(", ")} change${other.length === 1 ? "s" : ""} files no earlier finding covered, so finders review the new commits.`,
+		`Reached the ${input.maxRounds}-round cap, but ${other.length > 0 ? other.join(", ") : "the new commits"} ${other.length === 1 ? "is not a fix commit" : "are not fix commits"} (a merge, or a change to a file with no open Important finding), so finders review the new commits.`,
 	);
-	return { from: lastOk.head, scope: "diff" };
+	return diff;
 }
 
 function failed(
