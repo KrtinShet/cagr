@@ -810,7 +810,7 @@ describe("verdicts on earlier findings", () => {
 		expect(reviewReport(unrelated, 2)).toContain(
 			"If the fix is in another file, name f1 in the commit message.",
 		);
-		await repo.commit("test(auth): cover an expired session (F1)", {
+		await repo.commit("test(auth): cover an expired session (f1)", {
 			"src/a.test.ts": "test('expired session', () => {});\n",
 		});
 		const { agent, calls } = fakeAgent({
@@ -935,8 +935,9 @@ describe("verdicts on earlier findings", () => {
 		});
 		const options = { cwd: repo.root, effort: "quick" as const };
 		const first = await review(repo.config, { ...options, agent });
+		// A non-ASCII name, which git quotes unless asked for -z output.
 		await repo.commit("fix: check the session in the caller (f1)", {
-			"src/b.ts": "if (!user) return;\n",
+			"src/café.ts": "if (!user) return;\n",
 		});
 		expect((await review(repo.config, { ...options, agent })).passed).toBe(
 			true,
@@ -961,6 +962,22 @@ describe("verdicts on earlier findings", () => {
 				await reachFrom(outcome.record, head, repo.root),
 			).kind,
 		).toBe("deny");
+	});
+
+	test("an id named in a commit merged from the base does not ask for a verdict", async () => {
+		const { repo } = await reported();
+		await repo.git("checkout", "-q", "main");
+		await repo.commit("fix(deals): handle an empty list (f1)", {
+			"src/deals.ts": "export const deals = [];\n",
+		});
+		await repo.git("checkout", "-q", "feat/login");
+		await repo.git("merge", "-q", "--no-edit", "main");
+		const { agent } = noVerdictOnF1();
+		const outcome = await review(repo.config, { cwd: repo.root, agent });
+		expect(outcome.record.findings[0]?.verdicts).toBeUndefined();
+		expect(reviewReport(outcome, 2)).toContain(
+			"f1 is still open: no commit since the last check touched src/a.ts.",
+		);
 	});
 
 	test("a finding the verifier reopens gets a fresh count of verdicts", async () => {

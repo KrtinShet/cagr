@@ -148,9 +148,7 @@ export async function review(
 		: await reachFrom(record, head, cwd);
 	const openNow = () =>
 		scanning ? blocking(record) : unresolved(record, head, reach);
-	const held = scanning
-		? new Map<string, string>()
-		: await heldBack(record, head, config.review.skip, cwd);
+	let held = new Map<string, string>();
 	// After a failed round the gate holds only what `holdsOnError` keeps, so the report and CI say the same.
 	const openAfterError = async () => {
 		if (scanning) return blocking(record);
@@ -167,6 +165,7 @@ export async function review(
 	if (!scanning) {
 		const baseRef = await resolveBase(baseName, cwd);
 		mergeBase = await gitOut(["merge-base", baseRef, head], cwd);
+		held = await heldBack(record, head, mergeBase, config.review.skip, cwd);
 		if (mergeBase === head)
 			return skippedOutcome(
 				record,
@@ -437,6 +436,7 @@ function judgedAt(record: ReviewRecord, finding: ReviewFinding, head: string) {
 async function heldBack(
 	record: ReviewRecord,
 	head: string,
+	mergeBase: string,
 	skip: string[],
 	cwd: string,
 ) {
@@ -472,10 +472,17 @@ async function heldBack(
 				if (!file || !(await quiet(last.head, [`:(literal)${file}`])).ok)
 					return;
 				const log = await run(
-					["git", "log", "--format=%B", `${last.head}..${head}`],
+					[
+						"git",
+						"log",
+						"--no-merges",
+						"--format=%B",
+						`${last.head}..${head}`,
+						`^${mergeBase}`,
+					],
 					cwd,
 				);
-				if (!log.ok || new RegExp(`\\b${id}\\b`, "i").test(log.stdout)) return;
+				if (!log.ok || new RegExp(`\\b${id}\\b`).test(log.stdout)) return;
 				held.set(
 					id,
 					`${id} is still open: no commit since the last check touched ${file}. Fix it, or answer it with ${answerCommand(id)}. If the fix is in another file, name ${id} in the commit message.`,
