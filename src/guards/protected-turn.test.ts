@@ -8,14 +8,14 @@ import {
 	writeFile,
 } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { runHook } from "../hook/run-hook";
 import type { HookInput } from "../hook/types";
-import { runShell } from "../run";
+import { runShell, shellQuote } from "../run";
 import { localRegistry } from "../test/registry";
 import { tempRepo } from "../test/repo";
 import { roomySnapshots } from "../test/snapshot";
-import { clearTurnState, stateFile } from "../turn-state";
+import { clearTurnState, protectedNoticesDir, stateFile } from "../turn-state";
 import { snapshotBudget } from "./protected-turn";
 
 roomySnapshots();
@@ -27,7 +27,10 @@ const sessions = new Set<string>();
 afterEach(async () => {
 	await Promise.all([
 		...[...trash].map((path) => rm(path, { force: true, recursive: true })),
-		...[...sessions].map(clearTurnState),
+		...[...sessions].flatMap((file) => [
+			clearTurnState(file),
+			rm(protectedNoticesDir(file), { force: true, recursive: true }),
+		]),
 	]);
 	trash.clear();
 	sessions.clear();
@@ -43,12 +46,17 @@ async function setup(files: Record<string, string> = {}, custom = "") {
 	await repo.git("switch", "-q", "-c", "feat/change");
 	const session = crypto.randomUUID();
 	sessions.add(stateFile(session));
-	const hook = (event: HookInput["event"], tool_input?: object) =>
+	const hook = (
+		event: HookInput["event"],
+		tool_input?: object,
+		cwd = repo.root,
+		agent: "claude" | "codex" = "claude",
+	) =>
 		runHook(
-			"claude",
+			agent,
 			event,
-			JSON.stringify({ session_id: session, cwd: repo.root, tool_input }),
-			repo.root,
+			JSON.stringify({ session_id: session, cwd, tool_input }),
+			cwd,
 		);
 	const before = (command: string) => hook("command.before", { command });
 	const stop = () => hook("turn.end");
@@ -217,6 +225,150 @@ test("a linked checkout uses its own starting commit", async () => {
 	expect(await repo.stop()).toBe("");
 });
 
+async function linkedSession() {
+	const repo = await setup(
+		{ "pnpm-lock.yaml": "lockfileVersion: '9.0'\n", "AGENTS.md": "# Rules\n" },
+		'[[stack]]\nlanguage = "typescript"\npackage_manager = "pnpm"\n[[files.protected]]\nglob = "AGENTS.md"\nreason = "Ask the owner to change these rules."\n',
+	);
+	const sibling = `${repo.root}-sibling`;
+	trash.add(sibling);
+	await repo.git("switch", "-q", "main");
+	await repo.git("worktree", "add", "-q", sibling, "feat/change");
+	await repo.git("remote", "add", "origin", repo.root);
+	const main = `git -C ${shellQuote(repo.root)}`;
+	const before = (command: string) =>
+		repo.hook("command.before", { command }, sibling);
+	const stop = () => repo.hook("turn.end", undefined, sibling);
+	return { ...repo, sibling, main, before, stop };
+}
+
+test("read-only git -C fetch and diff leave the main checkout's older staged files alone after a failed capture", async () => {
+	const repo = await linkedSession();
+	const lockfile = "lockfileVersion: '9.0'\n# Already staged by the owner\n";
+	await repo.write("pnpm-lock.yaml", lockfile);
+	await repo.write("AGENTS.md", "# Rules updated by the owner\n");
+	await repo.git("add", "pnpm-lock.yaml", "AGENTS.md");
+	await Bun.sleep(20);
+
+	for (const command of [`${repo.main} fetch`, `${repo.main} diff`]) {
+		await withoutGitStatus(repo, async () => {
+			await repo.before(command);
+		});
+		expect((await runShell(command, repo.sibling)).ok).toBe(true);
+	}
+	expect(JSON.parse(await repo.stop())).toEqual({
+		systemMessage: ["AGENTS.md", "pnpm-lock.yaml"]
+			.map(
+				(path) =>
+					`${join(repo.root, path)}: changed before this turn or unknown; not restored`,
+			)
+			.join("\n"),
+	});
+	expect(await repo.git("show", ":pnpm-lock.yaml")).toBe(lockfile.trim());
+	expect(await Bun.file(join(repo.root, "pnpm-lock.yaml")).text()).toBe(
+		lockfile,
+	);
+});
+
+test.each(["git -C", "tool workdir", "file.before_edit"])(
+	"first touch via %s preserves the prior staged copy for a later shell write",
+	async (placement) => {
+		const repo = await linkedSession();
+		await repo.write("AGENTS.md", "# Owner's staged rules\n");
+		await repo.git("add", "AGENTS.md");
+		const first =
+			placement === "git -C"
+				? await repo.before(`${repo.main} diff`)
+				: placement === "tool workdir"
+					? await repo.hook(
+							"command.before",
+							{ command: "git diff", workdir: repo.root },
+							repo.sibling,
+							"codex",
+						)
+					: await repo.hook(
+							"file.before_edit",
+							{ file_path: join(repo.root, "README.md") },
+							repo.sibling,
+						);
+		expect(first).toBe("");
+		const command = `printf '# shell change\\n' >> ${shellQuote(join(repo.root, "AGENTS.md"))}`;
+		expect(await repo.before(command)).toBe("");
+		expect((await runShell(command, repo.sibling)).ok).toBe(true);
+		expect(JSON.parse(await repo.stop())).toMatchObject({
+			decision: "block",
+			reason: expect.stringContaining("Restore the prior staged copy"),
+		});
+	},
+);
+
+test("a git -C command with redirection snapshots the checkout where the shell writes", async () => {
+	const repo = await linkedSession();
+	const command = `${repo.main} diff > AGENTS.md`;
+	expect(await repo.before(command)).toBe("");
+	expect((await runShell(command, repo.sibling)).ok).toBe(true);
+	expect(JSON.parse(await repo.stop())).toMatchObject({
+		decision: "block",
+		reason: expect.stringContaining(
+			`restore --source=${repo.base} --staged --worktree -- AGENTS.md`,
+		),
+	});
+});
+
+test.each([
+	["redirect", (absolute: string) => `printf 'new\\n' > ${absolute}`],
+	["append", (absolute: string) => `printf 'new\\n' >> ${absolute}`],
+	[
+		"tee",
+		(_: string, relative: string) => `printf 'new\\n' | tee -a ${relative}`,
+	],
+	[
+		"sed",
+		(_: string, relative: string) => `sed -i.bak s/Rules/Changed/ ${relative}`,
+	],
+	["cp", (absolute: string) => `cp README.md ${absolute}`],
+	["mv", (_: string, relative: string) => `mv replacement.txt ${relative}`],
+])(
+	"a literal %s write snapshots its checkout before a later git diff",
+	async (_, write) => {
+		const repo = await linkedSession();
+		await writeFile(join(repo.sibling, "replacement.txt"), "new\n");
+		const command = write(
+			shellQuote(join(repo.root, "AGENTS.md")),
+			shellQuote(relative(repo.sibling, join(repo.root, "AGENTS.md"))),
+		);
+		expect(await repo.before(command)).toBe("");
+		expect((await runShell(command, repo.sibling)).ok).toBe(true);
+		expect(await repo.before(`${repo.main} diff`)).toBe("");
+		expect(JSON.parse(await repo.stop()).reason).toContain(
+			`restore --source=${repo.base} --staged --worktree -- AGENTS.md`,
+		);
+	},
+);
+
+test("a recent shell write in the main checkout blocks after capture fails and older changes are reported once", async () => {
+	const repo = await linkedSession();
+	await repo.write("AGENTS.md", "# Owner's staged rules\n");
+	await repo.git("add", "AGENTS.md");
+	await Bun.sleep(20);
+	expect(await repo.before("git status")).toBe("");
+	const command = `cd ${shellQuote(repo.root)} && printf '# shell change\\n' >> cagr.toml`;
+	await withoutGitStatus(repo, async () => {
+		expect(JSON.parse(await repo.before(command)).systemMessage).toContain(
+			"could not snapshot",
+		);
+	});
+	expect((await runShell(command, repo.sibling)).ok).toBe(true);
+	const stopped = JSON.parse(await repo.stop());
+	expect(stopped.decision).toBe("block");
+	expect(stopped.reason).toContain(join(repo.root, "cagr.toml"));
+	expect(stopped.reason).not.toContain("AGENTS.md");
+	expect(stopped.systemMessage).toContain(
+		"AGENTS.md: changed before this turn or unknown; not restored",
+	);
+	expect(JSON.parse(await repo.stop()).systemMessage).toBeUndefined();
+});
+
 async function withoutGitStatus(
 	repo: Awaited<ReturnType<typeof setup>>,
 	action: () => Promise<void>,
@@ -280,23 +432,149 @@ test.each(["unstaged", "committed"])(
 	},
 );
 
-test("turn end asks for a manual check when even the starting HEAD is unavailable", async () => {
+test("turn end reports a dirty file of unknown age when even the starting HEAD is unavailable", async () => {
 	const repo = await setup();
 	const gitDir = process.env.GIT_DIR;
 	process.env.GIT_DIR = join(repo.root, ".git/missing");
 	try {
 		const result = JSON.parse(await repo.before("cat README.md"));
-		expect(result.systemMessage).toContain(
-			"could not record a starting commit",
-		);
+		expect(result.systemMessage).toContain("could not snapshot");
 	} finally {
 		if (gitDir === undefined) delete process.env.GIT_DIR;
 		else process.env.GIT_DIR = gitDir;
 	}
+	await rm(join(repo.root, "cagr.toml"));
+	expect(JSON.parse(await repo.stop())).toEqual({
+		systemMessage: `${join(repo.root, "cagr.toml")}: changed before this turn or unknown; not restored`,
+	});
+});
+
+test("turn end reports older changes in its checkout even when no snapshot was taken", async () => {
+	const repo = await setup({ "biome.json": "{}\n" });
+	await repo.write("biome.json", '{"lineWidth": 80}\n');
+	await repo.write(".cagr/guards.toml", "# generated by init\n");
+	expect(JSON.parse(await repo.stop())).toEqual({
+		systemMessage: `${join(repo.root, "biome.json")}: changed before this turn or unknown; not restored`,
+	});
+	expect(await repo.stop()).toBe("");
+	await repo.write("biome.json", '{"lineWidth": 90}\n');
+	expect(JSON.parse(await repo.stop()).systemMessage).toContain("biome.json");
+	expect(await repo.stop()).toBe("");
+	await repo.write("biome.json", '{"lineWidth": 80}\n');
+	expect(await repo.stop()).toBe("");
+});
+
+test("turn end gives plain allow for old untracked files and a staged copy matching upstream", async () => {
+	const repo = await setup({ "biome.json": "{}\n" });
+	await repo.git("switch", "-q", "main");
+	await repo.commit("chore: update rules", {
+		"biome.json": '{"lineWidth": 80}\n',
+	});
+	await repo.git("switch", "-q", "feat/change");
+	await repo.git(
+		"restore",
+		"--source=main",
+		"--staged",
+		"--worktree",
+		"--",
+		"biome.json",
+	);
+	await repo.write(".cagr/guards.toml", "# generated by init\n");
+	expect(await repo.stop()).toBe("");
+});
+
+async function withSlowGitStatus(
+	repo: Awaited<ReturnType<typeof setup>>,
+	command: string,
+) {
+	await repo.git("config", "core.fsmonitor", "sleep 3; false");
+	const budget = snapshotBudget.commandMs;
+	snapshotBudget.commandMs = 500;
+	try {
+		expect(JSON.parse(await repo.before(command)).systemMessage).toContain(
+			"could not snapshot",
+		);
+	} finally {
+		snapshotBudget.commandMs = budget;
+		await repo.git("config", "--unset", "core.fsmonitor");
+	}
+}
+
+test("a timed out status still leaves the starting HEAD", async () => {
+	const repo = await setup();
+	await withSlowGitStatus(repo, "git status");
+	await repo.commit("chore: change config", {
+		"cagr.toml": `${policy}# committed\n`,
+	});
+	expect(JSON.parse(await repo.stop()).reason).toContain(
+		`Review changes against ${repo.base}`,
+	);
+});
+
+test("an older unstaged copy does not hide a protected commit after capture fails", async () => {
+	const repo = await linkedSession();
+	await repo.commit("chore: change rules", {
+		"AGENTS.md": "# Separate version\n",
+	});
+	const other = await repo.git("rev-parse", "HEAD");
+	await repo.git("reset", "--hard", repo.base);
+	await repo.write("AGENTS.md", "# Owner's working copy\n");
+	await Bun.sleep(20);
+	await withoutGitStatus(repo, async () => {
+		await repo.before(`${repo.main} diff`);
+	});
+	await repo.git("restore", `--source=${other}`, "--staged", "--", "AGENTS.md");
+	await repo.git("commit", "-qm", "chore: commit separate version");
+	const stopped = JSON.parse(await repo.stop());
+	expect(stopped.decision).toBe("block");
+	expect(stopped.reason).toContain("AGENTS.md");
+	expect(await Bun.file(join(repo.root, "AGENTS.md")).text()).toBe(
+		"# Owner's working copy\n",
+	);
+});
+
+test("restoring the owner's pre-staged lockfile after status times out gives plain allow", async () => {
+	const repo = await linkedSession();
+	const staged = "lockfileVersion: '9.0'\n# Owner staged this\n";
+	await repo.write("pnpm-lock.yaml", staged);
+	await repo.git("add", "pnpm-lock.yaml");
+	await repo.git(
+		"restore",
+		"--source=HEAD",
+		"--worktree",
+		"--",
+		"pnpm-lock.yaml",
+	);
+	await withSlowGitStatus(repo, `${repo.main} diff`);
+	await repo.git("restore", "--worktree", "--", "pnpm-lock.yaml");
+	expect(await Bun.file(join(repo.root, "pnpm-lock.yaml")).text()).toBe(staged);
+	expect(await repo.stop()).toBe("");
+
+	await withSlowGitStatus(repo, `${repo.main} diff`);
+	await repo.write("pnpm-lock.yaml", `${staged}# New staged edit\n`);
+	await repo.git("add", "pnpm-lock.yaml");
 	expect(JSON.parse(await repo.stop())).toMatchObject({
 		decision: "block",
-		reason: expect.stringContaining("Review protected-file changes"),
+		reason: expect.stringContaining("pnpm-lock.yaml"),
 	});
+});
+
+test("a Stop that fails open clears the baseline before the next turn", async () => {
+	const repo = await linkedSession();
+	expect(await repo.before(`${repo.main} diff`)).toBe("");
+	await withoutGitStatus(repo, async () => {
+		expect(JSON.parse(await repo.stop()).systemMessage).toContain(
+			"cagr is off",
+		);
+	});
+	await repo.write("AGENTS.md", "# Owner's change between turns\n");
+	await Bun.sleep(20);
+	expect(await repo.before("git diff")).toBe("");
+	expect(JSON.parse(await repo.hook("turn.end", undefined, repo.root))).toEqual(
+		{
+			systemMessage: `${join(repo.root, "AGENTS.md")}: changed before this turn or unknown; not restored`,
+		},
+	);
 });
 
 test("an allowed edit establishes the baseline and the human switch still protects the lockfile", async () => {
@@ -597,6 +875,13 @@ test("a snapshot that runs out of its budget gives the notice", async () => {
 	} finally {
 		snapshotBudget.commandMs = 10_000;
 	}
+	await repo.write("cagr.toml", `${policy}# Shell change\n`);
+	expect(JSON.parse(await repo.stop())).toMatchObject({
+		decision: "block",
+		reason: expect.stringContaining(
+			"Review changes against the current commit",
+		),
+	});
 });
 
 for (const manager of ["bun", "pnpm", "npm"] as const)

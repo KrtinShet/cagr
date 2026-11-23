@@ -1,4 +1,5 @@
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -35,6 +36,21 @@ export async function recordEdits(file: string, files: string[]) {
 }
 
 export const protectedStateDir = (file: string) => `${file}.protected`;
+export const protectedNoticesDir = (file: string) =>
+	`${file}.protected-notices`;
+
+const turnStartPath = (file: string) =>
+	join(protectedStateDir(file), ".started");
+
+export async function startTurn(file: string) {
+	const path = turnStartPath(file);
+	if (!existsSync(path)) await mkdir(path, { recursive: true, mode: 0o700 });
+}
+
+export async function turnStartedAt(file: string) {
+	// Creating the marker is atomic across parallel hooks. Its time uses the same clock as file ctime.
+	return (await stat(turnStartPath(file)).catch(() => null))?.mtimeMs;
+}
 
 export async function clearTurnState(file: string) {
 	await Promise.all([

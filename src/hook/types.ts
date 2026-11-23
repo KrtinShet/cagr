@@ -13,6 +13,7 @@ export type HookInput = {
 	sessionId: string;
 	cwd: string;
 	command: string | null;
+	commandCwd?: string;
 	/** Absolute paths. */
 	files: string[];
 };

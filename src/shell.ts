@@ -28,11 +28,15 @@ export function commandsWithNesting(
  * Each command's words, and its words with the redirections kept: the operator
  * as a word of its own, then its target. `[commands] blocked` matches on these.
  */
-export function commandsWithRedirections(
-	line: string,
-): { words: string[]; raw: string[] }[] {
-	return split(line).map(({ words, raw }) => ({ words, raw }));
+export function commandsWithRedirections(line: string) {
+	return split(line).map(({ words, raw, redirections }) => ({
+		words,
+		raw,
+		redirections,
+	}));
 }
+
+type Redirection = { operator: string; target: string };
 
 function split(line: string) {
 	const splitter = new Splitter();
@@ -50,14 +54,20 @@ const operatorTail: Record<string, string[]> = {
 };
 
 class Splitter {
-	commands: { words: string[]; raw: string[]; nested: boolean }[] = [];
+	commands: {
+		words: string[];
+		raw: string[];
+		redirections: Redirection[];
+		nested: boolean;
+	}[] = [];
 	private words: string[] = [];
 	private raw: string[] = [];
+	private redirections: Redirection[] = [];
 	private word = "";
 	private inWord = false;
 	// The word has a quoted or escaped part, so it cannot be a file descriptor number.
 	private literal = false;
-	private target = false;
+	private operator: string | null = null;
 	private depth = 0;
 	private inBacktick = false;
 
@@ -104,7 +114,7 @@ class Splitter {
 			this.inWord = false;
 		} else this.endWord();
 		this.raw.push(text);
-		this.target = true;
+		this.operator = operator;
 		return index + operator.length - 1;
 	}
 
@@ -114,18 +124,22 @@ class Splitter {
 			this.commands.push({
 				words: this.words,
 				raw: this.raw,
+				redirections: this.redirections,
 				nested: this.depth > 0 || this.inBacktick,
 			});
 		this.words = [];
 		this.raw = [];
-		this.target = false;
+		this.redirections = [];
+		this.operator = null;
 	}
 
 	private endWord() {
 		if (this.inWord) {
 			this.raw.push(this.word);
-			if (this.target) this.target = false;
-			else this.words.push(this.word);
+			if (this.operator) {
+				this.redirections.push({ operator: this.operator, target: this.word });
+				this.operator = null;
+			} else this.words.push(this.word);
 		}
 		this.word = "";
 		this.inWord = false;

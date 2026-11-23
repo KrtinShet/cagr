@@ -82,6 +82,10 @@ const yarnBerry =
 export const isLockfile = (path: string) =>
 	Object.hasOwn(writers, basename(path));
 
+export const lockfilePathspecs = Object.keys(writers).map(
+	(name) => `:(glob)**/${name}`,
+);
+
 /** Null message: the package manager wrote this lockfile. */
 export type LockfileVerdict = { message: string | null };
 
@@ -902,6 +906,8 @@ function same(name: string, a: Uint8Array | null, b: Uint8Array | null) {
  * manifests in a temp copy, so the versions and hashes it keeps come from the
  * starting lockfile and new ones come from its own resolution. Returns null
  * for files this check does not cover.
+ * Turn-end callers must attribute a change to the turn before invoking this
+ * check, since regeneration can turn an older staged change into a finding.
  */
 export async function checkLockfile(options: {
 	root: string;

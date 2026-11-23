@@ -1,3 +1,4 @@
+import { resolve } from "node:path";
 import type { AgentName } from "../config/schema";
 import { editedFiles } from "../edited-files";
 import type { AgentEvent, Decision, HookInput } from "./types";
@@ -12,7 +13,7 @@ const nativeEvent: Record<AgentEvent, string> = {
 
 /** Claude Code and Codex send the same payload shape; Codex may send a command as argv. */
 export function parseInput(
-	_agent: AgentName,
+	agent: AgentName,
 	event: AgentEvent,
 	payload: unknown,
 	fallbackCwd: string,
@@ -23,6 +24,7 @@ export function parseInput(
 	const cwd =
 		typeof raw.cwd === "string" && raw.cwd !== "" ? raw.cwd : fallbackCwd;
 	const toolInput = (raw.tool_input ?? {}) as Record<string, unknown>;
+	const workdir = toolInput.workdir;
 	const isEdit = event === "file.before_edit" || event === "file.after_edit";
 	return {
 		event,
@@ -32,6 +34,12 @@ export function parseInput(
 				: "unknown",
 		cwd,
 		command: event === "command.before" ? commandText(toolInput.command) : null,
+		...(agent === "codex" &&
+		event === "command.before" &&
+		typeof workdir === "string" &&
+		workdir
+			? { commandCwd: resolve(cwd, workdir) }
+			: {}),
 		files: isEdit ? editedFiles(toolInput, cwd) : [],
 	};
 }
