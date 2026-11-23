@@ -235,9 +235,10 @@ Started in the background by the pre-push hook when `[review] status` is on. It 
 
 ### Serial leases
 
-- `cagr lease list` shows the holder and waiting branches for each declared resource.
+- `cagr lease list` shows the holder, time remaining and waiting branches for each declared resource.
 - `cagr lease take <name> [--wait]` takes a lease or joins the line. Without `--wait`, exit code 1 means the branch has a ticket and is still waiting.
 - `cagr lease renew <name>` renews a lease held by the current branch.
 - `cagr lease release <name> [--break]` releases a lease. A human can set `CAGR_ALLOW_LEASE_BREAK=1` to break a live lease.
+- `cagr lease release <name> --break --prune-tickets` removes malformed tickets for that lease.
 
 See [Serial leases](leases.md) for the landing workflow.
