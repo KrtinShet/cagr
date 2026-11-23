@@ -167,19 +167,19 @@ async function execute(
 				: undefined,
 			processGroup: true,
 			waitForGroup: true,
-			...(cleanupLog && options.deadline !== undefined
-				? {
-						cleanupHandoff: {
-							deadline: options.deadline,
-							keepWatching: () => {
-								keepWatching = true;
-								options.log?.(
-									`cagr: the watchdog is retaining the tokens after the hook deadline. Cleanup warnings go to ${cleanupLog}.`,
-								);
-							},
-						},
-					}
-				: {}),
+			cleanupHandoff: () => {
+				const { deadline } = options;
+				if (!stopWatch || !cleanupLog || deadline === undefined) return;
+				return {
+					deadline,
+					keepWatching: () => {
+						keepWatching = true;
+						options.log?.(
+							`cagr: the watchdog is retaining the tokens after the hook deadline. Cleanup warnings go to ${cleanupLog}.`,
+						);
+					},
+				};
+			},
 			onSpawn: (pid) => {
 				options.onSpawn?.(pid);
 				if (locks.length || options.inherit)
