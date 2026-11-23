@@ -16,9 +16,11 @@ import { localCi } from "./run";
 async function fixture({
 	install,
 	prePush,
+	maxRounds,
 }: {
 	install?: string;
 	prePush?: string;
+	maxRounds?: number;
 } = {}) {
 	const repo = await tempRepo();
 	await repo.write(
@@ -30,6 +32,7 @@ commit_message = "conventional"
 ${prePush ? `pre_push = ${JSON.stringify(prePush)}` : ""}
 [review]
 pr_sections = ["Testing"]
+${maxRounds === undefined ? "" : `enabled = true\nmax_rounds = ${maxRounds}`}
 [ci]
 local = true
 ${install ? `install = ${JSON.stringify(install)}` : ""}
@@ -133,6 +136,8 @@ function runtime(
 		if (args.includes("repos/o/r/pulls?per_page=100")) return "3";
 		if (args.includes("repos/o/r/collaborators/owner/permission"))
 			return "admin";
+		if (args.includes("POST") && args.includes("repos/o/r/issues/3/comments"))
+			return "{}";
 		if (args.some((arg) => /^repos\/o\/r\/issues\/\d+\/comments$/.test(arg)))
 			return settings.reviewState
 				? JSON.stringify({ id: 42, login: "owner", body: settings.reviewState })
@@ -334,6 +339,38 @@ test(
 			expect(r.lines.join("\n")).toContain(
 				"CI is judging the gate from existing findings",
 			);
+		} finally {
+			f.clean();
+		}
+	},
+	repoTestTimeout,
+);
+
+test(
+	"local review refuses a finder round after local CI used the branch cap",
+	async () => {
+		const f = await fixture({ maxRounds: 1 });
+		try {
+			const r = runtime(f);
+			expect(await localCi(f.config, f.paths, 3, r)).toBe(true);
+			expect(r.reviewBodies).toHaveLength(1);
+			await f.repo.git("fetch", f.source.root, "refs/pull/3/head");
+			await f.repo.git("checkout", "-qb", "feat/example", "FETCH_HEAD");
+			const review = Bun.spawnSync(
+				[process.execPath, join(import.meta.dir, "../cli.ts"), "review"],
+				{
+					cwd: f.repo.root,
+					env: {
+						...process.env,
+						PATH: "/usr/bin:/bin",
+						CAGR_ALLOW_EXTRA_REVIEW: "",
+					},
+				},
+			);
+			expect(review.stdout.toString()).toContain(
+				"Review is capped at 1 round for this branch.",
+			);
+			expect(review.exitCode).toBe(2);
 		} finally {
 			f.clean();
 		}

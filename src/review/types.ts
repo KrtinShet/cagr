@@ -31,7 +31,7 @@ export type ReviewFinding = Candidate & {
 	status: "open" | "fixed" | "answered";
 	answer: { kind: AnswerKind; reason: string } | null;
 	fixedIn: string | null;
-	/** Verdicts the verifier gave while the finding was open. Older records lack it. */
+	/** Verdicts while open, including stale fixes checked after the cap. Older records lack it. */
 	verdicts?: number;
 };
 
@@ -91,5 +91,27 @@ export const countsTowardCap = (round: Round) =>
 	!round.error && !round.verificationOnly;
 export const completedRounds = (record: ReviewRecord) =>
 	record.rounds.filter(countsTowardCap).length;
+
+export function countPriorRounds(
+	current: ReviewRecord,
+	otherRecords: ReviewRecord[],
+) {
+	const key = (round: Round) =>
+		round.runId ??
+		JSON.stringify([
+			round.n,
+			round.head,
+			round.from,
+			round.scope,
+			round.reviewer,
+			round.at,
+		]);
+	const seen = new Set(current.rounds.filter(countsTowardCap).map(key));
+	const own = seen.size;
+	for (const record of otherRecords)
+		for (const round of record.rounds.filter(countsTowardCap))
+			seen.add(key(round));
+	return seen.size - own;
+}
 
 export const extraReviewEnv = "CAGR_ALLOW_EXTRA_REVIEW";

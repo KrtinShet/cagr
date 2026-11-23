@@ -32,12 +32,19 @@ import {
 	verifierPrompt,
 	verifierSchema,
 } from "./prompt";
-import { loadRecord, recordPath, withReviewLock, writeRecord } from "./store";
+import {
+	loadRecord,
+	readBranchRecord,
+	recordPath,
+	withReviewLock,
+	writeRecord,
+} from "./store";
 import {
 	blocking,
 	type Candidate,
 	categories,
 	completedRounds,
+	countPriorRounds,
 	cycleStart,
 	emptyRecord,
 	extraReviewEnv,
@@ -127,7 +134,13 @@ export async function review(
 		options.record || options.scan !== undefined
 			? null
 			: recordPath(git.commonDir, branch);
-	const target = { cwd: git.toplevel, head: git.head, branch, file };
+	const target = {
+		cwd: git.toplevel,
+		head: git.head,
+		branch,
+		file,
+		commonDir: git.commonDir,
+	};
 	return withReviewLock(file, () => reviewTarget(config, options, target));
 }
 
@@ -139,7 +152,14 @@ async function reviewTarget(
 		head,
 		branch,
 		file,
-	}: { cwd: string; head: string; branch: string; file: string | null },
+		commonDir,
+	}: {
+		cwd: string;
+		head: string;
+		branch: string;
+		file: string | null;
+		commonDir: string;
+	},
 ): Promise<ReviewOutcome> {
 	const progress = options.progress ?? (() => {});
 	const now = options.now ?? (() => new Date());
@@ -158,7 +178,13 @@ async function reviewTarget(
 		: await reachFrom(record, head, cwd);
 	const openNow = () =>
 		scanning ? blocking(record) : unresolved(record, head, reach);
-	const rounds = completedRounds(record) + (options.priorRounds ?? 0);
+	const ciRecord = file
+		? readBranchRecord(recordPath(commonDir, branch, "ci-reviews"), branch)
+		: null;
+	const rounds =
+		completedRounds(record) +
+		(options.priorRounds ?? 0) +
+		(ciRecord ? countPriorRounds(record, [ciRecord]) : 0);
 	const maxRounds = config.review.max_rounds;
 	const capped =
 		!scanning &&
@@ -187,7 +213,7 @@ async function reviewTarget(
 	};
 	const fixes =
 		capped && !options.record
-			? await cappedFixes(record, head, cwd)
+			? await cappedFixes(record, openNow(), head, cwd)
 			: new Set<string>();
 	if (capped && fixes.size === 0) return cappedOutcome();
 	let held = new Map<string, string>();
@@ -401,23 +427,20 @@ async function reviewTarget(
 		const found = assignIds(capNits(kept), record, roundNumber);
 		const fixed: ReviewFinding[] = [];
 		for (const finding of previous) {
-			if (finding.status === "open")
-				finding.verdicts = (finding.verdicts ?? 0) + 1;
-			if (finding.status === "open" && fixedIds.has(finding.id)) {
+			const stale = context.stale.includes(finding.id);
+			const wasOpen = finding.status === "open" || (capped && stale);
+			if (wasOpen) finding.verdicts = (finding.verdicts ?? 0) + 1;
+			if (wasOpen && fixedIds.has(finding.id)) {
 				finding.status = "fixed";
 				finding.fixedIn = head;
 				fixed.push(finding);
-			} else if (
-				context.stale.includes(finding.id) &&
-				fixedIds.has(finding.id)
-			) {
+			} else if (stale && fixedIds.has(finding.id)) {
 				// Confirmed on history the old fix commit is not part of, so this head is the fix commit now.
 				finding.fixedIn = head;
 			} else if (finding.status === "fixed" && !fixedIds.has(finding.id)) {
-				// A reopened finding needs a new fix, so it gets a fresh count of verdicts.
 				finding.status = "open";
 				finding.fixedIn = null;
-				finding.verdicts = 0;
+				if (!wasOpen) finding.verdicts = 0;
 			}
 		}
 		record.findings.push(...found);
@@ -485,9 +508,14 @@ function lastFindingCheck(record: ReviewRecord, finding: ReviewFinding) {
 	);
 }
 
-async function cappedFixes(record: ReviewRecord, head: string, cwd: string) {
+async function cappedFixes(
+	record: ReviewRecord,
+	open: ReviewFinding[],
+	head: string,
+	cwd: string,
+) {
 	const fixes = await Promise.all(
-		blocking(record).map(async (finding) => {
+		open.map(async (finding) => {
 			if (!finding.file || (finding.verdicts ?? 0) >= maxVerdicts) return null;
 			const last = lastFindingCheck(record, finding);
 			if (!last || last.head === head) return null;

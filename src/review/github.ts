@@ -7,14 +7,14 @@ import { reachFrom, unresolved, unreviewedNotice } from "./gate";
 import { reviewReport } from "./report";
 import { ReviewInputError, type ReviewOutcome, review } from "./review";
 import { reviewContext, successfulStatuses } from "./status";
-import { readBranchRecord, recordPath } from "./store";
+import { loadRecord, readBranchRecord, recordPath, writeRecord } from "./store";
 import {
 	blocking,
+	countPriorRounds,
 	countsTowardCap,
 	emptyRecord,
 	type ReviewFinding,
 	type ReviewRecord,
-	type Round,
 } from "./types";
 
 /** Runs `gh` with args, optional stdin, and returns stdout. Injected in tests. */
@@ -185,25 +185,6 @@ async function earlierPrStates(gh: Gh, pr: PrBranch, login?: string) {
 	for (const number of earlier)
 		states.push(...(await stateComments(gh, { repo: pr.repo, number }, login)));
 	return states;
-}
-
-function countPriorRounds(current: ReviewRecord, otherRecords: ReviewRecord[]) {
-	const key = (round: Round) =>
-		round.runId ??
-		JSON.stringify([
-			round.n,
-			round.head,
-			round.from,
-			round.scope,
-			round.reviewer,
-			round.at,
-		]);
-	const seen = new Set(current.rounds.filter(countsTowardCap).map(key));
-	const own = seen.size;
-	for (const record of otherRecords)
-		for (const round of record.rounds.filter(countsTowardCap))
-			seen.add(key(round));
-	return seen.size - own;
 }
 
 const resolvedQuery = `query($owner: String!, $name: String!, $number: Int!) {
@@ -430,12 +411,15 @@ export async function ciReview(
 	}
 
 	const { commonDir } = await gitContext(options.local?.sourceRoot ?? cwd);
-	const localRecord =
+	const branchDir =
 		commonDir &&
 		pr.headBranch &&
 		pr.headRepo.toLowerCase() === pr.repo.toLowerCase()
-			? readBranchRecord(recordPath(commonDir, pr.headBranch), pr.headBranch)
+			? commonDir
 			: null;
+	const localRecord = branchDir
+		? readBranchRecord(recordPath(branchDir, pr.headBranch), pr.headBranch)
+		: null;
 	const priorRounds = countPriorRounds(record, [
 		...others.map(({ record }) => record),
 		...(localRecord ? [localRecord] : []),
@@ -448,6 +432,17 @@ export async function ciReview(
 		agent: options.agent,
 		progress: options.progress,
 	});
+	if (
+		options.local &&
+		branchDir &&
+		outcome.round &&
+		countsTowardCap(outcome.round)
+	) {
+		const file = recordPath(branchDir, pr.headBranch, "ci-reviews");
+		const saved = loadRecord(file, pr.headBranch, pr.base);
+		saved.rounds.push(outcome.round);
+		writeRecord(file, saved);
+	}
 	const localOpen =
 		outcome.capped && localRecord
 			? unresolved(

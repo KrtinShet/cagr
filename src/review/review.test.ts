@@ -6,7 +6,7 @@ import { repoTestTimeout } from "../test/budgets";
 import { tempRepo } from "../test/repo";
 import { record, round } from "../test/review";
 import { type AgentRequest, type ReviewAgent, ReviewerError } from "./agent";
-import { gateResult, reachFrom } from "./gate";
+import { gateAtHead, gateResult, reachFrom } from "./gate";
 import { finderSchema, verifierSchema } from "./prompt";
 import { reviewReport } from "./report";
 import {
@@ -360,6 +360,83 @@ describe("review", () => {
 			} finally {
 				if (override === undefined) delete process.env[extraReviewEnv];
 				else process.env[extraReviewEnv] = override;
+			}
+		},
+		repoTestTimeout,
+	);
+
+	test(
+		"after the cap a rebase with a changed finding file can re-verify the fix",
+		async () => {
+			const repo = await branchRepo();
+			const { agent } = fakeAgent({
+				finder: (_, call) => ({ findings: call === 0 ? [candidate()] : [] }),
+				verifier: () => ({ previous: [{ id: "f1", fixed: true }] }),
+			});
+			const options = { cwd: repo.root, effort: "quick" as const, agent };
+			await review(repo.config, options);
+			for (const n of [2, 3]) {
+				await repo.commit(`docs: add note ${n}`, {
+					[`note-${n}.md`]: "note\n",
+				});
+				const result = await review(repo.config, options);
+				expect(completedRounds(result.record)).toBe(n);
+			}
+			await repo.commit("fix: handle the session", {
+				"src/a.ts": "export const login = (user) => user?.name;\n",
+			});
+			const fixed = await review(repo.config, options);
+			expect(fixed.round?.verificationOnly).toBe(true);
+			expect(fixed.passed).toBe(true);
+
+			await repo.git("checkout", "-q", "main");
+			await repo.commit("docs: update the base", { "README.md": "new base\n" });
+			await repo.git("checkout", "-q", "feat/login");
+			await repo.git("rebase", "main");
+			const unchanged = await review(repo.config, options);
+			expect(unchanged.capped).toBe(true);
+			expect(unchanged.open.map((entry) => entry.id)).toEqual(["f1"]);
+
+			const head = await repo.commit("fix: guard the rebased login", {
+				"src/a.ts": "export const login = (user) => user?.name ?? '';\n",
+			});
+			const next = fakeAgent({
+				finder: () => {
+					throw new Error("Finders are capped");
+				},
+				verifier: () => ({ previous: [{ id: "f1", fixed: true }] }),
+			});
+			expect(
+				(await gateAtHead(fixed.record, head, repo.config, repo.root)).kind,
+			).toBe("deny");
+			const outcome = await review(repo.config, {
+				...options,
+				agent: next.agent,
+			});
+			expect(outcome.round?.verificationOnly).toBe(true);
+			expect(outcome.round?.verified).toEqual(["f1"]);
+			expect(outcome.record.findings[0]).toMatchObject({
+				fixedIn: head,
+				verdicts: 2,
+			});
+			expect(completedRounds(outcome.record)).toBe(3);
+			expect(
+				(await gateAtHead(outcome.record, head, repo.config, repo.root)).kind,
+			).toBe("allow");
+
+			for (const n of [3, 4]) {
+				await repo.write(
+					"src/a.ts",
+					`export const login = (user) => user?.name ?? '${n}';\n`,
+				);
+				await repo.git("commit", "-qa", "--amend", "--no-edit");
+				const result = await review(repo.config, {
+					...options,
+					agent: next.agent,
+				});
+				if (n === 3) expect(result.round?.verified).toEqual(["f1"]);
+				else expect(result.capped).toBe(true);
+				expect(result.record.findings[0]?.verdicts).toBe(3);
 			}
 		},
 		repoTestTimeout,

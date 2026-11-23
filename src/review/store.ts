@@ -13,12 +13,16 @@ import { tryLock } from "../lock";
 import { emptyRecord, type ReviewRecord } from "./types";
 
 /** Records live in the shared .git folder, so every worktree of the repo sees the same review. */
-export function recordPath(commonDir: string, branch: string) {
+export function recordPath(
+	commonDir: string,
+	branch: string,
+	directory: "reviews" | "ci-reviews" = "reviews",
+) {
 	// The legacy sanitizer could never write a name containing "%".
 	return join(
 		commonDir,
 		"cagr",
-		"reviews",
+		directory,
 		`%${createHash("sha256").update(branch).digest("hex")}.json`,
 	);
 }
