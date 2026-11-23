@@ -377,6 +377,25 @@ test.each([
 });
 
 test.each([
+	'"pnpm\\u0066ile"=tools/hooks.cjs',
+	'"global-pnpm\\u0066ile"=tools/g.cjs',
+])("a .npmrc key with an escape %p is refused", async (line) => {
+	const lockfile = "lockfileVersion: '9.0'\n";
+	const verdict = await editedCheck(
+		"pnpm-lock.yaml",
+		"pnpm",
+		{
+			"package.json": '{ "name": "app" }\n',
+			".npmrc": `registry=https://registry.npmjs.org/\n; a \\ in a comment\n${line}\n`,
+			"pnpm-lock.yaml": lockfile,
+		},
+		{ "pnpm-lock.yaml": `${lockfile}# edited\n` },
+	);
+	expect(verdict?.message).toContain("has a key with a backslash");
+	expect(verdict?.message).toContain(line);
+});
+
+test.each([
 	'pnpmfile="tools\\/hooks.cjs"',
 	"pnpmfile=tools/hooks.cjs ; the hooks",
 	"pnpmfile=tools/hooks.cjs#x",

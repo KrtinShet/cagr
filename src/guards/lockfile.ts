@@ -567,6 +567,17 @@ async function namedPnpmfiles(
 	const found: [string, string][] = [];
 	const npmrc = posix.join(workspace, ".npmrc");
 	const ini = decode(await fromHead(npmrc)) ?? "";
+	// The ini parser decodes escapes in a quoted key too, so a key with a backslash could be pnpmfile under another spelling.
+	const escaped = ini
+		.split(/\r?\n/)
+		.find(
+			(entry) =>
+				!/^\s*[;#]/.test(entry) && /\\/.test(entry.split("=")[0] ?? ""),
+		);
+	if (escaped)
+		throw new Refusal(
+			`The committed ${npmrc} has a key with a backslash, which cagr cannot read: ${escaped.trim()}. Write the key without escapes in a commit, or restore the lockfile and ask the user to run the pnpm command.`,
+		);
 	const line = [
 		...ini.matchAll(/^[ \t]*(["']?)pnpmfile\1[ \t]*=[ \t]*(.*?)[ \t]*$/gm),
 	].at(-1)?.[2];
