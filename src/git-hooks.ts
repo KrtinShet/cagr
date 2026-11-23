@@ -180,7 +180,8 @@ export async function prePush(
 	if (serial.length && env[leasePush] !== "1")
 		return { ok: false, messages: [useLeaseCommand] };
 	if (skipped(config, env)) return { ok: true, messages: [] };
-	if (refs.length === serial.length) return { ok: true, messages: [] };
+	if (serial.length && refs.length === serial.length)
+		return { ok: true, messages: [] };
 	const messages: string[] = [];
 	const warnings: string[] = [];
 	const leases = new PushLeases(config, cwd, messages, warnings);
