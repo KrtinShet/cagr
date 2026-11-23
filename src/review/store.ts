@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
 	existsSync,
 	mkdirSync,
@@ -13,11 +14,12 @@ import { emptyRecord, type ReviewRecord } from "./types";
 
 /** Records live in the shared .git folder, so every worktree of the repo sees the same review. */
 export function recordPath(commonDir: string, branch: string) {
+	// The legacy sanitizer could never write a name containing "%".
 	return join(
 		commonDir,
 		"cagr",
 		"reviews",
-		`${branch.replace(/[^\w.-]/g, "__")}.json`,
+		`%${createHash("sha256").update(branch).digest("hex")}.json`,
 	);
 }
 
@@ -31,8 +33,17 @@ export function readRecord(file: string): ReviewRecord | null {
 	}
 }
 
+export function readBranchRecord(file: string, branch: string) {
+	const current = readRecord(file);
+	if (current?.branch === branch) return current;
+	const legacy = readRecord(
+		join(dirname(file), `${branch.replace(/[^\w.-]/g, "__")}.json`),
+	);
+	return legacy?.branch === branch ? legacy : null;
+}
+
 export function loadRecord(file: string, branch: string, base: string) {
-	return readRecord(file) ?? emptyRecord(branch, base);
+	return readBranchRecord(file, branch) ?? emptyRecord(branch, base);
 }
 
 export function writeRecord(file: string, record: ReviewRecord) {
@@ -69,8 +80,17 @@ export async function withReviewLock<T>(
 export function allRecords(commonDir: string): ReviewRecord[] {
 	const dir = join(commonDir, "cagr", "reviews");
 	if (!existsSync(dir)) return [];
-	return readdirSync(dir)
-		.filter((name) => name.endsWith(".json"))
-		.map((name) => readRecord(join(dir, name)))
-		.filter((record): record is ReviewRecord => record !== null);
+	const byBranch = new Map<string, ReviewRecord>();
+	for (const name of readdirSync(dir)) {
+		if (!name.endsWith(".json")) continue;
+		const file = join(dir, name);
+		const record = readRecord(file);
+		if (
+			record &&
+			(!byBranch.has(record.branch) ||
+				file === recordPath(commonDir, record.branch))
+		)
+			byBranch.set(record.branch, record);
+	}
+	return [...byBranch.values()];
 }

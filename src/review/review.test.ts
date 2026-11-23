@@ -1,9 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { basename, join } from "node:path";
 import { resolveConfig } from "../config/load";
 import { repoTestTimeout } from "../test/budgets";
 import { tempRepo } from "../test/repo";
+import { record, round } from "../test/review";
 import { type AgentRequest, type ReviewAgent, ReviewerError } from "./agent";
 import { gateResult, reachFrom } from "./gate";
 import { finderSchema, verifierSchema } from "./prompt";
@@ -16,6 +17,7 @@ import {
 	review,
 	tally,
 } from "./review";
+import { recordPath } from "./store";
 import {
 	type Candidate,
 	completedRounds,
@@ -280,6 +282,128 @@ describe("review", () => {
 				if (previous === undefined) delete process.env[extraReviewEnv];
 				else process.env[extraReviewEnv] = previous;
 			}
+		},
+		repoTestTimeout,
+	);
+
+	test(
+		"after the extra round only changed Important findings with verdicts left are verified",
+		async () => {
+			const repo = await branchRepo();
+			const first = fakeAgent({ finder: () => ({ findings: [] }) });
+			const input = { cwd: repo.root, full: true, effort: "quick" as const };
+			for (let i = 0; i < 3; i++)
+				await review(repo.config, { ...input, agent: first.agent });
+			const override = process.env[extraReviewEnv];
+			process.env[extraReviewEnv] = "1";
+			try {
+				const last = fakeAgent({
+					finder: () => ({
+						findings: [
+							candidate(),
+							candidate({ file: "src/b.ts", title: "Other bug" }),
+						],
+					}),
+				});
+				await repo.commit("feat: add b", { "src/b.ts": "bad\n" });
+				expect(
+					(await review(repo.config, { ...input, agent: last.agent })).round?.n,
+				).toBe(4);
+				const stubborn = fakeAgent({
+					finder: () => {
+						throw new Error("Finders are capped");
+					},
+					verifier: () => ({ previous: [{ id: "f1", fixed: false }] }),
+				});
+				await repo.commit("docs: mention f1", { "README.md": "not a fix\n" });
+				expect(
+					(await review(repo.config, { ...input, agent: stubborn.agent }))
+						.capped,
+				).toBe(true);
+				for (let i = 1; i <= 3; i++) {
+					await repo.commit(`fix: attempt ${i}`, {
+						"src/a.ts": `// attempt ${i}\n`,
+					});
+					const result = await review(repo.config, {
+						...input,
+						agent: stubborn.agent,
+					});
+					expect(result.round?.scope).toBe("verify");
+					expect(result.round?.verified).toEqual(["f1"]);
+					expect(completedRounds(result.record)).toBe(4);
+					expect(result.record.findings[0]?.verdicts).toBe(i);
+					expect(
+						(await review(repo.config, { ...input, agent: stubborn.agent }))
+							.capped,
+					).toBe(true);
+				}
+				const fixed = fakeAgent({
+					finder: () => {
+						throw new Error("Finders are capped");
+					},
+					verifier: () => ({ previous: [{ id: "f2", fixed: true }] }),
+				});
+				const head = await repo.commit("fix: a and b", {
+					"src/a.ts": "fixed\n",
+					"src/b.ts": "fixed\n",
+				});
+				const result = await review(repo.config, {
+					...input,
+					agent: fixed.agent,
+				});
+				expect(result.round?.verified).toEqual(["f2"]);
+				expect(result.coverage).toContain("5 later commits were not reviewed");
+				expect(result.fixed.map((entry) => entry.id)).toEqual(["f2"]);
+				expect(result.open.map((entry) => entry.id)).toEqual(["f1"]);
+				expect(result.fixed[0]?.fixedIn).toBe(head);
+				expect(stubborn.calls).toHaveLength(3);
+			} finally {
+				if (override === undefined) delete process.env[extraReviewEnv];
+				else process.env[extraReviewEnv] = override;
+			}
+		},
+		repoTestTimeout,
+	);
+
+	test(
+		"branch reviews use distinct files and only migrate matching legacy records",
+		async () => {
+			const repo = await branchRepo();
+			const common = join(repo.root, ".git");
+			const dir = join(common, "cagr", "reviews");
+			mkdirSync(dir, { recursive: true });
+			const confusable = basename(recordPath(common, "feat/login"), ".json");
+			const otherLegacy = join(
+				dir,
+				`${confusable.replace(/[^\w.-]/g, "__")}.json`,
+			);
+			const otherHistory = JSON.stringify(
+				record([round()], [finding()], confusable),
+			);
+			writeFileSync(otherLegacy, otherHistory);
+			const history = await review(repo.config, {
+				cwd: repo.root,
+				effort: "quick",
+				agent: fakeAgent({ finder: () => ({ findings: [candidate()] }) }).agent,
+			});
+			expect(readFileSync(otherLegacy, "utf8")).toBe(otherHistory);
+			const legacy = join(dir, "feat__login.json");
+			writeFileSync(legacy, JSON.stringify(history.record));
+			await repo.git("checkout", "-q", "-b", "feat__login");
+			const separate = await review(repo.config, {
+				cwd: repo.root,
+				agent: fakeAgent({ finder: () => ({ findings: [] }) }).agent,
+			});
+			expect(separate.passed).toBe(true);
+			expect(separate.file).not.toBe(history.file);
+			expect(separate.record.findings).toHaveLength(0);
+			if (history.file) await Bun.file(history.file).delete();
+			await repo.git("checkout", "-q", "feat/login");
+			const migrated = await review(repo.config, {
+				cwd: repo.root,
+				agent: fakeAgent({ finder: () => ({ findings: [] }) }).agent,
+			});
+			expect(migrated.open.map((entry) => entry.id)).toEqual(["f1"]);
 		},
 		repoTestTimeout,
 	);

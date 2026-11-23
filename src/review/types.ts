@@ -49,6 +49,8 @@ export type Round = {
 	error: string | null;
 	/** The earlier findings the verifier judged in this round. Older records lack it. */
 	verified?: string[];
+	/** A fix check after the cap, without finder coverage or a round charge. */
+	verificationOnly?: true;
 };
 
 export type ReviewRecord = {
@@ -84,6 +86,7 @@ export const cycleStart = (record: ReviewRecord) =>
 
 /** Every completed branch round counts toward `[review] max_rounds`. */
 export const completedRounds = (record: ReviewRecord) =>
-	record.rounds.filter((round) => !round.error).length;
+	record.rounds.filter((round) => !round.error && !round.verificationOnly)
+		.length;
 
 export const extraReviewEnv = "CAGR_ALLOW_EXTRA_REVIEW";

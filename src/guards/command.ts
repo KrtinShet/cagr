@@ -116,17 +116,18 @@ function simpleCommandFinding(
 	context: CommandContext,
 ): Finding | null {
 	const { git } = config;
-	if (
-		git.block_hook_skips &&
-		words.some((word) => word.startsWith(`${git.skip_env}=`))
-	)
+	const assigns = (name: string) =>
+		words.some(
+			(word) => word.startsWith(`${name}=`) || word.startsWith(`${name}+=`),
+		);
+	if (git.block_hook_skips && assigns(git.skip_env))
 		return { id: "hook-skip", reason: commandReasons.skipHooks(config) };
-	if (words.some((word) => word.startsWith(`${config.files.gate_edit_env}=`)))
+	if (assigns(config.files.gate_edit_env))
 		return {
 			id: "gate-edit-env",
 			reason: `${config.files.gate_edit_env} is for humans only. Tell the user which gate file you would change and why.`,
 		};
-	if (words.some((word) => word.startsWith(`${extraReviewEnv}=`)))
+	if (assigns(extraReviewEnv))
 		return {
 			id: "gate-edit-env",
 			reason: `${extraReviewEnv} is for humans only. Answer the remaining Important findings, or ask the user to run the extra round.`,

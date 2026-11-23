@@ -1,12 +1,34 @@
 import type { Config } from "../config/schema";
 import { gitContext } from "../git";
-import { gateAtHead } from "./gate";
+import { cappedReview, gateAtHead } from "./gate";
 import type { Gh } from "./github";
-import { readRecord, recordPath } from "./store";
-import type { ReviewRecord } from "./types";
+import { readBranchRecord, recordPath } from "./store";
+import { completedRounds, type ReviewRecord } from "./types";
 
 export const reviewContext = "cagr/review";
 export const checksContext = "cagr/checks";
+
+export async function successfulStatuses(gh: Gh, repo: string, sha: string) {
+	const statuses = (
+		await gh([
+			"api",
+			"--paginate",
+			`repos/${repo}/commits/${sha}/statuses?per_page=100`,
+			"--jq",
+			".[] | [(.context | ascii_downcase), .state] | @tsv",
+		])
+	).split(/\r?\n/);
+	const latest = new Map<string, string>();
+	for (const row of statuses) {
+		const [context, state] = row.split("\t");
+		if (context && state && !latest.has(context)) latest.set(context, state);
+	}
+	return new Set(
+		[...latest]
+			.filter(([, state]) => state === "success")
+			.map(([context]) => context),
+	);
+}
 
 export type CommitStatus = {
 	context: string;
@@ -34,6 +56,10 @@ export async function reviewStatus(
 		state,
 		description: describe(text),
 	});
+	const cap =
+		record && completedRounds(record) >= config.review.max_rounds
+			? cappedReview(config.review.max_rounds)
+			: "";
 	if (gate.kind === "allow")
 		return gate.coverage
 			? status("success", gate.coverage)
@@ -42,7 +68,12 @@ export async function reviewStatus(
 						"success",
 						"Unreviewed: the reviewer failed and no Important finding is open. Review this commit yourself.",
 					)
-				: status("success", "Passed: no Important finding is open.");
+				: status(
+						"success",
+						cap
+							? `${cap} No Important finding is open.`
+							: "Passed: no Important finding is open.",
+					);
 	const open = gate.openCount;
 	if (open) {
 		const findings = `${open} Important finding${open === 1 ? "" : "s"} open.`;
@@ -50,7 +81,9 @@ export async function reviewStatus(
 			"failure",
 			gate.coverage
 				? `${gate.coverage} ${findings}`
-				: `${findings} Fix or answer ${open === 1 ? "it" : "them"}${gate.capped ? "." : ", then run cagr review."}`,
+				: cap
+					? `${cap} ${findings}`
+					: `${findings} Fix or answer ${open === 1 ? "it" : "them"}, then run cagr review.`,
 		);
 	}
 	return status("pending", "Not reviewed at this commit. Run cagr review.");
@@ -112,7 +145,10 @@ export async function sendReviewStatus(
 	if (!config.review.status) return null;
 	const git = await gitContext(cwd);
 	if (!git.commonDir || !git.branch || !git.head) return null;
-	const record = readRecord(recordPath(git.commonDir, git.branch));
+	const record = readBranchRecord(
+		recordPath(git.commonDir, git.branch),
+		git.branch,
+	);
 	return (
 		await postStatus(
 			gh,
@@ -175,7 +211,10 @@ export async function postStatusAfterPush(
 		);
 	const git = await gitContext(cwd);
 	const record = git.commonDir
-		? readRecord(recordPath(git.commonDir, options.branch))
+		? readBranchRecord(
+				recordPath(git.commonDir, options.branch),
+				options.branch,
+			)
 		: null;
 	lines.push(
 		(

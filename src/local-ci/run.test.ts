@@ -4,11 +4,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadConfig } from "../config/load";
 import { encodeState, type Gh } from "../review/github";
+import { recordPath, writeRecord } from "../review/store";
 import { run } from "../run";
 import { sync } from "../sync";
 import { repoTestTimeout } from "../test/budgets";
 import { tempRepo } from "../test/repo";
-import { record, round } from "../test/review";
+import { finding, record, round } from "../test/review";
 import { watchPaths } from "./cache";
 import { localCi } from "./run";
 
@@ -126,7 +127,10 @@ function runtime(
 			return settings.permission ?? "write";
 		if (args.includes("user")) return "owner";
 		if (args.includes("graphql")) return "{}";
-		if (args.includes("repos/o/r/issues/3/comments"))
+		if (args.includes("repos/o/r/pulls?per_page=100")) return "3";
+		if (args.includes("repos/o/r/collaborators/owner/permission"))
+			return "admin";
+		if (args.some((arg) => /^repos\/o\/r\/issues\/\d+\/comments$/.test(arg)))
 			return settings.reviewState
 				? JSON.stringify({ id: 42, login: "owner", body: settings.reviewState })
 				: "";
@@ -263,8 +267,69 @@ test(
 			).toEqual(
 				expect.arrayContaining([
 					"state=success",
-					"description=Reviewed through round 3; 1 later commit was not reviewed.",
+					"description=Reviewed through round 3 (cap 3); 1 later commit was not reviewed.",
 				]),
+			);
+		} finally {
+			f.clean();
+		}
+	},
+	repoTestTimeout,
+);
+
+test(
+	"watch judges CI findings even after both statuses succeed",
+	async () => {
+		const f = await fixture();
+		try {
+			const r = runtime(f, {
+				reviewState: encodeState(
+					record([round({ head: f.head })], [finding()]),
+				),
+				statuses: {
+					[f.head]: [
+						["cagr/checks", "success"],
+						["cagr/review", "success"],
+					],
+				},
+			});
+			expect(await localCi(f.config, f.paths, "watch", r)).toBe(false);
+			expect(r.commands.some((args) => args[0] === "claude")).toBe(false);
+			expect(
+				r.calls.find((args) => args.includes("context=cagr/review")),
+			).toContain("state=failure");
+			expect(
+				r.calls.find((args) => args.includes("context=cagr/checks")),
+			).toBeUndefined();
+		} finally {
+			f.clean();
+		}
+	},
+	repoTestTimeout,
+);
+
+test(
+	"explicit local CI counts the source checkout's branch record",
+	async () => {
+		const f = await fixture();
+		try {
+			writeRecord(
+				recordPath(join(f.repo.root, ".git"), "feat/example"),
+				record(
+					[
+						round({ head: f.base }),
+						round({ n: 2, head: f.base }),
+						round({ n: 3, head: f.base }),
+					],
+					[],
+					"feat/example",
+				),
+			);
+			const r = runtime(f);
+			expect(await localCi(f.config, f.paths, 3, r)).toBe(true);
+			expect(r.commands.some((args) => args[0] === "claude")).toBe(false);
+			expect(r.lines.join("\n")).toContain(
+				"CI is judging the gate from existing findings",
 			);
 		} finally {
 			f.clean();

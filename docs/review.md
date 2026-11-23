@@ -99,9 +99,9 @@ Commit the change, run `cagr review` locally, fix Important findings in one comm
 1. The first round reviews the whole branch.
 2. Later rounds run finders on the new commits and a verifier on earlier findings. A verifier-only recheck also uses a round.
 
-`[review] max_rounds` defaults to 3 completed rounds per branch. Failed reviewer runs do not count. A rebase, a reused branch name, or `cagr review --full` can start a new full review while rounds remain. The branch keeps its count and prior findings across those cycles.
+Set the round limit with `[review] max_rounds` in `cagr.toml`. It defaults to 3 completed rounds per branch. With the `recommended` preset, `cagr.toml` is a gate file and only a human can change the limit. Failed reviewer runs do not count. A rebase, a reused branch name, or `cagr review --full` can start a new full review while rounds remain. The branch keeps its count and prior findings across those cycles.
 
-After the cap, `cagr review` exits with code 2 and lists the open Important findings. Fix only findings that break the intended case. Answer findings that are wrong, intentional or minor with `cagr review answer <id> --wrong|--intentional|--minor "<why>"`. An unverified fix still leaves the finding open. A human can run `CAGR_ALLOW_EXTRA_REVIEW=1 cagr review` to spend one extra round beyond the configured limit, for example to verify a fix made after round 3. The command guard refuses attempts by agents to set the switch.
+After the cap, commit the fix and run `cagr review` again. It runs only the verifier on open Important findings whose files changed since their last check and that still have a verdict left. This check uses no review round, runs no finders, and leaves later commits outside finder coverage. If nothing qualifies for verification, the command exits with code 2 and lists the open Important findings. Answer findings that are wrong, intentional or minor with `cagr review answer <id> --wrong|--intentional|--minor "<why>"`. A human can run `CAGR_ALLOW_EXTRA_REVIEW=1 cagr review` to spend one extra round on the branch. The command guard refuses attempts by agents to set the switch.
 
 The gate passes once all Important findings are verified fixed or answered. After the cap it lets later commits through without a finder review and reports how many commits were not reviewed. A finding counts as fixed only if the verifier judged it fixed on that commit or an ancestor. A reset to before the fix can close the gate again. Answers carry across commits. Before the cap, an older reviewed head passes while none of the findings known when it was reviewed is open on it. Nits and pre-existing findings never block.
 
@@ -118,9 +118,9 @@ With `[review] status = true`, the pre-push hook and `cagr review answer` send `
 - `failure` when an Important finding is open at a reviewed commit or the branch is at the cap;
 - `pending` when it has not been reviewed yet and rounds remain.
 
-For commits after the cap, the local gate, commit status and CI review report use a message such as “Reviewed through round 3; 2 later commits were not reviewed.”
+For commits after the cap, the local gate, commit status and CI review report use a message such as `Reviewed through round <last round> (cap <configured limit>); <count> later commits were not reviewed.`
 
-The record for each branch lives in `<git common dir>/cagr/reviews/<branch>.json`, so every worktree of the repo shares it. Nothing is written to the working tree.
+The record for each branch lives in `<git common dir>/cagr/reviews/` under a filename derived from the branch name, so every worktree of the repo shares it. Nothing is written to the working tree.
 
 ## Answers
 

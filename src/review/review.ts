@@ -39,6 +39,7 @@ import {
 	categories,
 	completedRounds,
 	cycleStart,
+	emptyRecord,
 	extraReviewEnv,
 	type ReviewFinding,
 	type ReviewRecord,
@@ -61,6 +62,8 @@ export type ReviewOptions = {
 	agent?: ReviewAgent;
 	/** Use this record instead of the one in .git, and do not write it (CI keeps its own). */
 	record?: ReviewRecord;
+	/** Completed rounds stored outside this CI record for the same branch. */
+	priorRounds?: number;
 	progress?: (line: string) => void;
 	now?: () => Date;
 };
@@ -144,9 +147,7 @@ async function reviewTarget(
 	const scanning = options.scan !== undefined;
 	const record =
 		options.record ??
-		(file
-			? loadRecord(file, branch, baseName)
-			: loadRecord("", branch, baseName));
+		(file ? loadRecord(file, branch, baseName) : emptyRecord(branch, baseName));
 	let from = head;
 	let mergeBase = head;
 	let scope: Round["scope"] = "scan";
@@ -157,15 +158,25 @@ async function reviewTarget(
 		: await reachFrom(record, head, cwd);
 	const openNow = () =>
 		scanning ? blocking(record) : unresolved(record, head, reach);
-	const rounds = completedRounds(record);
+	const rounds = completedRounds(record) + (options.priorRounds ?? 0);
 	const maxRounds = config.review.max_rounds;
-	if (
+	const capped =
 		!scanning &&
 		rounds >= maxRounds &&
-		!(rounds === maxRounds && process.env[extraReviewEnv] === "1")
-	) {
-		const coverage = await unreviewedNotice(record, head, cwd);
-		const skipped = [cappedReview(maxRounds), cappedNext, coverage]
+		(options.record !== undefined ||
+			rounds !== maxRounds ||
+			process.env[extraReviewEnv] !== "1");
+	const coverage = capped
+		? await unreviewedNotice(record, head, cwd, maxRounds)
+		: undefined;
+	const cappedOutcome = (): ReviewOutcome => {
+		const skipped = [
+			cappedReview(maxRounds),
+			options.record
+				? "CI is judging the gate from existing findings."
+				: cappedNext,
+			coverage,
+		]
 			.filter(Boolean)
 			.join("\n\n");
 		return {
@@ -173,7 +184,12 @@ async function reviewTarget(
 			capped: true,
 			coverage,
 		};
-	}
+	};
+	const fixes =
+		capped && !options.record
+			? await cappedFixes(record, head, cwd)
+			: new Set<string>();
+	if (capped && fixes.size === 0) return cappedOutcome();
 	let held = new Map<string, string>();
 	// After a failed round the gate holds only what `holdsOnError` keeps, so the report and CI say the same.
 	const openAfterError = async () => {
@@ -199,23 +215,26 @@ async function reviewTarget(
 			);
 		const baseRef = await resolveBase(baseName, cwd);
 		mergeBase = await gitOut(["merge-base", baseRef, head], cwd);
-		held = await heldBack(record, head, mergeBase, config.review.skip, cwd);
-		if (mergeBase === head)
+		if (!capped)
+			held = await heldBack(record, head, mergeBase, config.review.skip, cwd);
+		if (!capped && mergeBase === head)
 			return skippedOutcome(
 				record,
 				file,
 				openNow(),
 				`No commits on ${branch} beyond ${baseName}, so there is nothing to review.`,
 			);
-		const plan = await planRound(record, {
-			head,
-			mergeBase,
-			full: options.full === true,
-			reach,
-			held,
-			cwd,
-			progress,
-		});
+		const plan = capped
+			? { from: mergeBase, scope: "verify" as const, recheckBefore: null }
+			: await planRound(record, {
+					head,
+					mergeBase,
+					full: options.full === true,
+					reach,
+					held,
+					cwd,
+					progress,
+				});
 		if (typeof plan === "string")
 			return skippedOutcome(record, file, openNow(), plan);
 		({ from, scope, recheckBefore } = plan);
@@ -238,7 +257,8 @@ async function reviewTarget(
 	const risk = classify(reviewed, config);
 	const effort =
 		options.effort ?? (risk.tier === "high" ? "deep" : config.review.effort);
-	const roundNumber = rounds + 1;
+	const roundNumber =
+		(record.rounds.findLast((round) => !round.error)?.n ?? 0) + 1;
 	const exclude = config.review.skip.map((glob) => `:(exclude,glob)${glob}`);
 	let diff = "";
 	let log = "";
@@ -283,11 +303,13 @@ async function reviewTarget(
 			.filter((finding) => finding.status === "fixed")
 			.map((finding) => finding.id),
 		spent: record.findings
-			.filter(
-				(finding) => held.has(finding.id) || judgedAt(record, finding, head),
+			.filter((finding) =>
+				capped
+					? !fixes.has(finding.id)
+					: held.has(finding.id) || judgedAt(record, finding, head),
 			)
 			.map((finding) => finding.id),
-		recheckFixes: scope === "diff" && roundNumber >= maxRounds,
+		recheckFixes: scope === "diff" && rounds + 1 >= maxRounds,
 	};
 
 	const round: Round = {
@@ -302,6 +324,7 @@ async function reviewTarget(
 		summary: "",
 		error: null,
 		verified: [],
+		...(capped && { verificationOnly: true as const }),
 	};
 	let agent: ReviewAgent;
 	try {
@@ -411,6 +434,7 @@ async function reviewTarget(
 			passed: open.length === 0,
 			file,
 			skipped: null,
+			coverage,
 			held: heldLines(),
 		};
 	} catch (error) {
@@ -452,6 +476,38 @@ function judgedAt(record: ReviewRecord, finding: ReviewFinding, head: string) {
 	);
 }
 
+function lastFindingCheck(record: ReviewRecord, finding: ReviewFinding) {
+	return record.rounds.findLast(
+		(round) =>
+			!round.error &&
+			(round.n === finding.round || round.verified?.includes(finding.id)),
+	);
+}
+
+async function cappedFixes(record: ReviewRecord, head: string, cwd: string) {
+	const fixes = await Promise.all(
+		blocking(record).map(async (finding) => {
+			if (!finding.file || (finding.verdicts ?? 0) >= maxVerdicts) return null;
+			const last = lastFindingCheck(record, finding);
+			if (!last || last.head === head) return null;
+			const change = await run(
+				[
+					"git",
+					"diff",
+					"--quiet",
+					last.head,
+					head,
+					"--",
+					`:(literal)${finding.file}`,
+				],
+				cwd,
+			);
+			return change.exitCode === 1 ? finding.id : null;
+		}),
+	);
+	return new Set(fixes.filter((id) => id !== null));
+}
+
 /**
  * Open findings the verifier may not judge at `head`, each with why. A verdict
  * on unchanged code is only a reroll of the model, so a finding is judged
@@ -485,11 +541,7 @@ async function heldBack(
 					);
 					return;
 				}
-				const last = record.rounds.findLast(
-					(round) =>
-						!round.error &&
-						(round.n === finding.round || round.verified?.includes(id)),
-				);
+				const last = lastFindingCheck(record, finding);
 				if (!last || last.head === head) return;
 				if ((await quiet(last.head, reviewed)).ok) {
 					held.set(

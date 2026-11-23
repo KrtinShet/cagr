@@ -122,7 +122,7 @@ examples:
 
 - **Effort** sets the agents. `quick`: one bug finder. `standard`: a bug finder and a security finder, then a verifier that drops what it cannot confirm. `deep`: three finders and three verifiers, keeping a finding when two agree. A high-risk change gets `deep` unless you pass `--effort`.
 - **Findings** are Important, Nit or Pre-existing. Style findings are dropped. Only Important ones hold the gate.
-- **Rounds**: after round 1, the reviewer checks the new commits and earlier findings. The default cap is 3 completed rounds per branch, even across rebases and full re-reviews. The gate names later unreviewed commits and still holds on open Important findings.
+- **Rounds**: after round 1, the reviewer checks the new commits and earlier findings. `[review] max_rounds` sets the cap per branch, even across rebases and full re-reviews. The gate names later unreviewed commits and still holds on open Important findings.
 - **Answers**: a finding that is wrong or intentional gets an answer instead of a fix: `cagr review answer f2 --wrong "the list is never empty here"`. A person reads every answer. `review stats` shows rounds to pass and how often findings were answered as wrong, which is the reviewer's noise.
 - **Evals**: put past bugs in `.cagr/review-evals/*.toml` (a commit range and where the bug was, or `clean = true`). `review eval` scores the reviewer and compares with the last run, so a change to the review guide or the model can be measured.
 - **Fails open**: when the reviewer cannot run, the round is recorded as an error, and the gate lets the PR through and tells the human it went out unreviewed.

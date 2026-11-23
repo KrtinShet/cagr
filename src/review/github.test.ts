@@ -14,6 +14,7 @@ import {
 	pullRequestFromEvent,
 } from "./github";
 import { finderSchema } from "./prompt";
+import { recordPath, writeRecord } from "./store";
 
 test("review state survives a round trip through a comment", () => {
 	const saved = record([round()], [finding()]);
@@ -32,13 +33,21 @@ test("the pull request comes from the GitHub event", async () => {
 				number: 7,
 				body: null,
 				base: { ref: "main" },
-				head: { sha: "abc" },
+				head: { sha: "abc", ref: "feat/x", repo: { full_name: "o/r" } },
 			},
 		}),
 	);
 	expect(
 		pullRequestFromEvent({ GITHUB_EVENT_PATH: path, GITHUB_REPOSITORY: "o/r" }),
-	).toEqual({ number: 7, repo: "o/r", base: "main", head: "abc", body: "" });
+	).toEqual({
+		number: 7,
+		repo: "o/r",
+		base: "main",
+		headBranch: "feat/x",
+		headRepo: "o/r",
+		head: "abc",
+		body: "",
+	});
 	expect(() => pullRequestFromEvent({})).toThrow("runs in GitHub Actions");
 });
 
@@ -47,6 +56,9 @@ function fakeGh(options: {
 	comments?: { id: number; body: string; login?: string }[];
 	resolved?: string[];
 	threadAuthor?: string;
+	status?: string;
+	earlier?: number[];
+	earlierState?: string;
 	rejectInline?: boolean;
 	rejectAll?: boolean;
 	rejectState?: boolean;
@@ -78,6 +90,24 @@ function fakeGh(options: {
 					},
 				},
 			});
+		if (args.includes("repos/o/r/pulls?per_page=100"))
+			return [
+				...(args.includes("head=o:feat/x") && args.includes("state=all")
+					? (options.earlier ?? [])
+					: []),
+				3,
+			].join("\n");
+		if (args.some((arg) => arg.includes("/commits/")))
+			return options.status ? `cagr/review\t${options.status}` : "";
+		if (args.some((arg) => arg.endsWith("/permission"))) return "read";
+		if (args.includes("repos/o/r/issues/2/comments"))
+			return options.earlierState
+				? JSON.stringify({
+						id: 100,
+						body: options.earlierState,
+						login: "github-actions[bot]",
+					})
+				: "";
 		if (!args.includes("-X"))
 			return (options.comments ?? [])
 				.map((comment) =>
@@ -119,7 +149,11 @@ async function prRepo(headSha?: string) {
 				number: 3,
 				body: "",
 				base: { ref: "main" },
-				head: { sha: headSha ?? head },
+				head: {
+					sha: headSha ?? head,
+					ref: "feat/x",
+					repo: { full_name: "o/r" },
+				},
 			},
 		}),
 	);
@@ -255,7 +289,15 @@ test("CI at the cap reports unreviewed commits and passes when the last Importan
 			[finding()],
 		),
 	);
-	const pr = { number: 3, repo: "o/r", base: "main", head: later, body: "" };
+	const pr = {
+		number: 3,
+		repo: "o/r",
+		base: "main",
+		headBranch: "feat/x",
+		headRepo: "o/r",
+		head: later,
+		body: "",
+	};
 	const agent: ReviewAgent = {
 		name: "unexpected",
 		ask: async () => {
@@ -275,10 +317,75 @@ test("CI at the cap reports unreviewed commits and passes when the last Importan
 		});
 		expect(result.ok).toBe(resolved.length > 0);
 		expect(result.report).toContain(
-			"Reviewed through round 3; 1 later commit was not reviewed.",
+			"Reviewed through round 3 (cap 3); 1 later commit was not reviewed.",
 		);
 		expect(
 			posts.some((post) => post.args.some((arg) => arg.endsWith("/reviews"))),
+		).toBe(false);
+	}
+});
+
+test("CI combines local, earlier PR, and current PR rounds for the same branch", async () => {
+	const { repo, config, env, head } = await prRepo();
+	writeRecord(
+		recordPath(join(repo.root, ".git"), "feat/x"),
+		record([round({ head })]),
+	);
+	const state = encodeState(record([round({ head })], [finding()], "pr-3"));
+	const earlierState = encodeState(record([round({ head })], [], "pr-2"));
+	const later = await repo.commit("feat: more", { "src/b.ts": "more\n" });
+	const pr = { ...pullRequestFromEvent(env), head: later };
+	const { gh, posts } = fakeGh({
+		comments: [{ id: 99, body: state }],
+		earlier: [2],
+		earlierState,
+	});
+	const outcome = await ciReview(config, repo.root, {
+		gh,
+		local: { pr, login: "owner" },
+		agent: {
+			name: "unexpected",
+			async ask() {
+				throw new Error("All three branch rounds have been used");
+			},
+		},
+	});
+	expect(outcome.ok).toBe(false);
+	expect(outcome.report).toContain(
+		"CI is judging the gate from existing findings",
+	);
+	expect(outcome.report).toContain("Crash on empty list");
+	expect(
+		posts.some(({ args }) => args.some((arg) => arg.endsWith("/reviews"))),
+	).toBe(false);
+});
+
+test("a successful commit status skips finder review but cannot hide an open CI finding", async () => {
+	const { repo, config, env, head } = await prRepo();
+	const state = encodeState(record([round({ head })], [finding()], "pr-3"));
+	const agent: ReviewAgent = {
+		name: "unexpected",
+		async ask() {
+			throw new Error("Gate judgement needs no reviewer");
+		},
+	};
+	for (const [comments, resolved, ok] of [
+		[[], [], true],
+		[[{ id: 99, body: state }], [], false],
+		[[{ id: 99, body: state }], ["f1"], true],
+	] as const) {
+		const { gh, posts } = fakeGh({
+			status: "success",
+			comments: [...comments],
+			resolved: [...resolved],
+		});
+		const outcome = await ciReview(config, repo.root, { gh, env, agent });
+		expect(outcome.ok).toBe(ok);
+		expect(outcome.report).toContain(
+			comments.length ? "judged the gate" : "Skipping review",
+		);
+		expect(
+			posts.some(({ args }) => args.some((arg) => arg.endsWith("/reviews"))),
 		).toBe(false);
 	}
 });
@@ -414,7 +521,15 @@ test("a state comment GitHub will not take is reported, not thrown, and names fo
 
 test("local review trusts the signed-in account's state and resolutions", async () => {
 	const { repo, config, head } = await prRepo();
-	const pr = { number: 3, repo: "o/r", base: "main", head, body: "" };
+	const pr = {
+		number: 3,
+		repo: "o/r",
+		base: "main",
+		headBranch: "feat/x",
+		headRepo: "o/r",
+		head,
+		body: "",
+	};
 	const local = { pr, login: "OWNER" };
 	const first = fakeGh({});
 	await ciReview(config, repo.root, { gh: first.gh, local, agent: oneBug });

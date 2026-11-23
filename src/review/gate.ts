@@ -38,7 +38,7 @@ export const cappedNext =
 	'Fix only findings that break the intended case, answer the rest with `cagr review answer <id> --wrong|--intentional|--minor "<why>"`, then push.';
 
 export const cappedFix =
-	"A fix still needs verification. Ask a human to run the extra round if it is available.";
+	"Commit fixes and run `cagr review` to verify them without using a round.";
 
 export const answerHint = (id: string) =>
 	`If a finding is wrong or intentional, answer it instead: \`cagr review answer ${id} --wrong "<why>"\` (or --intentional, or --minor). A person reads every answer.`;
@@ -188,12 +188,19 @@ export async function unreviewedNotice(
 	record: ReviewRecord,
 	head: string,
 	cwd: string,
+	maxRounds: number,
 ): Promise<string | undefined> {
-	if (record.rounds.some((round) => !round.error && round.head === head))
+	if (
+		record.rounds.some(
+			(round) => !round.error && !round.verificationOnly && round.head === head,
+		)
+	)
 		return;
-	const last = record.rounds.findLast((round) => !round.error);
+	const last = record.rounds.findLast(
+		(round) => !round.error && !round.verificationOnly,
+	);
 	if (!last) return;
-	const prefix = `Reviewed through round ${last.n};`;
+	const prefix = `Reviewed through round ${last.n} (cap ${maxRounds});`;
 	const remoteBase = await run(
 		["git", "rev-parse", "--verify", "-q", `origin/${record.base}^{commit}`],
 		cwd,
@@ -227,7 +234,7 @@ export async function gateAtHead(
 	const [reach, coverage] = await Promise.all([
 		reachFrom(record, head, cwd),
 		record && head && completedRounds(record) >= config.review.max_rounds
-			? unreviewedNotice(record, head, cwd)
+			? unreviewedNotice(record, head, cwd, config.review.max_rounds)
 			: undefined,
 	]);
 	return gateResult(record, head, config, reach, coverage);

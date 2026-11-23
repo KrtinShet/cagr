@@ -225,7 +225,9 @@ export function verifierPrompt(
 		`You check other reviewers' findings on branch ${context.branch} (${context.from.slice(0, 12)}..${context.head.slice(0, 12)}), independently, in a fresh context. Do not change any file.`,
 		"",
 		context.scope === "verify"
-			? "This commit was already reviewed. Check the earlier findings below again at this commit. Return an empty candidates list."
+			? context.recheckBefore === null
+				? "Check only the earlier findings below at this commit. Return an empty candidates list."
+				: "This commit was already reviewed. Check the earlier findings below again at this commit. Return an empty candidates list."
 			: "For each candidate, read the code and decide whether it is real: the file and line exist at the reviewed commit and the failure happens as described. Speculative, style-only, and already-handled findings are not real. You may change the severity.",
 		...calibration,
 		...(previous.length > 0

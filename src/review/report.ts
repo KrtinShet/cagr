@@ -12,6 +12,7 @@ import type { ReviewOutcome } from "./review";
 import {
 	type AnswerKind,
 	blocking,
+	completedRounds,
 	type ReviewFinding,
 	type ReviewRecord,
 } from "./types";
@@ -50,7 +51,7 @@ export function reviewReport(
 		return `The reviewer could not run: ${round.error}\n\n${gate} Fix the reviewer and run \`cagr review\` again.\n\n${reviewPreparation}`;
 	}
 	const sections: string[] = [
-		`Round ${round?.n ?? 1}${round ? ` (${round.scope}, ${round.effort}, ${round.tier} risk, ${round.reviewer})` : ""}: ${round?.summary ?? ""}`,
+		`${round?.verificationOnly ? "Fix verification" : `Round ${round?.n ?? 1}`}${round ? ` (${round.scope}, ${round.effort}, ${round.tier} risk, ${round.reviewer})` : ""}: ${round?.summary ?? ""}`,
 	];
 	if (outcome.fixed.length > 0)
 		sections.push(
@@ -73,8 +74,12 @@ export function reviewReport(
 			`Still open from earlier rounds:\n${older.map(block).join("\n")}`,
 		);
 	if (outcome.held.length > 0) sections.push(outcome.held.join("\n"));
-	const capped = round && round.scope !== "scan" && round.n >= maxRounds;
+	const capped =
+		round &&
+		round.scope !== "scan" &&
+		completedRounds(outcome.record) >= maxRounds;
 	if (capped) sections.push(cappedReview(maxRounds));
+	if (outcome.coverage) sections.push(outcome.coverage);
 	if (open.length === 0)
 		sections.push(
 			"Passed. No Important finding is open. Push the reviewed commits, then open or mark the pull request ready.",
@@ -96,7 +101,7 @@ export function statusReport(
 		return `Not reviewed yet. ${runReview}`;
 	const last = record.rounds.at(-1);
 	const lines = [
-		`${record.branch}: ${record.rounds.length} round${record.rounds.length === 1 ? "" : "s"}, last at ${last?.head.slice(0, 7)}${last?.head === head ? " (the current commit)" : ", before your latest commit"}.`,
+		`${record.branch}: ${completedRounds(record)} round${completedRounds(record) === 1 ? "" : "s"}, last at ${last?.head.slice(0, 7)}${last?.head === head ? " (the current commit)" : ", before your latest commit"}.`,
 	];
 	for (const status of ["open", "answered", "fixed"] as const) {
 		const findings = record.findings.filter(
@@ -221,7 +226,7 @@ export async function reviewStats(
 	const passedRounds: number[] = [];
 	for (const record of ran) {
 		if (blocking(record).length > 0) continue;
-		passedRounds.push(record.rounds.filter((round) => !round.error).length);
+		passedRounds.push(completedRounds(record));
 	}
 	const findings = records.flatMap((record) => record.findings);
 	const share = (count: number) =>

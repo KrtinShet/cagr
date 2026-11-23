@@ -263,7 +263,7 @@ test("after the cap the pushed status counts unreviewed commits and fails only o
 	});
 	const later = await repo.commit("feat: more", { "src/c.ts": "more\n" });
 	const coverage =
-		"Reviewed through round 3; 2 later commits were not reviewed.";
+		"Reviewed through round 3 (cap 3); 2 later commits were not reviewed.";
 	expect(await status(later)).toEqual({
 		state: "failure",
 		description: `${coverage} 1 Important finding open.`,
@@ -278,7 +278,7 @@ test("after the cap the pushed status counts unreviewed commits and fails only o
 	});
 	expect((await status(second)).state).toBe("failure");
 	expect((await status(extra)).description).toBe(
-		"Reviewed through round 3; 1 later commit was not reviewed.",
+		"Reviewed through round 3 (cap 3); 1 later commit was not reviewed.",
 	);
 });
 

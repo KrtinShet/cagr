@@ -1,10 +1,20 @@
 import { readFileSync } from "node:fs";
 import type { Config } from "../config/schema";
+import { gitContext } from "../git";
 import { run } from "../run";
 import type { ReviewAgent } from "./agent";
+import { reachFrom, unresolved, unreviewedNotice } from "./gate";
 import { reviewReport } from "./report";
 import { ReviewInputError, type ReviewOutcome, review } from "./review";
-import { emptyRecord, type ReviewFinding, type ReviewRecord } from "./types";
+import { reviewContext, successfulStatuses } from "./status";
+import { readBranchRecord, recordPath } from "./store";
+import {
+	blocking,
+	completedRounds,
+	emptyRecord,
+	type ReviewFinding,
+	type ReviewRecord,
+} from "./types";
 
 /** Runs `gh` with args, optional stdin, and returns stdout. Injected in tests. */
 export type Gh = (args: string[], stdin?: string) => Promise<string>;
@@ -48,6 +58,8 @@ export type PullRequest = {
 	repo: string;
 	base: string;
 	head: string;
+	headBranch: string;
+	headRepo: string;
 	body: string;
 };
 
@@ -64,7 +76,7 @@ export function pullRequestFromEvent(
 			number: number;
 			body: string | null;
 			base: { ref: string };
-			head: { sha: string };
+			head: { sha: string; ref: string; repo: { full_name: string } | null };
 		};
 	};
 	if (!event.pull_request)
@@ -76,6 +88,8 @@ export function pullRequestFromEvent(
 		repo: env.GITHUB_REPOSITORY,
 		base: event.pull_request.base.ref,
 		head: event.pull_request.head.sha,
+		headBranch: event.pull_request.head.ref,
+		headRepo: event.pull_request.head.repo?.full_name ?? "",
 		body: event.pull_request.body ?? "",
 	};
 }
@@ -86,12 +100,16 @@ type Comment = { id: number; body: string; login: string };
 export const isWorkflowBot = (login: string | null | undefined) =>
 	login?.replace(/\[bot\]$/, "") === "github-actions";
 
-// Anyone can post a comment that carries the marker.
-async function stateComment(
+function sameAuthor(left: string | null | undefined, right: string) {
+	if (isWorkflowBot(right)) return isWorkflowBot(left);
+	return left?.toLowerCase() === right.toLowerCase();
+}
+
+async function stateComments(
 	gh: Gh,
-	pr: PullRequest,
-	isReviewer: (login: string | null | undefined) => boolean,
-): Promise<Comment | null> {
+	pr: Pick<PullRequest, "repo" | "number">,
+	login?: string,
+) {
 	const out = await gh([
 		"api",
 		"--paginate",
@@ -99,15 +117,72 @@ async function stateComment(
 		"--jq",
 		".[] | {id, body, login: .user.login}",
 	]);
-	const comments = out
-		.split("\n")
-		.filter(Boolean)
-		.map((line) => JSON.parse(line) as Comment);
+	const states = new Map<string, { comment: Comment; record: ReviewRecord }>();
+	for (const line of out.split("\n").filter(Boolean)) {
+		const comment = JSON.parse(line) as Comment;
+		const record = decodeState(comment.body);
+		if (record && comment.login)
+			states.set(comment.login.toLowerCase(), { comment, record });
+	}
 	return (
-		comments.findLast(
-			(comment) => isReviewer(comment.login) && stateLine.test(comment.body),
-		) ?? null
-	);
+		await Promise.all(
+			[...states.values()].map(async (state) => {
+				const author = state.comment.login;
+				if (isWorkflowBot(author) || (login && sameAuthor(author, login)))
+					return state;
+				const permission = (
+					await gh([
+						"api",
+						`repos/${pr.repo}/collaborators/${encodeURIComponent(author)}/permission`,
+						"--jq",
+						".permission",
+					]).catch((error: Error) => {
+						if (/HTTP 404/.test(error.message)) return "";
+						throw error;
+					})
+				).trim();
+				return ["admin", "maintain", "write"].includes(permission)
+					? state
+					: null;
+			}),
+		)
+	).filter((state) => state !== null);
+}
+
+export async function hasOpenCiFinding(gh: Gh, repo: string, number: number) {
+	const states = await stateComments(gh, { repo, number });
+	return states.some(({ record }) => blocking(record).length > 0);
+}
+
+async function earlierPrRecords(gh: Gh, pr: PullRequest, login?: string) {
+	if (!pr.headRepo || !pr.headBranch) return [];
+	const owner = pr.headRepo.split("/")[0];
+	const out = await gh([
+		"api",
+		"--method",
+		"GET",
+		"--paginate",
+		`repos/${pr.repo}/pulls?per_page=100`,
+		"-f",
+		"state=all",
+		"-f",
+		`head=${owner}:${pr.headBranch}`,
+		"--jq",
+		".[] | .number",
+	]);
+	const earlier = out
+		.split("\n")
+		.map(Number)
+		.filter((number) => number > 0 && number !== pr.number);
+	// Read one PR at a time to avoid a burst of requests on long-lived branches.
+	const records: ReviewRecord[] = [];
+	for (const number of earlier)
+		records.push(
+			...(await stateComments(gh, { repo: pr.repo, number }, login)).map(
+				({ record }) => record,
+			),
+		);
+	return records;
 }
 
 const resolvedQuery = `query($owner: String!, $name: String!, $number: Int!) {
@@ -229,31 +304,15 @@ async function saveState(
 
 const readOnlyToken = /\b403\b|Resource not accessible by integration/i;
 
-/** One CI review round on a pull request. Fails while an Important finding is open. */
-export async function ciReview(
-	config: Config,
-	cwd: string,
-	options: {
-		gh?: Gh;
-		agent?: ReviewAgent;
-		env?: Record<string, string | undefined>;
-		progress?: (line: string) => void;
-		local?: { pr: PullRequest; login: string };
-	} = {},
+async function applyThreadAnswers(
+	gh: Gh,
+	pr: PullRequest,
+	record: ReviewRecord,
+	author: string,
 ) {
-	const gh = options.gh ?? ghCli;
-	const pr = options.local?.pr ?? pullRequestFromEvent(options.env);
-	const login = options.local?.login.toLowerCase();
-	const isReviewer = login
-		? (author: string | null | undefined) => author?.toLowerCase() === login
-		: isWorkflowBot;
-	const existing = await stateComment(gh, pr, isReviewer);
-	const record =
-		(existing && decodeState(existing.body)) ??
-		emptyRecord(`pr-${pr.number}`, pr.base);
-	for (const [id, who] of await resolvedFindings(gh, pr, isReviewer).catch(
-		() => new Map<string, string>(),
-	)) {
+	for (const [id, who] of await resolvedFindings(gh, pr, (login) =>
+		sameAuthor(login, author),
+	).catch(() => new Map<string, string>())) {
 		const finding = record.findings.find((entry) => entry.id === id);
 		if (finding?.status === "open") {
 			finding.status = "answered";
@@ -263,6 +322,28 @@ export async function ciReview(
 			};
 		}
 	}
+}
+
+/** Judge existing findings, and run a CI round only while the branch has budget. */
+export async function ciReview(
+	config: Config,
+	cwd: string,
+	options: {
+		gh?: Gh;
+		agent?: ReviewAgent;
+		env?: Record<string, string | undefined>;
+		progress?: (line: string) => void;
+		local?: {
+			pr: PullRequest;
+			login: string;
+			sourceRoot?: string;
+			statusPassed?: boolean;
+		};
+	} = {},
+) {
+	const gh = options.gh ?? ghCli;
+	const pr = options.local?.pr ?? pullRequestFromEvent(options.env);
+	const login = options.local?.login ?? "github-actions[bot]";
 	const checkedOut = (
 		await run(["git", "rev-parse", "HEAD"], cwd)
 	).stdout.trim();
@@ -270,13 +351,97 @@ export async function ciReview(
 		throw new ReviewInputError(
 			`The checkout is ${checkedOut.slice(0, 7)}, not the pull request's head ${pr.head.slice(0, 7)}, so the review would cover the wrong commit. Check out the head: in actions/checkout, set \`ref: \${{ github.event.pull_request.head.sha }}\`, or run \`cagr sync\` to rewrite the workflow.`,
 		);
+	const [states, statusPassed] = await Promise.all([
+		stateComments(gh, pr, login),
+		options.local
+			? options.local.statusPassed === true
+			: successfulStatuses(gh, pr.repo, pr.head)
+					.then((passed) => passed.has(reviewContext))
+					.catch(() => false),
+	]);
+	if (
+		statusPassed &&
+		states.every(({ record }) => blocking(record).length === 0)
+	)
+		return {
+			ok: true,
+			complete: true,
+			report:
+				"Skipping review: cagr/review passed and no CI Important finding is open.",
+			coverage: undefined,
+		};
+
+	const own = states.find(({ comment }) => sameAuthor(comment.login, login));
+	const existing = own?.comment ?? null;
+	const record = own?.record ?? emptyRecord(`pr-${pr.number}`, pr.base);
+	const others = states.filter((state) => state !== own);
+	for (const state of states)
+		if (blocking(state.record).length > 0)
+			await applyThreadAnswers(gh, pr, state.record, state.comment.login);
+
+	const otherOpen = (
+		await Promise.all(
+			others.map(async ({ record }) =>
+				unresolved(record, pr.head, await reachFrom(record, pr.head, cwd)),
+			),
+		)
+	).flat();
+	if (statusPassed) {
+		const open = [
+			...unresolved(record, pr.head, await reachFrom(record, pr.head, cwd)),
+			...otherOpen,
+		];
+		if (existing) await saveState(gh, pr, existing, record, open);
+		const detail = open.map(({ id, title }) => `${id} ${title}`).join(", ");
+		return {
+			ok: open.length === 0,
+			complete: true,
+			coverage: undefined,
+			report: `CI judged the gate from existing findings. ${detail ? `Open Important findings: ${detail}` : "No Important finding is open."}`,
+		};
+	}
+
+	const { commonDir } = await gitContext(options.local?.sourceRoot ?? cwd);
+	const localRecord =
+		commonDir &&
+		pr.headBranch &&
+		pr.headRepo.toLowerCase() === pr.repo.toLowerCase()
+			? readBranchRecord(recordPath(commonDir, pr.headBranch), pr.headBranch)
+			: null;
+	const earlier = await earlierPrRecords(gh, pr, login);
+	const priorRounds = [
+		...earlier,
+		...others.map(({ record }) => record),
+		...(localRecord ? [localRecord] : []),
+	].reduce((total, history) => total + completedRounds(history), 0);
 	const outcome = await review(config, {
 		cwd,
 		base: pr.base,
 		record,
+		priorRounds,
 		agent: options.agent,
 		progress: options.progress,
 	});
+	const localOpen =
+		outcome.capped && localRecord
+			? unresolved(
+					localRecord,
+					pr.head,
+					await reachFrom(localRecord, pr.head, cwd),
+				)
+			: [];
+	const priorReview = localRecord ?? others[0]?.record ?? earlier[0];
+	const coverage =
+		outcome.coverage ??
+		(outcome.capped && priorReview
+			? await unreviewedNotice(
+					priorReview,
+					pr.head,
+					cwd,
+					config.review.max_rounds,
+				)
+			: undefined);
+	const externalOpen = [...otherOpen, ...localOpen];
 	let posted = "";
 	if (!outcome.skipped)
 		await postReview(gh, pr, outcome, config.review.max_rounds).catch(
@@ -294,12 +459,18 @@ export async function ciReview(
 					: "\nThe token cannot write to this pull request. GitHub gives pull requests from forks a read-only token and no secrets, so this job cannot review them. Review fork pull requests by hand, or run `cagr review` on a branch in this repo.";
 		},
 	);
-	const report = `${reviewReport(outcome, config.review.max_rounds)}${posted}${saved}`;
+	const external = externalOpen.length
+		? `\n\nImportant findings open in other branch review records: ${externalOpen.map(({ id, title }) => `${id} ${title}`).join(", ")}`
+		: "";
+	const coverageNote = coverage && !outcome.coverage ? `\n\n${coverage}` : "";
+	const report = `${reviewReport(outcome, config.review.max_rounds)}${coverageNote}${external}${posted}${saved}`;
 	// Fail open: a reviewer that could not run does not hold the pull request, but findings not closed at this head still do.
 	return {
 		complete: !outcome.round?.error && posted === "" && saved === "",
-		ok: outcome.round?.error ? outcome.open.length === 0 : outcome.passed,
-		coverage: outcome.coverage,
+		ok:
+			externalOpen.length === 0 &&
+			(outcome.round?.error ? outcome.open.length === 0 : outcome.passed),
+		coverage,
 		report,
 	};
 }

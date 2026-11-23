@@ -15,7 +15,7 @@ import { ReviewInputError, resolveBase, review } from "./review";
 import { sendReviewStatus } from "./status";
 import {
 	allRecords,
-	readRecord,
+	readBranchRecord,
 	recordPath,
 	withReviewLock,
 	writeRecord,
@@ -93,7 +93,7 @@ async function branchRecord(cwd: string) {
 	if (!git.commonDir || !git.branch)
 		throw new ReviewInputError("Run this on a branch inside a git repo.");
 	const file = recordPath(git.commonDir, git.branch);
-	return { git, file };
+	return { git, file, branch: git.branch };
 }
 
 /** Tells GitHub the review's state when [review] status is on. Never fails the command. */
@@ -123,9 +123,9 @@ export async function reviewCommand(
 				`Usage: cagr review answer <id> --wrong|--intentional|--minor "<why>"`,
 			);
 		const reason = args[args.indexOf(`--${kind}`) + 1] ?? "";
-		const { file } = await branchRecord(cwd);
+		const { file, branch } = await branchRecord(cwd);
 		await withReviewLock(file, () => {
-			const record = readRecord(file);
+			const record = readBranchRecord(file, branch);
 			const finding = answerFinding(record, id, kind, reason);
 			if (record) writeRecord(file, record);
 			console.log(
@@ -136,8 +136,8 @@ export async function reviewCommand(
 		return 0;
 	}
 	if (sub === "status") {
-		const { git, file } = await branchRecord(cwd);
-		console.log(statusReport(readRecord(file), git.head));
+		const { git, file, branch } = await branchRecord(cwd);
+		console.log(statusReport(readBranchRecord(file, branch), git.head));
 		return 0;
 	}
 	if (sub === "stats") {
