@@ -599,8 +599,14 @@ test("Windows allows Bash without rewriting and runs explicit wrappers directly"
 		"-e",
 		`
 		Object.defineProperty(process, "platform", { value: "win32" });
+		const { tryLock } = await import(${JSON.stringify(resolve(import.meta.dir, "locks.ts"))});
 		const { runHook } = await import(${JSON.stringify(resolve(import.meta.dir, "../hook/run-hook.ts"))});
 		const { runCli } = await import(${JSON.stringify(cliPath)});
+		try {
+			tryLock("guard.lock");
+		} catch (error) {
+			console.error(error.message);
+		}
 		const output = await runHook("codex", "command.before", JSON.stringify({
 			cwd: process.cwd(), tool_input: { command: "bun run verify" }
 		}), process.cwd());
@@ -609,6 +615,10 @@ test("Windows allows Bash without rewriting and runs explicit wrappers directly"
 	`,
 	]);
 	const { code, output } = await proc.finished();
+	expect(output).toContain(
+		"Memory admission locks are available on macOS and Linux",
+	);
+	expect(await Bun.file(join(cwd, "guard.lock")).exists()).toBe(false);
 	expect(output).toContain('hook ""');
 	expect(output).toContain("command ran");
 	expect(code).toBe(42);

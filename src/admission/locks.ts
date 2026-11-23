@@ -1,5 +1,6 @@
 import { dlopen, FFIType, read } from "bun:ffi";
 import { closeSync, openSync } from "node:fs";
+import { supportsAdmission } from "./pressure";
 
 const macSymbols = {
 	flock: { args: [FFIType.i32, FFIType.i32], returns: FFIType.i32 },
@@ -8,6 +9,8 @@ const macSymbols = {
 let mac: ReturnType<typeof dlopen<typeof macSymbols>> | undefined;
 
 export function tryLock(path: string): number | null {
+	if (!supportsAdmission)
+		throw new Error("Memory admission locks are available on macOS and Linux.");
 	const fd = openSync(path, "a+", 0o600);
 	let locked = false;
 	try {
