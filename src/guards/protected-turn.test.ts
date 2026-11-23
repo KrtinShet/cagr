@@ -357,6 +357,7 @@ test.each([
 			`restore --source=${repo.base} --staged --worktree -- AGENTS.md`,
 		);
 	},
+	repoTestTimeout,
 );
 
 test.each([">&", "&>", "&>>", ">|", "2>"])(
@@ -374,23 +375,28 @@ test.each([">&", "&>", "&>>", ">|", "2>"])(
 			),
 		});
 	},
+	repoTestTimeout,
 );
 
-test("tee resolves only the first 64 literal write targets", async () => {
-	const repo = await linkedSession();
-	const targets = Array.from({ length: 64 }, (_, i) => `out-${i}`);
-	const path = join(repo.root, "AGENTS.md");
-	const command = `printf 'new\\n' | tee ${targets.join(" ")} ${shellQuote(path)}`;
-	await repo.write("AGENTS.md", "# Owner's working copy\n");
-	await Bun.sleep(20);
-	const notice = `${path}: changed before this turn or unknown; not restored`;
-	await repo.before(command);
-	expect(JSON.parse(await repo.hook("turn.end", undefined, repo.root))).toEqual(
-		{
+test(
+	"tee resolves only the first 64 literal write targets",
+	async () => {
+		const repo = await linkedSession();
+		const targets = Array.from({ length: 64 }, (_, i) => `out-${i}`);
+		const path = join(repo.root, "AGENTS.md");
+		const command = `printf 'new\\n' | tee ${targets.join(" ")} ${shellQuote(path)}`;
+		await repo.write("AGENTS.md", "# Owner's working copy\n");
+		await Bun.sleep(20);
+		const notice = `${path}: changed before this turn or unknown; not restored`;
+		await repo.before(command);
+		expect(
+			JSON.parse(await repo.hook("turn.end", undefined, repo.root)),
+		).toEqual({
 			systemMessage: notice,
-		},
-	);
-});
+		});
+	},
+	repoTestTimeout,
+);
 
 test("a recent shell write in the main checkout blocks after capture fails and older changes are reported once", async () => {
 	const repo = await linkedSession();
@@ -510,17 +516,23 @@ test("turn end reports older changes in its checkout even when no snapshot was t
 	expect(await repo.stop()).toBe("");
 });
 
-test("a different staged copy gets another notice even with the same unstaged bytes", async () => {
-	const repo = await setup({ "biome.json": "{}\n" });
-	const work = '{"lineWidth": 90}\n';
-	for (const width of [80, 100]) {
-		await repo.write("biome.json", `{"lineWidth": ${width}}\n`);
-		await repo.git("add", "biome.json");
-		await repo.write("biome.json", work);
-		expect(JSON.parse(await repo.stop()).systemMessage).toContain("biome.json");
-		expect(await repo.stop()).toBe("");
-	}
-});
+test(
+	"a different staged copy gets another notice even with the same unstaged bytes",
+	async () => {
+		const repo = await setup({ "biome.json": "{}\n" });
+		const work = '{"lineWidth": 90}\n';
+		for (const width of [80, 100]) {
+			await repo.write("biome.json", `{"lineWidth": ${width}}\n`);
+			await repo.git("add", "biome.json");
+			await repo.write("biome.json", work);
+			expect(JSON.parse(await repo.stop()).systemMessage).toContain(
+				"biome.json",
+			);
+			expect(await repo.stop()).toBe("");
+		}
+	},
+	repoTestTimeout,
+);
 
 test("turn end gives plain allow for old untracked files and a staged copy matching upstream", async () => {
 	const repo = await setup({ "biome.json": "{}\n" });
@@ -628,70 +640,91 @@ test.each(["LF", "CRLF"])(
 			),
 		});
 	},
+	repoTestTimeout,
 );
 
-test("restoring the verified CRLF starting copy after status times out allows stop", async () => {
-	const repo = await linkedSession("CRLF");
-	const staged = "lockfileVersion: '9.0'\r\n# Owner staged this\r\n";
-	await repo.write("pnpm-lock.yaml", staged);
-	await repo.git("add", "pnpm-lock.yaml");
-	await withSlowGitStatus(repo, `${repo.main} diff`);
-	await repo.write("pnpm-lock.yaml", "# Temporary turn edit\r\n");
-	await repo.git("restore", "--worktree", "--", "pnpm-lock.yaml");
-	expect(await Bun.file(join(repo.root, "pnpm-lock.yaml")).text()).toBe(staged);
-	expect(JSON.parse(await repo.stop())).toEqual({
-		systemMessage: `${join(repo.root, "pnpm-lock.yaml")}: changed before this turn or unknown; not restored`,
-	});
-});
+test(
+	"restoring the verified CRLF starting copy after status times out allows stop",
+	async () => {
+		const repo = await linkedSession("CRLF");
+		const staged = "lockfileVersion: '9.0'\r\n# Owner staged this\r\n";
+		await repo.write("pnpm-lock.yaml", staged);
+		await repo.git("add", "pnpm-lock.yaml");
+		await withSlowGitStatus(repo, `${repo.main} diff`);
+		await repo.write("pnpm-lock.yaml", "# Temporary turn edit\r\n");
+		await repo.git("restore", "--worktree", "--", "pnpm-lock.yaml");
+		expect(await Bun.file(join(repo.root, "pnpm-lock.yaml")).text()).toBe(
+			staged,
+		);
+		expect(JSON.parse(await repo.stop())).toEqual({
+			systemMessage: `${join(repo.root, "pnpm-lock.yaml")}: changed before this turn or unknown; not restored`,
+		});
+	},
+	repoTestTimeout,
+);
 
-test("restoring over a captured lockfile copy points to its backup", async () => {
-	const repo = await linkedSession();
-	await repo.git("switch", "--detach");
-	await repo.commit("chore: stage a version from main", {
-		"pnpm-lock.yaml": "lockfileVersion: '9.0'\n# Staged\n",
-	});
-	await repo.git("update-ref", "refs/remotes/origin/main", "HEAD");
-	await repo.git("reset", "--soft", repo.base);
-	await repo.write(
-		"pnpm-lock.yaml",
-		"lockfileVersion: '9.0'\n# Owner's copy\n",
-	);
-	expect(await repo.before(`${repo.main} diff`)).toBe("");
-	await repo.git("restore", "--worktree", "--", "pnpm-lock.yaml");
-	expect(JSON.parse(await repo.stop())).toMatchObject({
-		decision: "block",
-		reason: expect.stringContaining("Restore the prior working copy with `cp"),
-	});
-});
+test(
+	"restoring over a captured lockfile copy points to its backup",
+	async () => {
+		const repo = await linkedSession();
+		await repo.git("switch", "--detach");
+		await repo.commit("chore: stage a version from main", {
+			"pnpm-lock.yaml": "lockfileVersion: '9.0'\n# Staged\n",
+		});
+		await repo.git("update-ref", "refs/remotes/origin/main", "HEAD");
+		await repo.git("reset", "--soft", repo.base);
+		await repo.write(
+			"pnpm-lock.yaml",
+			"lockfileVersion: '9.0'\n# Owner's copy\n",
+		);
+		expect(await repo.before(`${repo.main} diff`)).toBe("");
+		await repo.git("restore", "--worktree", "--", "pnpm-lock.yaml");
+		expect(JSON.parse(await repo.stop())).toMatchObject({
+			decision: "block",
+			reason: expect.stringContaining(
+				"Restore the prior working copy with `cp",
+			),
+		});
+	},
+	repoTestTimeout,
+);
 
-test("an untouched staged lockfile gets its notice once after status times out", async () => {
-	const repo = await linkedSession();
-	await repo.write(
-		"pnpm-lock.yaml",
-		"lockfileVersion: '9.0'\n# Owner staged this\n",
-	);
-	await repo.git("add", "pnpm-lock.yaml");
-	await Bun.sleep(20);
-	await withSlowGitStatus(repo, `${repo.main} diff`);
-	expect(JSON.parse(await repo.stop())).toEqual({
-		systemMessage: `${join(repo.root, "pnpm-lock.yaml")}: changed before this turn or unknown; not restored`,
-	});
-	expect(await repo.hook("turn.end", undefined, repo.root)).toBe("");
-});
+test(
+	"an untouched staged lockfile gets its notice once after status times out",
+	async () => {
+		const repo = await linkedSession();
+		await repo.write(
+			"pnpm-lock.yaml",
+			"lockfileVersion: '9.0'\n# Owner staged this\n",
+		);
+		await repo.git("add", "pnpm-lock.yaml");
+		await Bun.sleep(20);
+		await withSlowGitStatus(repo, `${repo.main} diff`);
+		expect(JSON.parse(await repo.stop())).toEqual({
+			systemMessage: `${join(repo.root, "pnpm-lock.yaml")}: changed before this turn or unknown; not restored`,
+		});
+		expect(await repo.hook("turn.end", undefined, repo.root)).toBe("");
+	},
+	repoTestTimeout,
+);
 
-test("changing a pre-staged lockfile after status times out blocks", async () => {
-	const repo = await linkedSession();
-	const staged = "lockfileVersion: '9.0'\n# Owner staged this\n";
-	await repo.write("pnpm-lock.yaml", staged);
-	await repo.git("add", "pnpm-lock.yaml");
-	await withSlowGitStatus(repo, `${repo.main} diff`);
-	await repo.write("pnpm-lock.yaml", `${staged}# New staged edit\n`);
-	await repo.git("add", "pnpm-lock.yaml");
-	expect(JSON.parse(await repo.stop())).toMatchObject({
-		decision: "block",
-		reason: expect.stringContaining("pnpm-lock.yaml"),
-	});
-});
+test(
+	"changing a pre-staged lockfile after status times out blocks",
+	async () => {
+		const repo = await linkedSession();
+		const staged = "lockfileVersion: '9.0'\n# Owner staged this\n";
+		await repo.write("pnpm-lock.yaml", staged);
+		await repo.git("add", "pnpm-lock.yaml");
+		await withSlowGitStatus(repo, `${repo.main} diff`);
+		await repo.write("pnpm-lock.yaml", `${staged}# New staged edit\n`);
+		await repo.git("add", "pnpm-lock.yaml");
+		expect(JSON.parse(await repo.stop())).toMatchObject({
+			decision: "block",
+			reason: expect.stringContaining("pnpm-lock.yaml"),
+		});
+	},
+	repoTestTimeout,
+);
 
 test("a Stop that fails open clears the baseline before the next turn", async () => {
 	const repo = await linkedSession();
@@ -1004,25 +1037,29 @@ async function withEnv(
 	}
 }
 
-test("a snapshot that runs out of its budget gives the notice", async () => {
-	const repo = await setup();
-	const budget = snapshotBudget.commandMs;
-	snapshotBudget.commandMs = 0;
-	try {
-		expect(
-			JSON.parse(await repo.before("cat README.md")).systemMessage,
-		).toContain("protected files");
-	} finally {
-		snapshotBudget.commandMs = budget;
-	}
-	await repo.write("cagr.toml", `${policy}# Shell change\n`);
-	expect(JSON.parse(await repo.stop())).toMatchObject({
-		decision: "block",
-		reason: expect.stringContaining(
-			"Review changes against the current commit",
-		),
-	});
-});
+test(
+	"a snapshot that runs out of its budget gives the notice",
+	async () => {
+		const repo = await setup();
+		const budget = snapshotBudget.commandMs;
+		snapshotBudget.commandMs = 0;
+		try {
+			expect(
+				JSON.parse(await repo.before("cat README.md")).systemMessage,
+			).toContain("protected files");
+		} finally {
+			snapshotBudget.commandMs = budget;
+		}
+		await repo.write("cagr.toml", `${policy}# Shell change\n`);
+		expect(JSON.parse(await repo.stop())).toMatchObject({
+			decision: "block",
+			reason: expect.stringContaining(
+				"Review changes against the current commit",
+			),
+		});
+	},
+	repoTestTimeout,
+);
 
 for (const manager of ["bun", "pnpm", "npm"] as const)
 	test.skipIf(missing(manager))(
