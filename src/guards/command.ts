@@ -1,5 +1,11 @@
 import { reservationEnv } from "../admission/run";
 import type { Config } from "../config/schema";
+import {
+	allowLeaseBreak,
+	leasePush,
+	serialRef,
+	useLeaseCommand,
+} from "../leases/refs";
 import { extraReviewEnv } from "../review/types";
 import {
 	commandsWithRedirections,
@@ -138,6 +144,16 @@ function simpleCommandFinding(
 			id: "gate-edit-env",
 			reason: `${reservationEnv} is for humans only. Remove the assignment and let cagr set it when it admits the command.`,
 		};
+	if (assigns(allowLeaseBreak))
+		return {
+			id: "lease-break-env",
+			reason: `${allowLeaseBreak} is for humans only. Run cagr lease list to check the holder and wait, or ask a human to intervene.`,
+		};
+	if (assigns(leasePush))
+		return {
+			id: "lease-ref",
+			reason: `${leasePush} is for humans only. ${useLeaseCommand}`,
+		};
 	const program = programWords(words);
 	const manager = packageManagerFinding(program, config);
 	if (manager) return manager;
@@ -155,15 +171,38 @@ function gitFinding(
 ): Finding | null {
 	const skips = config.git.block_hook_skips;
 	let index = 0;
+	let serialPushConfig = false;
 	while (index < args.length && (args[index] as string).startsWith("-")) {
 		const option = args[index] as string;
 		const value = gitOptionsWithValue.has(option) ? args[index + 1] : undefined;
 		if (skips && /core\.hookspath/i.test(`${option} ${value ?? ""}`))
 			return { id: "hook-skip", reason: commandReasons.hooksPath() };
+		const refspec = (
+			option === "-c"
+				? value
+				: option.startsWith("-c")
+					? option.slice(2)
+					: undefined
+		)?.match(/^remote\..+\.push=(.*)$/i)?.[1];
+		if (refspec && touchesSerialRefs(refspec)) serialPushConfig = true;
 		index += value === undefined ? 1 : 2;
 	}
 	const subcommand = args[index];
 	const rest = args.slice(index + 1);
+	if (
+		((subcommand === "push" || subcommand === "update-ref") &&
+			rest.some(touchesSerialRefs)) ||
+		(subcommand === "update-ref" &&
+			rest.some((arg) => arg.startsWith("--s") && "--stdin".startsWith(arg))) ||
+		(subcommand === "push" && serialPushConfig) ||
+		(subcommand === "push" &&
+			!config.git.protected_branch &&
+			rest.includes("--mirror"))
+	)
+		return {
+			id: "lease-ref",
+			reason: useLeaseCommand,
+		};
 
 	if (skips) {
 		if (rest.includes("--no-verify"))
@@ -178,6 +217,15 @@ function gitFinding(
 	}
 	if (subcommand === "push") return pushFinding(rest, config, branch);
 	return null;
+}
+
+function touchesSerialRefs(arg: string) {
+	return arg.split(":").some((part) => {
+		const ref = part.replace(/^\+/, "");
+		if (ref.startsWith(serialRef)) return true;
+		const wildcard = ref.indexOf("*");
+		return wildcard >= 0 && serialRef.startsWith(ref.slice(0, wildcard));
+	});
 }
 
 function pushFinding(

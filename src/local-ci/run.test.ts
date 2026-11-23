@@ -3,6 +3,7 @@ import { mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadConfig } from "../config/load";
+import { holder, LeaseRefs, leaseRef } from "../leases/refs";
 import { encodeState, type Gh } from "../review/github";
 import { recordPath, writeRecord } from "../review/store";
 import { run } from "../run";
@@ -17,10 +18,12 @@ async function fixture({
 	install,
 	prePush,
 	maxRounds,
+	lease,
 }: {
 	install?: string;
 	prePush?: string;
 	maxRounds?: number;
+	lease?: boolean;
 } = {}) {
 	const repo = await tempRepo();
 	await repo.write(
@@ -44,6 +47,11 @@ package_manager = "bun"
 paths = ["**"]
 `,
 	);
+	if (lease)
+		await repo.write(
+			".cagr/serial.toml",
+			'[[lease]]\nname = "readme"\npaths = ["README.md"]\n',
+		);
 	const config = loadConfig(repo.root);
 	if (!config) throw new Error("Test config is missing");
 	sync(config);
@@ -92,6 +100,7 @@ function runtime(
 		statuses?: Record<string, [context: string, state: string][]>;
 		installFails?: boolean;
 		reviewState?: string;
+		origin?: string;
 	} = {},
 ) {
 	const log: string[] = [];
@@ -114,9 +123,8 @@ function runtime(
 				})),
 			);
 		if (command === "pr" && sub === "view") {
-			if (resource !== "3") throw new Error(`Unexpected PR view ${resource}`);
 			return JSON.stringify({
-				number: 3,
+				number: Number(resource),
 				state: "OPEN",
 				isDraft: false,
 				isCrossRepository: false,
@@ -124,7 +132,7 @@ function runtime(
 				headRepository: { name: "r" },
 				headRepositoryOwner: { login: "o" },
 				headRefName: "feat/example",
-				headRefOid: f.head,
+				headRefOid: resource === "1" ? f.base : f.head,
 				baseRefName: "target",
 				body: "## Testing\nPassed.",
 				title: "feat: update README",
@@ -167,9 +175,20 @@ function runtime(
 	const execute: typeof run = async (argv, cwd, options) => {
 		commands.push(argv);
 		if (argv[0] === "git") {
+			const origin = settings.origin;
+			if (origin && argv.includes("remote") && argv.includes("add"))
+				return run(
+					argv.map((arg) =>
+						arg === "https://github.com/o/r.git" ? origin : arg,
+					),
+					cwd,
+					options,
+				);
 			if (argv.includes("fetch"))
 				return run(
-					argv.map((arg) => (arg === "origin" ? f.source.root : arg)),
+					argv.map((arg) =>
+						arg === "origin" ? (settings.origin ?? f.source.root) : arg,
+					),
 					cwd,
 					options,
 				);
@@ -202,11 +221,13 @@ const result = (ok: boolean, stdout: string) => ({
 
 // Clones the PR cache, then fetches and creates both Git worktrees.
 test(
-	"watch skips both successful statuses and drafts, and runs a new SHA once",
+	"watch skips drafts and only runs full checks once per unchecked SHA",
 	async () => {
 		const f = await fixture();
 		try {
-			const complete = "a".repeat(40);
+			const complete = f.base;
+			await f.source.git("update-ref", "refs/pull/1/head", complete);
+			await f.source.git("update-ref", "refs/pull/4/head", f.head);
 			const r = runtime(f, {
 				heads: [
 					{ number: 1, headRefOid: complete },
@@ -228,13 +249,16 @@ test(
 				r.calls
 					.filter((args) => args[1] === "view" && args[0] === "pr")
 					.map((args) => args[2]),
-			).toEqual(["3"]);
+			).toEqual(["1", "3", "4"]);
 			expect(r.commands).toContainEqual([
 				"sh",
 				"-c",
 				"bun install --frozen-lockfile",
 			]);
 			expect(r.reviewBodies[0]?.commit_id).toBe(f.head);
+			expect(
+				r.commands.filter((args) => args.includes("worktree")),
+			).toHaveLength(2);
 			const statuses = r.calls.filter((args) =>
 				args.includes(`repos/o/r/statuses/${f.head}`),
 			);
@@ -633,6 +657,94 @@ test(
 			expect(
 				r.calls.find((args) => args.includes("context=cagr/checks")),
 			).toContain("state=failure");
+		} finally {
+			f.clean();
+		}
+	},
+	repoTestTimeout,
+);
+
+test(
+	"local PR CI renews a live lease only from the holder checkout",
+	async () => {
+		const f = await fixture({ lease: true });
+		try {
+			const origin = join(f.repo.root, ".git", "origin.git");
+			await f.repo.git("clone", "--mirror", f.source.root, origin);
+			await f.repo.git("remote", "add", "origin", origin);
+			await f.source.git("push", origin, `${f.head}:refs/heads/feat/example`);
+			await f.repo.git("switch", "-c", "feat/example");
+			const git = new LeaseRefs(f.repo.root);
+			const ref = leaseRef("readme");
+			const record = {
+				...holder("feat/example"),
+				head: f.head,
+				published: true,
+			};
+			const initial = await git.change(ref, "", record);
+			expect(initial).toMatch(/^[a-f0-9]+$/);
+			const own = runtime(f, { origin });
+			expect(await localCi(f.config, f.paths, 3, own)).toBe(true);
+			expect(own.lines.join("\n")).toContain("PASS Leases");
+			const renewed = (await git.snapshot()).refs.get(ref);
+			expect(renewed).not.toBe(initial);
+			await f.repo.git("switch", "main");
+			const other = runtime(f, { origin });
+			expect(await localCi(f.config, f.paths, 3, other)).toBe(true);
+			expect((await git.snapshot()).refs.get(ref)).toBe(renewed);
+		} finally {
+			f.clean();
+		}
+	},
+	repoTestTimeout,
+);
+
+test(
+	"watch turns a green SHA red when the landing lease changes hands",
+	async () => {
+		const f = await fixture({ lease: true });
+		try {
+			const origin = join(f.repo.root, ".git", "origin.git");
+			await f.repo.git("clone", "--mirror", f.source.root, origin);
+			await f.repo.git("remote", "add", "origin", origin);
+			await f.source.git("push", origin, `${f.head}:refs/heads/feat/example`);
+			const git = new LeaseRefs(f.repo.root);
+			const ref = leaseRef("readme");
+			const initial = {
+				...holder("feat/example"),
+				head: f.head,
+				published: true,
+			};
+			const live = await git.change(ref, "", initial);
+			if (!live) throw new Error("Could not create the test lease");
+			const statuses: [string, string][] = [
+				["cagr/checks", "success"],
+				["cagr/review", "success"],
+			];
+			const watch = () =>
+				runtime(f, { origin, statuses: { [f.head]: statuses } });
+			const before = watch();
+			expect(await localCi(f.config, f.paths, "watch", before)).toBe(true);
+			expect(
+				before.calls.find((args) => args.includes("context=cagr/leases")),
+			).toContain("state=success");
+			statuses.push(["cagr/leases", "success"]);
+			const next = {
+				...holder("feat/other"),
+				head: null,
+				published: false,
+			};
+			await git.change(ref, live, next);
+			const after = watch();
+			expect(await localCi(f.config, f.paths, "watch", after)).toBe(false);
+			const posts = after.calls.filter((args) => args.includes("POST"));
+			expect(posts).toHaveLength(1);
+			expect(posts[0]).toEqual(
+				expect.arrayContaining(["context=cagr/leases", "state=failure"]),
+			);
+			expect(after.commands.some((args) => args.includes("worktree"))).toBe(
+				false,
+			);
 		} finally {
 			f.clean();
 		}

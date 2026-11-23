@@ -74,6 +74,27 @@ const changeFields = {
 };
 const changeRequired = ["id", "kind", "paths", "reason", "examples"];
 export const configSchema: Node = obj({
+	lease: arr(
+		obj(
+			{
+				name: str({ pattern: /^[a-z0-9][a-z0-9_-]*$/ }),
+				paths: arr(str({ minLength: 1 }), {
+					minItems: 1,
+					description: "Globs for paths that need this lease before pushing.",
+				}),
+				after_acquire: str({
+					description: "Advice printed after taking the lease.",
+				}),
+				ttl_seconds: num({
+					min: 1,
+					description:
+						"Seconds without renewal before the lease or a ticket expires. Defaults to 1800.",
+				}),
+			},
+			{ required: ["name", "paths"] },
+		),
+		{ description: "Resources that one branch at a time may land." },
+	),
 	stats: obj({
 		enabled: bool({
 			description:
@@ -441,6 +462,12 @@ export type ProtectedFile = {
 	gate: boolean;
 };
 export type BlockedCommand = { match: string; reason: string };
+export type Lease = {
+	name: string;
+	paths: string[];
+	after_acquire?: string;
+	ttl_seconds: number;
+};
 export type RiskPath = {
 	glob: string;
 	tier: RiskTier;
@@ -481,6 +508,7 @@ export type Config = {
 		mac_swap_growth_mib: number;
 	};
 	stack: Stack[];
+	lease: Lease[];
 	files: { protected: ProtectedFile[]; gate_edit_env: string };
 	commands: { blocked: BlockedCommand[] };
 	stats: { enabled: boolean };

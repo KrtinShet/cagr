@@ -27,6 +27,8 @@ import {
 } from "./hook/stats";
 import { type AgentEvent, agentEvents } from "./hook/types";
 import { init } from "./init";
+import { leaseCommand } from "./leases/cli";
+import { LeaseError } from "./leases/refs";
 import { LocalCiError, watchPaths } from "./local-ci/cache";
 import { localCi } from "./local-ci/run";
 import { configureWatch } from "./local-ci/watch";
@@ -65,6 +67,10 @@ Usage: cagr <command>
   install-git-hooks            Write the git hooks and set core.hooksPath.
   run -- <cmd...>              Run a command through machine memory admission.
   measure -- <cmd...>          Measure a command's peak memory and record its token cost.
+  lease list                   Show serial leases and waiting branches on origin.
+  lease take <name> [--wait]    Take a serial lease or join the line.
+  lease renew <name>            Renew your branch's serial lease.
+  lease release <name> [--break [--prune-tickets]]  Release a lease or prune malformed tickets.
   doctor [--github]            Check the wiring, the tools each check needs, and hook timings.
                                --github also checks branch protection through gh.
   review [...]                 Review this branch with a reviewer agent. \`cagr review help\` for more.
@@ -123,6 +129,7 @@ const options: Record<string, string[]> = {
 	sync: ["--check"],
 	update: ["--check", "--version"],
 	"install-git-hooks": [],
+	lease: ["--wait", "--break", "--prune-tickets"],
 	doctor: ["--github"],
 	stats: ["--days", "--json"],
 	risk: ["--base"],
@@ -254,10 +261,25 @@ async function main(argv: string[]): Promise<number> {
 				return 0;
 			}
 			if (!config) return 0;
-			const result =
-				hook === "commit-msg"
-					? commitMsg(args[1] ?? ".git/COMMIT_EDITMSG", config)
-					: await prePush(await Bun.stdin.text(), config, process.cwd());
+			let result: Awaited<ReturnType<typeof prePush>>;
+			try {
+				result =
+					hook === "commit-msg"
+						? commitMsg(args[1] ?? ".git/COMMIT_EDITMSG", config)
+						: await prePush(
+								await Bun.stdin.text(),
+								config,
+								process.cwd(),
+								process.env,
+								undefined,
+								args[2],
+							);
+			} catch (error) {
+				console.error(
+					`cagr: the ${hook} hook did not finish. ${(error as Error).message}`,
+				);
+				return 0;
+			}
 			for (const message of result.messages) console.error(`cagr: ${message}`);
 			if (!result.ok)
 				console.error(
@@ -474,6 +496,8 @@ async function main(argv: string[]): Promise<number> {
 			);
 			return failed === 0 ? 0 : 1;
 		}
+		case "lease":
+			return leaseCommand(requireConfig(), args);
 		case "review":
 			return reviewCommand(requireConfig(), args, process.cwd());
 		case "risk":
@@ -582,6 +606,7 @@ const expected = (error: unknown) =>
 	error instanceof ReviewRecordBusy ||
 	error instanceof ReviewerError ||
 	error instanceof LocalCiError ||
+	error instanceof LeaseError ||
 	error instanceof AnswerError;
 
 export function runCli(argv: string[]) {

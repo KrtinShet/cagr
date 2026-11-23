@@ -51,6 +51,10 @@ export function brief(
 			`work in a worktree under ${config.git.worktree_dir}/, not in the main checkout`,
 		);
 	if (git.length > 0) lines.push(`- Git: ${git.join("; ")}.`);
+	if (config.lease.length)
+		lines.push(
+			`- Serial resources: ${config.lease.map(({ name }) => name).join(", ")}. Run \`cagr lease take <name>\` before pushing changes to their paths.`,
+		);
 	const protectedFiles = protectedEntries(config.files);
 	if (protectedFiles.length > 0)
 		lines.push(

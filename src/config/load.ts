@@ -14,6 +14,7 @@ import {
 	defaultCommitTypes,
 	defaultExtensions,
 	type Effort,
+	type Lease,
 	type NameRule,
 	type PackageManager,
 	type RiskTier,
@@ -144,6 +145,7 @@ function withFragments(
 
 /** The lists of tables that add up across files and presets, even when one is empty. */
 const listsThatAddUp = new Set([
+	"lease",
 	"changes.rules",
 	"stack",
 	"files.protected",
@@ -200,6 +202,28 @@ function validate(raw: RawConfig, source: string) {
 		throw new ConfigError(
 			`${source} has problems:\n${errors.map((error) => `  - ${error}`).join("\n")}`,
 		);
+}
+
+export function parseLeasePolicy(text: string, source: string) {
+	const raw = Bun.TOML.parse(text) as RawConfig;
+	validate(raw, source);
+	return leases(raw);
+}
+
+function leases(raw: RawConfig) {
+	const lease = ((raw.lease as Lease[] | undefined) ?? []).map((entry) => ({
+		...entry,
+		ttl_seconds: entry.ttl_seconds ?? 1800,
+	}));
+	const names = new Set<string>();
+	for (const entry of lease) {
+		if (names.has(entry.name))
+			throw new ConfigError(
+				`Lease "${entry.name}" is declared twice. Keep one [[lease]] per name.`,
+			);
+		names.add(entry.name);
+	}
+	return lease;
 }
 
 function withPresets(
@@ -277,6 +301,7 @@ function applyDefaults(
 		root,
 		source,
 		sources,
+		lease: leases(raw),
 		extends: (raw.extends as string[] | undefined) ?? [],
 		agents: {
 			enabled: (agents.enabled as AgentName[] | undefined) ?? [

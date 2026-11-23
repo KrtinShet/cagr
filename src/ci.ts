@@ -9,6 +9,13 @@ import { missingSections } from "./guards/github";
 import { checkSuppressions } from "./guards/lint-suppression";
 import { branchFinding, commitMessageFinding } from "./guards/names";
 import { stackFiles, tidy, withFiles } from "./hook/stack-files";
+import {
+	checkLeases,
+	effectiveLeases,
+	leasePolicy,
+	policyProblems,
+} from "./leases/check";
+import { LeaseRefs } from "./leases/refs";
 import { classify, riskReport } from "./risk";
 import { type LayoutRule, layoutFindings } from "./rules/layout";
 import { findInFiles, loadRuleSet, RuleError } from "./rules/rules";
@@ -26,7 +33,7 @@ export type CiCheck = {
 export type CiResult = { ok: boolean; checks: CiCheck[]; tier: string };
 
 type PullRequest = {
-	head?: { sha: string };
+	head?: { sha: string; ref?: string; repo?: { full_name: string } | null };
 	title?: unknown;
 	body?: string | null;
 };
@@ -59,6 +66,8 @@ export async function ci(
 		cwd: string;
 		base?: string;
 		pr?: PullRequest & { branch: string };
+		leaseGit?: LeaseRefs;
+		renewLeaseFor?: string;
 		runCheck?: typeof runShell;
 		executeCheck?: typeof run;
 		env?: Record<string, string | undefined>;
@@ -187,7 +196,11 @@ export async function ci(
 	}
 	checks.push(check("Generated files", drift));
 
-	const branch = options.pr?.branch || env.GITHUB_HEAD_REF || git.branch;
+	const branch =
+		options.pr?.branch ||
+		pullRequest?.head?.ref ||
+		env.GITHUB_HEAD_REF ||
+		git.branch;
 	const branchProblem = branch ? branchFinding(branch, config) : null;
 	checks.push(
 		check("Branch name", branchProblem ? [branchProblem.reason] : []),
@@ -371,6 +384,42 @@ export async function ci(
 				);
 		}
 		pushScheduledCheck(checks, "Verify", problems, deferred);
+	}
+	try {
+		const reader = options.leaseGit ?? new LeaseRefs(cwd);
+		const basePolicy = await leasePolicy(reader, changeResult.snapshot.target);
+		const githubPr =
+			!options.pr &&
+			(pullRequest ||
+				env.GITHUB_HEAD_REF ||
+				env.GITHUB_EVENT_NAME?.startsWith("pull_request"));
+		const headRepo = pullRequest?.head?.repo?.full_name;
+		const sameRepo =
+			!githubPr ||
+			(!!env.GITHUB_REPOSITORY &&
+				headRepo?.toLowerCase() === env.GITHUB_REPOSITORY.toLowerCase());
+		const problems = await checkLeases(
+			reader,
+			effectiveLeases(basePolicy, config.lease),
+			changeResult.snapshot.changes.map(({ path }) => path),
+			branch,
+			{
+				sameRepo,
+				renew: !!branch && options.renewLeaseFor === branch,
+			},
+		);
+		const policy =
+			env.CAGR_ALLOW_GATE_EDIT === "1"
+				? []
+				: policyProblems(basePolicy, config.lease);
+		if (problems || policy.length)
+			checks.push(check("Leases", [...policy, ...(problems ?? [])]));
+	} catch (error) {
+		checks.push(
+			check("Leases", [
+				`Could not verify leases: ${(error as Error).message}. Restore access to origin, run cagr lease list, and rerun cagr ci.`,
+			]),
+		);
 	}
 	if (await out(["git", "status", "--porcelain", "-z"], cwd))
 		checks.push(

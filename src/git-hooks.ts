@@ -1,12 +1,15 @@
 import { spawn } from "node:child_process";
 import { appendFileSync, mkdirSync, openSync, readFileSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { runAdmittedShell } from "./admission/run";
 import type { Config } from "./config/schema";
-import { gitContext } from "./git";
-import { commandReasons } from "./guards/command";
+import { gitContext, gitHookEnv } from "./git";
+import { commandReasons, gitOptionsWithValue } from "./guards/command";
 import { render } from "./guards/finding";
 import { branchFinding, commitMessageFinding } from "./guards/names";
+import { PushLeases } from "./leases/push";
+import { leasePush, serialRef, useLeaseCommand } from "./leases/refs";
 import { run } from "./run";
 
 export const gitHookNames = ["commit-msg", "pre-push"] as const;
@@ -36,7 +39,7 @@ export function commitMsg(
 		: { ok: true, messages: [] };
 }
 
-type PushedRef = {
+export type PushedRef = {
 	localRef: string;
 	localSha: string;
 	remoteRef: string;
@@ -57,11 +60,7 @@ export function parsePushLines(stdin: string): PushedRef[] {
 }
 
 // Git sets these for hooks; a pre_push command that runs git in another repo must not inherit them.
-export const gitEnv = {
-	GIT_DIR: undefined,
-	GIT_WORK_TREE: undefined,
-	GIT_INDEX_FILE: undefined,
-};
+export const gitEnv = gitHookEnv;
 
 /** Starts `cagr <args>` detached, so the push goes on while it runs. Output goes to `log`. */
 export type StartInBackground = (
@@ -98,17 +97,97 @@ export const startInBackground: StartInBackground = (args, cwd, log) => {
 		.unref();
 };
 
+async function parentArgs(pid: number): Promise<string[]> {
+	if (process.platform === "linux")
+		return (await readFile(`/proc/${pid}/cmdline`, "utf8")).split("\0");
+	if (process.platform !== "darwin") return [];
+
+	// KERN_PROCARGS2 returns argc, the executable path, padding, then argv.
+	// ps joins arguments with spaces, which can make a config value look like a command.
+	const { dlopen } = await import("bun:ffi");
+	const lib = dlopen("/usr/lib/libSystem.B.dylib", {
+		sysctl: {
+			args: ["ptr", "u32", "ptr", "ptr", "ptr", "u64"],
+			returns: "i32",
+		},
+	});
+	try {
+		const mib = new Int32Array([1, 49, pid]);
+		const size = new BigUint64Array(1);
+		const sysctl = lib.symbols.sysctl;
+		if (sysctl(mib, mib.length, null, size, null, 0n) !== 0) return [];
+		const bytes = Buffer.alloc(Number(size[0]));
+		if (
+			sysctl(mib, mib.length, bytes, size, null, 0n) !== 0 ||
+			Number(size[0]) < 4
+		)
+			return [];
+		const argc = bytes.readInt32LE(0);
+		let offset = bytes.indexOf(0, 4);
+		if (offset < 0) return [];
+		while (bytes[offset] === 0) offset++;
+		const args: string[] = [];
+		for (let index = 0; index < argc; index++) {
+			const end = bytes.indexOf(0, offset);
+			if (end < 0 || end >= Number(size[0])) return [];
+			args.push(bytes.toString("utf8", offset, end));
+			offset = end + 1;
+		}
+		return args;
+	} finally {
+		lib.close();
+	}
+}
+
+async function realPush() {
+	const args = await parentArgs(process.ppid).catch(() => []);
+	if (!/(?:^|\/)git$/.test(args[0] ?? "")) return false;
+	let command = 1;
+	for (let arg = args[command]; arg; arg = args[command]) {
+		if (gitOptionsWithValue.has(arg)) command += 2;
+		else if (
+			/^(?:--(?:git-dir|work-tree|namespace|config-env)=|--no-pager$|--paginate$|-[pP]$)/.test(
+				arg,
+			)
+		)
+			command++;
+		else break;
+	}
+	return (
+		args[command] === "push" &&
+		!args
+			.slice(command + 1)
+			.some(
+				(arg) =>
+					(arg.startsWith("--d") && "--dry-run".startsWith(arg)) ||
+					/^-[^-]*n/.test(arg),
+			)
+	);
+}
+
 export async function prePush(
 	stdin: string,
 	config: Config,
 	cwd: string,
 	env = process.env,
 	start: StartInBackground = startInBackground,
+	remoteUrl?: string,
 ): Promise<GitHookResult> {
+	const refs = parsePushLines(stdin);
+	const serial = refs.filter(({ remoteRef }) =>
+		remoteRef.startsWith(serialRef),
+	);
+	if (serial.length && env[leasePush] !== "1")
+		return { ok: false, messages: [useLeaseCommand] };
 	if (skipped(config, env)) return { ok: true, messages: [] };
+	if (serial.length && refs.length === serial.length)
+		return { ok: true, messages: [] };
 	const messages: string[] = [];
+	const warnings: string[] = [];
+	const leases = new PushLeases(config, cwd, messages, warnings);
+	const writable = !config.lease.length || (await realPush());
 	const pushed: { branch: string; sha: string }[] = [];
-	for (const ref of parsePushLines(stdin)) {
+	for (const ref of refs) {
 		const branch = ref.remoteRef.replace(/^refs\/heads\//, "");
 		const isBranch = ref.remoteRef.startsWith("refs/heads/");
 		if (isBranch && branch === config.git.protected_branch) {
@@ -143,38 +222,58 @@ export async function prePush(
 			});
 		}
 	}
-	if (messages.length > 0) return { ok: false, messages };
-	let unchecked = false;
-	for (const command of config.git.pre_push) {
-		const result = await runAdmittedShell(
-			command,
-			config.root,
-			config.admission,
-			{
-				env: gitEnv,
-				priority: "push",
-				timeoutMs: 1_800_000,
-				log: (line) => console.error(line),
-			},
-		).catch((error: unknown) => {
-			unchecked = true;
-			messages.push(
-				`Memory admission could not run \`${command}\`. ${error} Run the check before merging.`,
-			);
-			return null;
-		});
-		if (result?.admission) return { ok: false, messages: [result.output] };
-		if (result && !result.ok)
-			return {
-				ok: false,
-				messages: [
-					`\`${command}\` failed, so the push was stopped.\n${result.output.trimEnd()}`,
-				],
-			};
+	try {
+		await leases.inspect(refs, remoteUrl);
+	} catch (error) {
+		messages.push(
+			`Could not check serial leases: ${(error as Error).message}. Restore access to origin, run cagr lease list, and retry the push.`,
+		);
 	}
-	if (unchecked || !config.review.status || pushed.length === 0)
-		return { ok: true, messages };
-	return { ok: true, messages: await sendStatuses(config, cwd, pushed, start) };
+	let unchecked = false;
+	if (!messages.length)
+		await leases.verify(
+			async () => {
+				for (const command of config.git.pre_push) {
+					if (messages.length) break;
+					const result = await runAdmittedShell(
+						command,
+						config.root,
+						config.admission,
+						{
+							env: { ...gitEnv, ...leases.priorityEnv },
+							priority: "push",
+							timeoutMs: 1_800_000,
+							log: (line) => console.error(line),
+						},
+					).catch((error: unknown) => {
+						unchecked = true;
+						warnings.push(
+							`Memory admission could not run \`${command}\`. ${error} Run the check before merging.`,
+						);
+						return null;
+					});
+					if (result?.admission) messages.push(result.output);
+					else if (result && !result.ok)
+						messages.push(
+							`\`${command}\` failed, so the push was stopped.\n${result.output.trimEnd()}`,
+						);
+				}
+			},
+			config.git.pre_push.length > 0,
+			writable,
+		);
+	if (messages.length > 0) {
+		if (writable) await leases.releaseUnpublished();
+		return { ok: false, messages: [...messages, ...warnings] };
+	}
+	if (
+		!unchecked &&
+		config.review.status &&
+		pushed.length > 0 &&
+		(!config.lease.length || writable)
+	)
+		warnings.push(...(await sendStatuses(config, cwd, pushed, start)));
+	return { ok: true, messages: warnings };
 }
 
 /**
@@ -193,6 +292,7 @@ async function sendStatuses(
 		if (!git.commonDir) return [];
 		// The pre_push commands ran on the working tree, untracked files included, so they vouch only for a clean HEAD.
 		const clean =
+			config.lease.length === 0 &&
 			config.git.pre_push.length > 0 &&
 			(
 				await run(

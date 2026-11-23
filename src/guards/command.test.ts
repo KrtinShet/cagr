@@ -286,6 +286,8 @@ test.each([
 	"CAGR_ALLOW_GATE_EDIT",
 	"CAGR_ALLOW_EXTRA_REVIEW",
 	"CAGR_ADMISSION_HELD",
+	"CAGR_ALLOW_LEASE_BREAK",
+	"CAGR_INTERNAL_LEASE_PUSH",
 	"CRM_SKIP_HOOKS",
 ])("refuses assignments to the human-only %s switch", (name) => {
 	for (const operator of ["=", "+="]) {
@@ -317,4 +319,37 @@ test("uses the configured gate edit switch independently of block_hook_skips", (
 		"TEAM_GATE_EDIT is for humans only",
 	);
 	expect(check("CAGR_ALLOW_GATE_EDIT=1 bun fix")).toBeNull();
+});
+
+test.each([
+	"git -C work push --force-with-lease=refs/cagr/lease/db-migrations: origin HEAD:refs/cagr/lease/db-migrations",
+	"git push origin --delete refs/cagr/wait/db-migrations/123-builder",
+	"git update-ref -d refs/cagr/lease/db-migrations",
+	"git -c remote.origin.push=HEAD:refs/cagr/lease/db-migrations push origin",
+	"git update-ref --stdin < updates",
+	"env CAGR_INTERNAL_LEASE_PUSH=1 git push origin",
+])("blocks manual lease ref writes: %s", (line) => {
+	expect(onFeature(line)).toContain("Use cagr lease");
+});
+
+test("only a human may set the lease break override", () => {
+	expect(
+		onFeature(
+			"CAGR_ALLOW_LEASE_BREAK=1 cagr lease release --break db-migrations",
+		),
+	).toContain("humans only");
+	expect(onFeature("cagr lease release --break db-migrations")).toBeNull();
+	expect(onFeature("git ls-remote origin 'refs/cagr/lease/*'")).toBeNull();
+});
+
+test("mirror and broad refspec pushes cannot write the lease namespace", () => {
+	expect(onFeature("git push --mirror origin")).toBe(reasons.pushAll);
+	const check = reasonOn("feat/work", false, config({}));
+	for (const line of [
+		"git push --mirror origin",
+		"git push origin 'refs/*:refs/*'",
+		"git push origin 'refs/c*:refs/c*'",
+	])
+		expect(check(line)).toContain("Use cagr lease");
+	expect(check("git push origin 'refs/tags/*:refs/tags/*'")).toBeNull();
 });

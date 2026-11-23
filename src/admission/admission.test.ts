@@ -11,6 +11,8 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { resolveConfig } from "../config/load";
 import { handle } from "../hook/handlers";
+import { leasePush } from "../leases/refs";
+import { run } from "../run";
 import { classifyArgv } from "./classify";
 import { tryLock } from "./locks";
 import { type Costs, Pool } from "./pool";
@@ -155,6 +157,39 @@ test("a heavy waiter acquires the held token after normal exit", async () => {
 	expect((await holder.finished()).code).toBe(0);
 	await waiter.seen("load: admitted");
 	expect((await waiter.finished()).code).toBe(0);
+});
+
+test("a cagr lease ref-only push skips admission when the pool is full", async () => {
+	const cwd = fixture();
+	await Bun.write(
+		join(cwd, "cagr.toml"),
+		`
+[admission]
+heavy = ["sleep"]
+pool_tokens = 1
+[git]
+pre_push = "sleep 60"
+`,
+	);
+	const holder = queued(cwd, ["sh", "-c", "read signal"]);
+	await holder.seen("load: admitted");
+	try {
+		const result = await run(
+			[process.execPath, cliPath, "git", "pre-push"],
+			cwd,
+			{
+				env: { HOME: cwd, [leasePush]: "1" },
+				stdin: "HEAD 111 refs/cagr/lease/db-migrations 222\n",
+				timeoutMs: 4000,
+			},
+		);
+		expect(result.exitCode).toBe(0);
+		expect(result.output).toBe("");
+		expect(holder.child.exitCode).toBeNull();
+	} finally {
+		holder.child.stdin.write("release\n");
+		await holder.finished();
+	}
 });
 
 test("SIGKILL releases a holder's tokens and the next waiter runs", async () => {

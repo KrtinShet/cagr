@@ -243,3 +243,13 @@ Started in the background by the pre-push hook when `[review] status` is on. It 
 | `GH_TOKEN`                                                                                       | `review --ci`, `review --scan --issue`, `doctor --github` | The token `gh` uses.                                                          |
 | `GITHUB_BASE_REF`, `GITHUB_HEAD_REF`, `GITHUB_EVENT_PATH`, `GITHUB_REPOSITORY`, `GITHUB_ACTIONS` | `ci`, `review --ci`                                       | Set by GitHub Actions.                                                        |
 | `XDG_CACHE_HOME`                                                                                 | code rules                                                | Where the Python, Go and Rust parsers are cached.                             |
+
+### Serial leases
+
+- `cagr lease list` shows the holder, time remaining and waiting branches for each declared resource.
+- `cagr lease take <name> [--wait]` takes a lease or joins the line. Without `--wait`, exit code 1 means the branch has a ticket and is still waiting.
+- `cagr lease renew <name>` renews a lease held by the current branch.
+- `cagr lease release <name> [--break]` releases a lease. A human can set `CAGR_ALLOW_LEASE_BREAK=1` to break a live lease.
+- `cagr lease release <name> --break --prune-tickets` removes malformed tickets for that lease.
+
+See [Serial leases](leases.md) for the landing workflow.

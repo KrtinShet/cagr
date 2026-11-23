@@ -370,3 +370,9 @@ Scripts such as `bun run lint`, shell expressions, extra targets and other flags
 Only identical rule, message and severity findings on unchanged, unambiguous lines are left out. Editing the error's line makes it new. This compares diagnostics, not semantic causality. Config and project dependencies are live, rather than a snapshot of the whole project. Cached reports are keyed by command, source, ancestor config and lockfile contents, and installed executable metadata. Imported config helpers and external plugin inputs are not tracked; start a new session after changing these inputs.
 
 Go and Rust stacks need no `package_manager` setting. `init` uses file-scoped gofmt and rustfmt after edits and toolchain checks at turn end. See [detected stacks](getting-started.md) for commands, workspace editions and golangci-lint handling. These commands stay strict in new-findings mode.
+
+### `[[lease]]`
+
+Declare serial resources in `.cagr/serial.toml`. Entries add up across config fragments. Give each resource a unique `name` using lowercase letters, digits, underscores or hyphens, starting with a letter or digit. Set `paths` to a nonempty list of repo-relative globs. The optional `after_acquire` string is printed as advice after acquisition. The optional `ttl_seconds` sets how long leases and tickets can go without renewal and defaults to 1800.
+
+See [Serial leases](leases.md) for an example.

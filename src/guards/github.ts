@@ -181,6 +181,52 @@ export function isGateCommand(line: string, config: Config) {
 	return gateCommandsOf(line, config).length > 0;
 }
 
+export function isPrMerge(line: string) {
+	return commandsWithNesting(withoutHeredocBodies(line)).some(({ words }) => {
+		const gh = ghWords(programWords(words));
+		return gh?.[1] === "pr" && gh[2] === "merge";
+	});
+}
+
+const mergeFlags = new Set([
+	"-s",
+	"--squash",
+	"-m",
+	"--merge",
+	"-r",
+	"--rebase",
+	"-d",
+	"--delete-branch",
+	"--admin",
+	"--disable-auto",
+	"--auto",
+]);
+
+export function mergeBranch(line: string) {
+	if (/[\n;&|<>`$*?\\]/.test(line)) return null;
+	const [words, ...rest] = simpleCommands(line);
+	if (
+		!words ||
+		rest.length ||
+		words[0] !== "gh" ||
+		words[1] !== "pr" ||
+		words[2] !== "merge"
+	)
+		return null;
+	const args = words.slice(3).filter((word) => !mergeFlags.has(word));
+	const branch = args[0] ?? null;
+	if (
+		args.length > 1 ||
+		(branch &&
+			(!/^[A-Za-z0-9_][A-Za-z0-9_./-]*$/.test(branch) || /^\d+$/.test(branch)))
+	)
+		return null;
+	return {
+		branch,
+		auto: words.includes("--auto"),
+	};
+}
+
 const withoutOwner = (branch: string) => branch.replace(/^[^:]+:/, "");
 
 /** The value of `gh pr create --head`, `-H` or `--head=`, if given. The last one wins, as in gh. */

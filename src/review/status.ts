@@ -7,8 +7,9 @@ import { completedRounds, type ReviewRecord } from "./types";
 
 export const reviewContext = "cagr/review";
 export const checksContext = "cagr/checks";
+export const leasesContext = "cagr/leases";
 
-export async function successfulStatuses(gh: Gh, repo: string, sha: string) {
+export async function latestStatuses(gh: Gh, repo: string, sha: string) {
 	const statuses = (
 		await gh([
 			"api",
@@ -23,8 +24,12 @@ export async function successfulStatuses(gh: Gh, repo: string, sha: string) {
 		const [context, state] = row.split("\t");
 		if (context && state && !latest.has(context)) latest.set(context, state);
 	}
+	return latest;
+}
+
+export async function successfulStatuses(gh: Gh, repo: string, sha: string) {
 	return new Set(
-		[...latest]
+		[...(await latestStatuses(gh, repo, sha))]
 			.filter(([, state]) => state === "success")
 			.map(([context]) => context),
 	);
