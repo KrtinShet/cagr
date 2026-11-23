@@ -19,7 +19,11 @@ async function branch(
 	subject: string,
 ) {
 	const repo = await tempRepo();
-	const config = resolveConfig(raw, repo.root, join(repo.root, "cagr.toml"));
+	const config = resolveConfig(
+		{ admission: { enabled: false }, ...raw },
+		repo.root,
+		join(repo.root, "cagr.toml"),
+	);
 	sync(config);
 	await repo.commit("chore: add cagr", {});
 	await repo.git("checkout", "-q", "-b", "feat/x");
@@ -299,6 +303,24 @@ test("annotations escape what GitHub would read as syntax", () => {
 		"::error file=src/a%2Cb.ts,line=3,title=Code rules::50%25 off%0Anext",
 		"::error title=Checks::line1%0Aline2",
 	]);
+});
+
+test("CI reports load-tainted checks as deferred and emits a warning", () => {
+	const result = {
+		ok: false,
+		tier: "medium",
+		checks: [
+			{
+				name: "Verify",
+				ok: false,
+				deferred: true,
+				output: "load-tainted",
+				annotations: [],
+			},
+		],
+	};
+	expect(ciReport(result)).toBe("DEFERRED Verify\n  load-tainted");
+	expect(annotations(result)).toEqual(["::warning title=Verify::load-tainted"]);
 });
 
 test("publish writes the step summary and the tier output", () => {

@@ -1,10 +1,11 @@
 import { resolve } from "node:path";
+import { runAdmitted } from "./admission/run";
 import { checkChanges } from "./changes/check";
 import { testChanges } from "./changes/rules";
 import { checkAll } from "./check-all";
 import { annotations, ci, ciReport, publish } from "./ci";
 import { jsonSchema } from "./config/json-schema";
-import { ConfigError, loadConfig } from "./config/load";
+import { ConfigError, loadConfig, resolveConfig } from "./config/load";
 import { type AgentName, agentNames, type Config } from "./config/schema";
 import { doctor } from "./doctor";
 import {
@@ -60,6 +61,8 @@ Usage: cagr <command>
   update [--check] [--version <v>]  Update the binary. --check exits 1 when an update is available.
   sync [--check]               Rewrite the generated agent and git hook files. --check fails on drift.
   install-git-hooks            Write the git hooks and set core.hooksPath.
+  run -- <cmd...>              Run a command through machine memory admission.
+  measure -- <cmd...>          Measure a command's peak memory and record its token cost.
   doctor [--github]            Check the wiring, the tools each check needs, and hook timings.
                                --github also checks branch protection through gh.
   review [...]                 Review this branch with a reviewer agent. \`cagr review help\` for more.
@@ -152,6 +155,30 @@ async function main(argv: string[]): Promise<number> {
 		return 0;
 	}
 	switch (command) {
+		case "run":
+		case "measure": {
+			if (args.length === 1 && ["--help", "-h"].includes(args[0] ?? "")) {
+				console.log(help);
+				return 0;
+			}
+			if (args[0] !== "--" || args.length < 2)
+				throw new UsageError(`Use cagr ${command} -- <cmd...>.`);
+			const cwd = process.cwd();
+			const config =
+				loadConfig(cwd) ?? resolveConfig({}, cwd, resolve(cwd, "cagr.toml"));
+			process.once("SIGINT", () => process.exit(130));
+			process.once("SIGTERM", () => process.exit(143));
+			const result = await runAdmitted({
+				argv: args.slice(1),
+				cwd,
+				config: config.admission,
+				measure: command === "measure",
+				options: { inherit: true, log: console.error },
+			});
+			if (result.admission || (result.exitCode == null && result.output))
+				console.error(result.output);
+			return result.admission ? 75 : (result.exitCode ?? 1);
+		}
 		case undefined:
 		case "help":
 		case "--help":

@@ -7,6 +7,7 @@ export type RunResult = {
 	exitCode?: number | null;
 	ms: number;
 	timedOut: boolean;
+	admission?: "deferred" | "load-tainted";
 };
 
 export type RunOptions = {
@@ -14,6 +15,8 @@ export type RunOptions = {
 	processGroup?: boolean;
 	env?: Record<string, string | undefined>;
 	stdin?: string;
+	inherit?: boolean;
+	onSpawn?: (pid: number) => void;
 };
 
 const quiet = { NO_COLOR: "1", FORCE_COLOR: "0" };
@@ -51,16 +54,23 @@ export async function run(
 			cwd,
 			stdin:
 				options.stdin === undefined
-					? "ignore"
+					? options.inherit
+						? "inherit"
+						: "ignore"
 					: new TextEncoder().encode(options.stdin),
-			stdout: "pipe",
-			stderr: "pipe",
-			env: { ...process.env, ...quiet, ...options.env },
+			stdout: options.inherit ? "inherit" : "pipe",
+			stderr: options.inherit ? "inherit" : "pipe",
+			env: {
+				...process.env,
+				...(options.inherit ? {} : quiet),
+				...options.env,
+			},
 			detached: processGroup,
 		});
-		const out = capture(child.stdout);
-		const err = capture(child.stderr);
-		const completed = Promise.all([out.done, err.done, child.exited]).then(
+		options.onSpawn?.(child.pid);
+		const out = child.stdout ? capture(child.stdout) : undefined;
+		const err = child.stderr ? capture(child.stderr) : undefined;
+		const completed = Promise.all([out?.done, err?.done, child.exited]).then(
 			([, , code]) => code,
 		);
 		let timer: ReturnType<typeof setTimeout> | undefined;
@@ -85,10 +95,10 @@ export async function run(
 				if (child.exitCode === null) child.kill("SIGKILL");
 			}
 			// A process outside the group can still hold an inherited pipe.
-			void Promise.allSettled([out.cancel(), err.cancel()]);
+			void Promise.allSettled([out?.cancel(), err?.cancel()]);
 		}
-		const stdout = out.text();
-		const stderr = err.text();
+		const stdout = out?.text() ?? "";
+		const stderr = err?.text() ?? "";
 		const ms = Math.round(performance.now() - started);
 		const output = timedOut
 			? `${stdout}${stderr}\nStopped after ${timeoutMs} ms. Make the check faster or narrow it with {files}.`

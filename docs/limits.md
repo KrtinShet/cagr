@@ -31,6 +31,14 @@ Other limits:
 - v0.1 has one preset, `recommended`. Presets from git URLs are planned for v0.2.
 - cagr does not enforce the approval counts of the risk tiers. Branch protection does.
 
+## Memory admission
+
+Admission covers the processes that use cagr and share its home-directory cache on the same host. Shell parsing recognizes command prefixes. Add config entries for the repo's scripts or aliases when the default patterns miss a workload.
+
+RSS sampling can miss short spikes, and a pattern's measured cost can become stale as its arguments or workload change. Long-lived work started outside the command's process tree, such as detached containers or daemons, can still use memory after the wrapper exits. Linux user scopes cap the processes the scope contains. macOS uses tokens and pressure without a per-command hard limit.
+
+When a check reports `load-tainted` or `load: turn-end checks deferred`, run it under `cagr run --` when the machine is quieter. Use `cagr doctor` to inspect pressure and find the holders. See [machine admission](admission.md).
+
 ## Lockfiles
 
 The turn-end lockfile check (see [protected-file](guards.md#lockfiles-written-by-the-package-manager)) proves that the package manager, given the lockfile from the start of the turn and the current manifests, writes the lockfile that is in the checkout. Versions and integrity hashes for packages the manifests did not change come from the starting lockfile, so a hand edit to them blocks. New entries come from the manager's own resolution.

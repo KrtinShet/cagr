@@ -45,6 +45,28 @@ When the config has an error, cagr names the key and, for a misspelled key, sugg
 
 After you change the config, run `cagr sync` to rewrite the generated files. See [Generated files](#generated-files-and-cagr-sync).
 
+## Admission
+
+Set `[admission]` in `cagr.toml` or a config fragment. See [machine admission](admission.md) for the wrapper and calibration.
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `enabled` | `true` | Enforce wrapping and admit configured checks through the pool. |
+| `light` | `[]` | Prefixes that override the medium and heavy lists. |
+| `medium` | Type checks and test suites | Replaces built-in prefixes such as `tsc`, `bun run check-types`, and `pytest`. Single-file tests are light with the built-in list. |
+| `heavy` | Verify, e2e and Docker work | Replaces built-in prefixes such as `bun run verify`, `pnpm run e2e`, and `docker compose up`. |
+| `pool_tokens` | Measured pool, or up to two tokens before calibration | Optional cap on the pool for commands in this repo. |
+| `linux_some_avg10` | `10` | Hold new work above this short-term Linux partial-stall percentage. |
+| `linux_full_avg10` | `1` | Hold new work above this short-term Linux full-stall percentage. |
+| `mac_pressure_level` | `2` | Hold at or above this macOS memory pressure level. |
+| `mac_swap_growth_mib` | `0` | Hold when macOS swap grows by more than this many MiB between samples. |
+
+```toml
+[admission]
+light = ["bun run test:unit"]
+heavy = ["bun run verify", "bun run e2e", "docker compose up", "make integration"]
+```
+
 ## Where config lives
 
 Keep `cagr.toml` short: presets, the stack and single settings. Put anything long, list-like or specific to the repo in the `.cagr/` folder at the repo root:

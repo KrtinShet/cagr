@@ -18,6 +18,7 @@ const config = () =>
 	resolveConfig(
 		{
 			extends: ["recommended"],
+			admission: { enabled: false },
 			stack: [
 				{
 					language: "typescript",

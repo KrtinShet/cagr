@@ -14,6 +14,16 @@ export type GuardInfo = {
 
 export const guards: GuardInfo[] = [
 	{
+		id: "admission",
+		group: "deny",
+		summary: (config) =>
+			config.admission.enabled ? "unwrapped medium and heavy commands" : null,
+		event: "command.before",
+		catches: "A medium or heavy command outside the machine admission wrapper.",
+		fix: "Rerun the command with cagr run --.",
+		config: "[admission] light, medium, heavy",
+	},
+	{
 		id: "lint-suppression",
 		group: "deny",
 		summary: (config) =>
