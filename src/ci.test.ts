@@ -86,105 +86,125 @@ test.each([
 	repoTestTimeout,
 );
 
-test("Verify reuses the result of an identical turn-end command", async () => {
-	const shared = "test ! -f src/a.ts";
-	const verify = "test -f src/a.ts";
-	const { repo, config } = await branch(
-		{
-			...stack({ on_turn_end: ["test ! -f {files}"] }),
-			git: { pre_push: [shared, verify] },
-		},
-		{ "src/a.ts": "export const a = 1;\n" },
-		"feat: add a",
-	);
-	const runCheck = spyOn(runner, "runShell");
-	try {
+// Builds a real Git branch before checking command reuse in CI.
+test(
+	"Verify reuses the result of an identical turn-end command",
+	async () => {
+		const shared = "test ! -f src/a.ts";
+		const verify = "test -f src/a.ts";
+		const { repo, config } = await branch(
+			{
+				...stack({ on_turn_end: ["test ! -f {files}"] }),
+				git: { pre_push: [shared, verify] },
+			},
+			{ "src/a.ts": "export const a = 1;\n" },
+			"feat: add a",
+		);
+		const runCheck = spyOn(runner, "runShell");
+		try {
+			const result = await ci(config, {
+				cwd: repo.root,
+				base: "main",
+				env: {},
+				runCheck,
+			});
+			expect(runCheck.mock.calls.map(([command]) => command)).toEqual([
+				shared,
+				verify,
+			]);
+			expect(
+				result.checks.filter((entry) => !entry.ok).map((entry) => entry.name),
+			).toEqual(["Checks", "Verify"]);
+		} finally {
+			runCheck.mockRestore();
+		}
+	},
+	repoTestTimeout,
+);
+
+// Exercises the fallback by resolving the real Git base and merge base.
+test(
+	"an empty GITHUB_BASE_REF, as on merge_group, falls back to the protected branch",
+	async () => {
+		const { repo, config } = await branch(
+			stack({}),
+			{ "src/a.ts": "export const a = 1;\n" },
+			"feat: add a",
+		);
+		const event = join(mkdtempSync(join(tmpdir(), "gw-ev-")), "event.json");
+		writeFileSync(event, JSON.stringify({ merge_group: {} }));
+		const result = await ci(config, {
+			cwd: repo.root,
+			env: { GITHUB_BASE_REF: "", GITHUB_EVENT_PATH: event },
+		});
+		expect(result.ok).toBe(true);
+		expect(
+			result.checks.some(({ name }) => name === "Pull request title"),
+		).toBe(false);
+	},
+	repoTestTimeout,
+);
+
+// Checks subjects and worktree changes on a real Git branch.
+test(
+	"bad commit subjects, failing checks and edits that change files all fail",
+	async () => {
+		const { repo, config } = await branch(
+			stack({
+				on_edit: ["sed -i.bak s/x/y/ {files} && rm -f src/*.bak"],
+				on_turn_end: ["! grep -n TODO {files}"],
+			}),
+			{ "src/a.ts": "const x = 1; // TODO\n" },
+			"added stuff",
+		);
+		const result = await ci(config, { cwd: repo.root, base: "main", env: {} });
+		const failed = result.checks
+			.filter((entry) => !entry.ok)
+			.map((entry) => entry.name);
+		expect(failed).toEqual([
+			"Commit messages",
+			"Edit checks",
+			"Checks",
+			"Clean checkout after checks",
+		]);
+		const edits = result.checks.find((entry) => entry.name === "Edit checks");
+		expect(edits?.output).toContain("The edit checks changed files");
+	},
+	repoTestTimeout,
+);
+
+// Builds a Git branch and checks an event tied to its head.
+test(
+	"the pull request body is checked against the sections",
+	async () => {
+		const { repo, config } = await branch(
+			stack({}),
+			{ "src/a.ts": "1\n" },
+			"feat: a",
+		);
+		const event = join(mkdtempSync(join(tmpdir(), "gw-ev-")), "event.json");
+		writeFileSync(
+			event,
+			JSON.stringify({
+				pull_request: {
+					head: { sha: await repo.git("rev-parse", "HEAD") },
+					title: "feat: add a",
+					body: "## Testing\nran it",
+				},
+			}),
+		);
 		const result = await ci(config, {
 			cwd: repo.root,
 			base: "main",
-			env: {},
-			runCheck,
+			env: { GITHUB_EVENT_PATH: event },
 		});
-		expect(runCheck.mock.calls.map(([command]) => command)).toEqual([
-			shared,
-			verify,
-		]);
-		expect(
-			result.checks.filter((entry) => !entry.ok).map((entry) => entry.name),
-		).toEqual(["Checks", "Verify"]);
-	} finally {
-		runCheck.mockRestore();
-	}
-});
-
-test("an empty GITHUB_BASE_REF, as on merge_group, falls back to the protected branch", async () => {
-	const { repo, config } = await branch(
-		stack({}),
-		{ "src/a.ts": "export const a = 1;\n" },
-		"feat: add a",
-	);
-	const event = join(mkdtempSync(join(tmpdir(), "gw-ev-")), "event.json");
-	writeFileSync(event, JSON.stringify({ merge_group: {} }));
-	const result = await ci(config, {
-		cwd: repo.root,
-		env: { GITHUB_BASE_REF: "", GITHUB_EVENT_PATH: event },
-	});
-	expect(result.ok).toBe(true);
-	expect(result.checks.some(({ name }) => name === "Pull request title")).toBe(
-		false,
-	);
-});
-
-test("bad commit subjects, failing checks and edits that change files all fail", async () => {
-	const { repo, config } = await branch(
-		stack({
-			on_edit: ["sed -i.bak s/x/y/ {files} && rm -f src/*.bak"],
-			on_turn_end: ["! grep -n TODO {files}"],
-		}),
-		{ "src/a.ts": "const x = 1; // TODO\n" },
-		"added stuff",
-	);
-	const result = await ci(config, { cwd: repo.root, base: "main", env: {} });
-	const failed = result.checks
-		.filter((entry) => !entry.ok)
-		.map((entry) => entry.name);
-	expect(failed).toEqual([
-		"Commit messages",
-		"Edit checks",
-		"Checks",
-		"Clean checkout after checks",
-	]);
-	const edits = result.checks.find((entry) => entry.name === "Edit checks");
-	expect(edits?.output).toContain("The edit checks changed files");
-});
-
-test("the pull request body is checked against the sections", async () => {
-	const { repo, config } = await branch(
-		stack({}),
-		{ "src/a.ts": "1\n" },
-		"feat: a",
-	);
-	const event = join(mkdtempSync(join(tmpdir(), "gw-ev-")), "event.json");
-	writeFileSync(
-		event,
-		JSON.stringify({
-			pull_request: {
-				head: { sha: await repo.git("rev-parse", "HEAD") },
-				title: "feat: add a",
-				body: "## Testing\nran it",
-			},
-		}),
-	);
-	const result = await ci(config, {
-		cwd: repo.root,
-		base: "main",
-		env: { GITHUB_EVENT_PATH: event },
-	});
-	const body = result.checks.find(
-		(entry) => entry.name === "Pull request body",
-	);
-	expect(body?.output).toContain('lacks "## Risk", "## How to revert"');
-});
+		const body = result.checks.find(
+			(entry) => entry.name === "Pull request body",
+		);
+		expect(body?.output).toContain('lacks "## Risk", "## How to revert"');
+	},
+	repoTestTimeout,
+);
 
 // Writes an event with the actual Git head, then runs committed CI for each title.
 test.each([
@@ -294,13 +314,16 @@ test("publish writes the step summary and the tier output", () => {
 	expect(readFileSync(env.GITHUB_OUTPUT, "utf8")).toBe("tier=high\n");
 });
 
-test("a file the branch adds in the wrong place fails the Layout check", async () => {
-	const { repo, config } = await branch(
-		{
-			...stack({}),
-		},
-		{
-			".cagr/rules/layout.yml": `id: kebab-files
+// Uses Git to find the committed file before checking its path.
+test(
+	"a file the branch adds in the wrong place fails the Layout check",
+	async () => {
+		const { repo, config } = await branch(
+			{
+				...stack({}),
+			},
+			{
+				".cagr/rules/layout.yml": `id: kebab-files
 message: Files use kebab-case names.
 instead: Rename it, such as user-card.ts.
 layout:
@@ -310,21 +333,23 @@ examples:
   invalid: [src/UserCard.ts]
   valid: [src/user-card.ts]
 `,
-			"src/UserCard.ts": "export const a = 1;\n",
-			"src/ok-name.ts": "",
-		},
-		"feat: add a",
-	);
-	const result = await ci(config, { cwd: repo.root, base: "main", env: {} });
-	const layout = result.checks.find((c) => c.name === "Layout");
-	expect(result.ok).toBe(false);
-	expect(layout?.ok).toBe(false);
-	expect(layout?.output).toContain(
-		'src/UserCard.ts kebab-files: Files use kebab-case names. (the name "UserCard"',
-	);
-	expect(layout?.output).not.toContain("ok-name");
-	expect(layout?.annotations.map((a) => a.file)).toEqual(["src/UserCard.ts"]);
-});
+				"src/UserCard.ts": "export const a = 1;\n",
+				"src/ok-name.ts": "",
+			},
+			"feat: add a",
+		);
+		const result = await ci(config, { cwd: repo.root, base: "main", env: {} });
+		const layout = result.checks.find((c) => c.name === "Layout");
+		expect(result.ok).toBe(false);
+		expect(layout?.ok).toBe(false);
+		expect(layout?.output).toContain(
+			'src/UserCard.ts kebab-files: Files use kebab-case names. (the name "UserCard"',
+		);
+		expect(layout?.output).not.toContain("ok-name");
+		expect(layout?.annotations.map((a) => a.file)).toEqual(["src/UserCard.ts"]);
+	},
+	repoTestTimeout,
+);
 
 // Runs the committed suppression scan with a different working-tree copy.
 test(
@@ -370,37 +395,48 @@ test(
 	repoTestTimeout,
 );
 
-test("a suppression git error fails its check and CI still reports the other checks", async () => {
-	const { repo, config } = await branch(
-		{ extends: ["recommended"] },
-		{ "a.ts": "// @ts-ignore\n" },
-		"feat: add a",
-	);
-	const original = runner.run;
-	const spy = spyOn(runner, "run").mockImplementation(
-		async (argv, cwd, options) => {
-			if (argv[0] === "git" && argv[1] === "show")
-				return {
-					ok: false,
-					output: "Could not read blob",
-					stdout: "",
-					ms: 1,
-					timedOut: false,
-				};
-			return original(argv, cwd, options);
-		},
-	);
-	try {
-		const result = await ci(config, { cwd: repo.root, base: "main", env: {} });
-		expect(result.ok).toBe(false);
-		expect(
-			result.checks.find((entry) => entry.name === "Lint suppressions"),
-		).toMatchObject({
-			ok: false,
-			output: expect.stringContaining("Could not read blob"),
-		});
-		expect(result.checks.find((entry) => entry.name === "Risk")).toBeDefined();
-	} finally {
-		spy.mockRestore();
-	}
-});
+// Creates a Git branch before injecting the suppression scan error.
+test(
+	"a suppression git error fails its check and CI still reports the other checks",
+	async () => {
+		const { repo, config } = await branch(
+			{ extends: ["recommended"] },
+			{ "a.ts": "// @ts-ignore\n" },
+			"feat: add a",
+		);
+		const original = runner.run;
+		const spy = spyOn(runner, "run").mockImplementation(
+			async (argv, cwd, options) => {
+				if (argv[0] === "git" && argv[1] === "show")
+					return {
+						ok: false,
+						output: "Could not read blob",
+						stdout: "",
+						ms: 1,
+						timedOut: false,
+					};
+				return original(argv, cwd, options);
+			},
+		);
+		try {
+			const result = await ci(config, {
+				cwd: repo.root,
+				base: "main",
+				env: {},
+			});
+			expect(result.ok).toBe(false);
+			expect(
+				result.checks.find((entry) => entry.name === "Lint suppressions"),
+			).toMatchObject({
+				ok: false,
+				output: expect.stringContaining("Could not read blob"),
+			});
+			expect(
+				result.checks.find((entry) => entry.name === "Risk"),
+			).toBeDefined();
+		} finally {
+			spy.mockRestore();
+		}
+	},
+	repoTestTimeout,
+);
