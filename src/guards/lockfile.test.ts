@@ -303,6 +303,97 @@ test.skipIf(Bun.which("yarn") === null)(
 	},
 );
 
+test.skipIf(Bun.which("yarn") === null)(
+	"a yarn-path release does not load files beside it from the working copy",
+	async () => {
+		const lockfile = "# yarn lockfile v1\n";
+		const edited = `${lockfile}# edited\n`;
+		const verdict = await editedCheck(
+			"yarn.lock",
+			"yarn",
+			{
+				"package.json": '{ "name": "app", "version": "1.0.0" }\n',
+				".yarnrc": 'yarn-path "./tools/yarn.cjs"\n',
+				"tools/package.json": '{ "name": "tools", "version": "1.0.0" }\n',
+				"tools/yarn.cjs": 'require("./cli.cjs")\n',
+				"tools/cli.cjs": "process.exit(3)\n",
+				"yarn.lock": lockfile,
+			},
+			{
+				"package.json":
+					'{ "name": "app", "version": "1.0.0", "dependencies": { "tools": "file:tools" } }\n',
+				"tools/cli.cjs": `require("node:fs").writeFileSync("yarn.lock", ${JSON.stringify(edited)})\n`,
+				"yarn.lock": edited,
+			},
+		);
+		expect(verdict?.message).toContain("could not check that yarn wrote");
+	},
+);
+
+test.each([
+	'yarn-path: "./"',
+	'yarn-path:"./"',
+	"yarn-path ./ # the release",
+	'yarnPath "./"',
+	"yarnPath: ./",
+	'"yarnPath": "./"',
+	'"yarn-path": ./',
+])("a .yarnrc line %p names the yarn-path", async (line) => {
+	const lockfile = "# yarn lockfile v1\n";
+	const verdict = await editedCheck(
+		"yarn.lock",
+		"yarn",
+		{
+			"package.json": '{ "name": "app", "version": "1.0.0" }\n',
+			".yarnrc": `${line}\n`,
+			"yarn.lock": lockfile,
+		},
+		{ "yarn.lock": `${lockfile}\n` },
+	);
+	expect(verdict?.message).toContain("that is not one file in the repo");
+});
+
+test.each([
+	"yarn-path './tools/yarn.cjs'",
+	"--yarn-path ./tools/yarn.cjs",
+	'yarn-path "./a.cjs" "./b.cjs"',
+])("a .yarnrc line %p the check cannot read is refused", async (line) => {
+	const lockfile = "# yarn lockfile v1\n";
+	const verdict = await editedCheck(
+		"yarn.lock",
+		"yarn",
+		{
+			"package.json": '{ "name": "app", "version": "1.0.0" }\n',
+			".yarnrc": `${line}\n`,
+			"yarn.lock": lockfile,
+		},
+		{ "yarn.lock": `${lockfile}\n` },
+	);
+	expect(verdict?.message).toContain(
+		"has a line about yarn-path that cagr cannot read",
+	);
+});
+
+test.each([
+	[".npmrc", "global-pnpmfile=tools/g.cjs\n"],
+	["pnpm-workspace.yaml", "globalPnpmfile: tools/g.cjs\n"],
+])("a global pnpmfile in %s is refused: %p", async (config, text) => {
+	const lockfile = "lockfileVersion: '9.0'\n";
+	const verdict = await editedCheck(
+		"pnpm-lock.yaml",
+		"pnpm",
+		{
+			"package.json": '{ "name": "app" }\n',
+			[config]: text,
+			"pnpm-lock.yaml": lockfile,
+		},
+		{ "pnpm-lock.yaml": `${lockfile}# edited\n` },
+	);
+	expect(verdict?.message).toContain(
+		`The committed ${config} sets a global pnpmfile`,
+	);
+});
+
 test("a packageManager a human set but did not commit asks for a commit", async () => {
 	const lockfile = "lockfileVersion: '9.0'\n";
 	const verdict = await editedCheck(
@@ -473,6 +564,28 @@ test.each([
 	["dlopen", "process.dlopen(m, './x.node')", false],
 	["binding", "process.binding('fs')", false],
 	["an optional computed member of module", "module?.['x']", false],
+	[
+		"getBuiltinModule",
+		"process.getBuiltinModule('node:child_process').execSync('node ./x')",
+		false,
+	],
+	[
+		"createRequire from getBuiltinModule",
+		"process.getBuiltinModule('module').createRequire(__filename)('./x')",
+		false,
+	],
+	["_linkedBinding", "process._linkedBinding('x')", false],
+	["a computed member of process", "process['getBuiltin' + 'Module']", false],
+	["process in parentheses", "(process)['x']", false],
+	["process passed on", "Reflect.get(process, 'x')", false],
+	["a comment between module and a bracket", "module/**/['x']('./x')", false],
+	["module in parentheses", "(module)['x']('./x')", false],
+	["module given another name", "const m = module; m['x']", false],
+	[
+		"process.env, a module field and module.exports",
+		"if (process.env.CI && pkg.type === 'module') pkg.module = 'x'\nmodule . exports = { hooks: {} }",
+		true,
+	],
 	...["vm", "worker_threads", "cluster", "inspector", "repl", "wasi"].map(
 		(name) => [`the ${name} module`, `require('node:${name}')`, false] as const,
 	),

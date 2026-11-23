@@ -413,12 +413,22 @@ async function copyInputs(
 			await mkdir(dirname(join(target, file)), { recursive: true });
 			await writeFile(join(target, file), (await fromHead(file)) ?? "");
 		}
+	let releaseRc: string | null = null;
 	const yarnrc = decode(await fromHead(posix.join(project, ".yarnrc")));
-	const releases = [
-		...(yarnrc ?? "").matchAll(
-			/^\s*(?:yarn-path|"yarn-path")\s+(?:"([^"]*)"|(\S+))/gm,
-		),
-	].map((match) => match[1] ?? match[2] ?? "");
+	const releases: string[] = [];
+	// Yarn 1 reads yarn-path or yarnPath, the key bare or quoted, after a colon or a space. A line it might read but this cannot is refused.
+	for (const line of (yarnrc ?? "").split(/\r?\n/)) {
+		if (!/yarn-?path/i.test(line)) continue;
+		const match =
+			/^\s*("?)(?:yarn-path|yarnPath)\1(?:\s*:\s*|\s+)(?:"([^"]*)"|([^\s"'#]+))\s*(?:#.*)?$/.exec(
+				line,
+			);
+		if (!match)
+			throw new Refusal(
+				`The committed .yarnrc has a line about yarn-path that cagr cannot read: ${line.trim()}. Write it as yarn-path "./path/to/release.cjs" in a commit, or restore the lockfile and ask the user to run the yarn command.`,
+			);
+		releases.push(match[2] ?? match[3] ?? "");
+	}
 	// Yarn 1 runs the release the committed .yarnrc names, so it must come from the commit too.
 	if (releases.length) {
 		const release = releases[0] ?? "";
@@ -455,12 +465,17 @@ async function copyInputs(
 			const bytes = await fromHead(file);
 			await rm(join(target, file), { force: true, recursive: true });
 			if (bytes) {
-				await mkdir(dirname(join(target, file)), { recursive: true });
-				await writeFile(join(target, file), bytes);
+				// Alone in a folder outside the copy, so files it loads beside itself cannot come from the working copy.
+				const folder = join(dirname(target), "release");
+				const copy = join(folder, basename(file));
+				await mkdir(folder, { recursive: true });
+				await writeFile(copy, bytes, { mode: 0o755 });
+				releaseRc = join(folder, ".yarnrc");
+				await writeFile(releaseRc, `yarn-path ${JSON.stringify(copy)}\n`);
 			}
 		}
 	}
-	return fromHead;
+	return { fromHead, releaseRc };
 }
 
 /** The packageManager Corepack picks for `project`: the nearest package.json at or above it that sets one. */
@@ -513,7 +528,10 @@ const coreModules = new Set(
  */
 /** Words that load or run code other than through a literal core load. */
 const refusedWords =
-	"require|import|eval|Function|constructor|arguments|globalThis|WebAssembly|mainModule|_load|execve|dlopen|binding";
+	"require|import|eval|Function|constructor|arguments|globalThis|WebAssembly|mainModule|_load|execve|dlopen|binding|_linkedBinding|getBuiltinModule|createRequire";
+/** `module` and `process` used other than as a string, a property name or one of these members. Each can reach a loader, and an allowlist does not depend on how the member is spelled. */
+const referenced = (name: string, members: string) =>
+	`(?<![\\w$."'\`])${name}\\b(?!["'\`]|\\s*(?:\\?\\.|\\.)\\s*(?:${members})\\b)`;
 
 const literalLoads = new RegExp(
 	[
@@ -526,7 +544,7 @@ const literalLoads = new RegExp(
 );
 
 const refused = new RegExp(
-	`\\b(?:${refusedWords})\\b|\\\\u|\\bmodule\\s*(?:\\?\\.\\s*)?\\[|\\bfrom\\s*["'\`]`,
+	`\\b(?:${refusedWords})\\b|\\\\u|${referenced("module", "exports")}|${referenced("process", "env|platform|arch|version|versions|cwd")}|\\bfrom\\s*["'\`]`,
 );
 
 export function builtinsOnly(text: string) {
@@ -547,10 +565,9 @@ async function namedPnpmfiles(
 ) {
 	const found: [string, string][] = [];
 	const npmrc = posix.join(workspace, ".npmrc");
+	const ini = decode(await fromHead(npmrc)) ?? "";
 	const line = [
-		...(decode(await fromHead(npmrc)) ?? "").matchAll(
-			/^[ \t]*pnpmfile[ \t]*=[ \t]*(.*?)[ \t]*$/gm,
-		),
+		...ini.matchAll(/^[ \t]*pnpmfile[ \t]*=[ \t]*(.*?)[ \t]*$/gm),
 	].at(-1)?.[1];
 	if (line) found.push([npmrc, line.replace(/^(["'])(.*)\1$/, "$2")]);
 	const yaml = posix.join(workspace, workspaceFile);
@@ -559,6 +576,12 @@ async function namedPnpmfiles(
 	try {
 		value = text === null ? undefined : Bun.YAML.parse(text);
 	} catch {}
+	const settings = value && typeof value === "object" ? Object.keys(value) : [];
+	const global = /^\s*global[-_]?pnpmfile\s*[=:]/im;
+	if (global.test(ini) || settings.some((key) => global.test(`${key}:`)))
+		throw new Refusal(
+			`The committed ${global.test(ini) ? npmrc : yaml} sets a global pnpmfile, which pnpm loads from outside the files the check takes from the commit, so cagr does not run it. Restore the lockfile and ask the user to run the pnpm command.`,
+		);
 	const setting = (value as { pnpmfile?: unknown } | null)?.pnpmfile;
 	for (const named of [setting].flat())
 		if (typeof named === "string" && named) found.push([yaml, named]);
@@ -704,7 +727,13 @@ async function regenerate(
 		const repo = join(folder, "repo");
 		const home = join(folder, "home");
 		await mkdir(home);
-		const fromHead = await copyInputs(root, head, path, repo, deadline);
+		const { fromHead, releaseRc } = await copyInputs(
+			root,
+			head,
+			path,
+			repo,
+			deadline,
+		);
 		const project = posix.dirname(path);
 		const pinned = await packageManagerOf(project, async (file) =>
 			decode(await fromHead(file)),
@@ -766,6 +795,8 @@ async function regenerate(
 		}
 		if (spec.yarnrc && existsSync(join(folderOf, ".yarnrc")))
 			argv.push("--use-yarnrc", join(folderOf, ".yarnrc"));
+		// Read after the repo's .yarnrc, so its yarn-path wins.
+		if (spec.yarnrc && releaseRc) argv.push("--use-yarnrc", releaseRc);
 		const timeoutMs = Math.floor(deadline - performance.now());
 		if (timeoutMs <= 0) throw new Error("No time was left to run it.");
 		const result = await run(argv, folderOf, {
