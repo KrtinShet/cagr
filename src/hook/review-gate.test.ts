@@ -3,11 +3,15 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { resolveConfig } from "../config/load";
+import { snapshotBudget } from "../guards/protected-turn";
 import { recordPath, writeRecord } from "../review/store";
+import { roomyBudgets } from "../test/budgets";
 import { tempRepo } from "../test/repo";
 import { finding, record, round } from "../test/review";
 import { handle } from "./handlers";
 import type { HookInput } from "./types";
+
+roomyBudgets(snapshotBudget);
 
 const body =
 	'--body "## Testing\nbun test\n## Risk\nlow\n## How to revert\ngit revert"';

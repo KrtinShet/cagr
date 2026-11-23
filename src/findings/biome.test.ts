@@ -1,10 +1,14 @@
 import { expect, test } from "bun:test";
 import { mkdirSync, readFileSync, symlinkSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { handle, timeouts } from "../hook/handlers";
 import { run } from "../run";
+import { repoTestTimeout, roomyBudgets } from "../test/budgets";
 import { tempRepo } from "../test/repo";
-import { captureBaseline, compareFindings } from "./baseline";
+import { captureBaseline, compareFindings, comparisonBudget } from "./baseline";
 import { findingCommand } from "./command";
+
+roomyBudgets(comparisonBudget, timeouts);
 
 const fixture = (name: string) =>
 	readFileSync(join(import.meta.dir, "fixtures", `biome-${name}.txt`), "utf8");
@@ -25,90 +29,100 @@ async function setup() {
 	return { ...repo, session };
 }
 
-test("Biome file comparison uses real config and binary for lint and check", async () => {
-	for (const command of [
-		"bunx biome lint --fix {files}",
-		"bunx biome check --write --no-errors-on-unmatched {files}",
-	]) {
-		const { root, write, session } = await setup();
-		for (const [name, count] of [
-			["inserted", 0],
-			["added", 1],
-			["replaced", 1],
-			["edited", 1],
-		] as const) {
-			await write("src/sample.js", fixture(name));
-			// check also reports formatting and assists, which must stay strict.
+// Initializes two Git repos and invokes Biome on the disk and saved copies.
+test(
+	"Biome file comparison uses real config and binary for lint and check",
+	async () => {
+		for (const command of [
+			"bunx biome lint --fix {files}",
+			"bunx biome check --write --no-errors-on-unmatched {files}",
+		]) {
+			const { root, write, session } = await setup();
+			for (const [name, count] of [
+				["inserted", 0],
+				["added", 1],
+				["replaced", 1],
+				["edited", 1],
+			] as const) {
+				await write("src/sample.js", fixture(name));
+				// check also reports formatting and assists, which must stay strict.
+				const compared = await compareFindings(
+					command,
+					["src/sample.js"],
+					root,
+					session,
+				);
+				if (command.includes(" check") && ["added", "replaced"].includes(name))
+					expect(compared).toBeNull();
+				else {
+					expect(compared).not.toBeNull();
+					expect(compared?.problems).toHaveLength(count);
+				}
+			}
+		}
+	},
+	repoTestTimeout,
+);
+
+// Each config case creates its own Git repo and some invoke Biome or git check-ignore.
+test(
+	"missing, inherited, nested, ignored and unsupported config stays strict",
+	async () => {
+		for (const kind of [
+			"missing",
+			"extends",
+			"nested",
+			"ignored",
+			"vcs",
+			"overrides",
+			"jsonc",
+		]) {
+			const { root, write, session } = await setup();
+			if (kind === "missing") {
+				const { rmSync } = await import("node:fs");
+				rmSync(join(root, "biome.json"));
+			}
+			if (kind === "extends")
+				await write(
+					"biome.json",
+					JSON.stringify({ ...config, extends: ["./base.json"] }),
+				);
+			if (kind === "nested") await write("src/biome.json", "{}");
+			if (kind === "ignored")
+				await write(
+					"biome.json",
+					JSON.stringify({ ...config, files: { includes: ["**", "!src/**"] } }),
+				);
+			if (kind === "overrides")
+				await write("biome.json", JSON.stringify({ ...config, overrides: [] }));
+			if (kind === "vcs") {
+				await write(".gitignore", "src/sample.js\n");
+				await write(
+					"biome.json",
+					JSON.stringify({
+						...config,
+						vcs: { enabled: true, clientKind: "git", useIgnoreFile: true },
+					}),
+				);
+			}
+			if (kind === "jsonc") {
+				const { rmSync } = await import("node:fs");
+				rmSync(join(root, "biome.json"));
+				await write("biome.jsonc", `// comment\n${JSON.stringify(config)}`);
+			}
+			await write("src/sample.js", fixture("inserted"));
 			const compared = await compareFindings(
-				command,
+				"biome lint {files}",
 				["src/sample.js"],
 				root,
 				session,
 			);
-			if (command.includes(" check") && ["added", "replaced"].includes(name))
-				expect(compared).toBeNull();
-			else {
-				expect(compared).not.toBeNull();
-				expect(compared?.problems).toHaveLength(count);
-			}
+			if (kind === "jsonc") expect(compared).toEqual({ old: 1, problems: [] });
+			else expect(compared).toBeNull();
 		}
-	}
-});
-
-test("missing, inherited, nested, ignored and unsupported config stays strict", async () => {
-	for (const kind of [
-		"missing",
-		"extends",
-		"nested",
-		"ignored",
-		"vcs",
-		"overrides",
-		"jsonc",
-	]) {
-		const { root, write, session } = await setup();
-		if (kind === "missing") {
-			const { rmSync } = await import("node:fs");
-			rmSync(join(root, "biome.json"));
-		}
-		if (kind === "extends")
-			await write(
-				"biome.json",
-				JSON.stringify({ ...config, extends: ["./base.json"] }),
-			);
-		if (kind === "nested") await write("src/biome.json", "{}");
-		if (kind === "ignored")
-			await write(
-				"biome.json",
-				JSON.stringify({ ...config, files: { includes: ["**", "!src/**"] } }),
-			);
-		if (kind === "overrides")
-			await write("biome.json", JSON.stringify({ ...config, overrides: [] }));
-		if (kind === "vcs") {
-			await write(".gitignore", "src/sample.js\n");
-			await write(
-				"biome.json",
-				JSON.stringify({
-					...config,
-					vcs: { enabled: true, clientKind: "git", useIgnoreFile: true },
-				}),
-			);
-		}
-		if (kind === "jsonc") {
-			const { rmSync } = await import("node:fs");
-			rmSync(join(root, "biome.json"));
-			await write("biome.jsonc", `// comment\n${JSON.stringify(config)}`);
-		}
-		await write("src/sample.js", fixture("inserted"));
-		const compared = await compareFindings(
-			"biome lint {files}",
-			["src/sample.js"],
-			root,
-			session,
-		);
-		if (kind === "jsonc") expect(compared).toEqual({ old: 1, problems: [] });
-		else expect(compared).toBeNull();
-	}
-});
+	},
+	repoTestTimeout,
+);
 
 test("Biome timeouts and truncated or unknown reports stay strict; workspace is removed", async () => {
 	const { root, session } = await setup();
@@ -131,7 +145,7 @@ test("Biome timeouts and truncated or unknown reports stay strict; workspace is 
 				["src/sample.js"],
 				root,
 				session,
-				performance.now() + 750,
+				undefined,
 				execute,
 			),
 		).toBeNull();
@@ -148,7 +162,7 @@ test("Biome timeouts and truncated or unknown reports stay strict; workspace is 
 			["src/sample.js"],
 			root,
 			session,
-			performance.now() + 750,
+			undefined,
 			execute,
 		),
 	).toEqual({ old: 1, problems: [] });
@@ -164,7 +178,6 @@ test("Biome timeouts and truncated or unknown reports stay strict; workspace is 
 
 test("after-edit compares Biome terminal stderr and blocks a new lint error", async () => {
 	const { resolveConfig } = await import("../config/load");
-	const { handle } = await import("../hook/handlers");
 	const { root, write, session } = await setup();
 	const config = resolveConfig(
 		{

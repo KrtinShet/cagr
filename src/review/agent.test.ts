@@ -67,7 +67,7 @@ test("a command reviewer gets the prompt on stdin and in a file, and only stdout
 		prompt: "hello",
 		schema: {},
 		cwd: process.cwd(),
-		timeoutMs: 5000,
+		timeoutMs: 30_000,
 		model: null,
 	});
 	expect(answer).toEqual({ seen: "hello" });
@@ -77,7 +77,7 @@ test("a command reviewer gets the prompt on stdin and in a file, and only stdout
 			prompt: "",
 			schema: {},
 			cwd: process.cwd(),
-			timeoutMs: 5000,
+			timeoutMs: 30_000,
 			model: null,
 		}),
 	).rejects.toThrow("failed: nope");

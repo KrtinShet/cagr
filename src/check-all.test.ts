@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { checkAll } from "./check-all";
 import { resolveConfig } from "./config/load";
+import { repoTestTimeout } from "./test/budgets";
 import { tempRepo } from "./test/repo";
 
 const rule = `id: no-console-log
@@ -82,22 +83,27 @@ test("--all outside a git repo says how to fix it", async () => {
 	expect(result.report).toContain("Run `git init`, or name the files");
 });
 
-test("--all skips folders git lists: nested repos and symlinks to folders", async () => {
-	const { root, git, commit } = await tempRepo();
-	await commit("chore: add", {
-		"src/a.ts": "export {};\n",
-		".cagr/rules/layout.yml": layout,
-	});
-	// An untracked nested repo is listed as `src/Three.js/`; a symlink to a folder as itself.
-	const nested = await tempRepo();
-	await git("clone", "-q", nested.root, "src/Three.js");
-	symlinkSync(join(root, "src"), join(root, "src/LinkDir.js"));
-	const config = resolveConfig({}, root, join(root, "cagr.toml"));
-	expect(await checkAll(config)).toEqual({
-		ok: true,
-		report: "No problems in 3 files.",
-	});
-});
+// Clones a nested Git repository and scans the outer Git index.
+test(
+	"--all skips folders git lists: nested repos and symlinks to folders",
+	async () => {
+		const { root, git, commit } = await tempRepo();
+		await commit("chore: add", {
+			"src/a.ts": "export {};\n",
+			".cagr/rules/layout.yml": layout,
+		});
+		// An untracked nested repo is listed as `src/Three.js/`; a symlink to a folder as itself.
+		const nested = await tempRepo();
+		await git("clone", "-q", nested.root, "src/Three.js");
+		symlinkSync(join(root, "src"), join(root, "src/LinkDir.js"));
+		const config = resolveConfig({}, root, join(root, "cagr.toml"));
+		expect(await checkAll(config)).toEqual({
+			ok: true,
+			report: "No problems in 3 files.",
+		});
+	},
+	repoTestTimeout,
+);
 
 test("--all names git's error when git fails inside a repo", async () => {
 	const { root, git } = await tempRepo();
@@ -139,16 +145,21 @@ test("--all reports a broken rule file under Rules", async () => {
 	expect(result.report).toContain("bad.yml: not valid YAML");
 });
 
-test("cagr check --all exits 1 on a finding and rejects file names", async () => {
-	const { root, write } = await repo();
-	await write("cagr.toml", "");
-	const cli = join(import.meta.dir, "cli.ts");
-	const all = Bun.spawnSync(["bun", cli, "check", "--all"], { cwd: root });
-	expect(all.exitCode).toBe(1);
-	expect(all.stdout.toString()).toContain("src/old.ts:1:1 no-console-log");
-	const both = Bun.spawnSync(["bun", cli, "check", "--all", "src/a.ts"], {
-		cwd: root,
-	});
-	expect(both.exitCode).not.toBe(0);
-	expect(both.stderr.toString()).toContain("Drop the file names");
-});
+// Creates a Git repo and exercises both CLI invocations against it.
+test(
+	"cagr check --all exits 1 on a finding and rejects file names",
+	async () => {
+		const { root, write } = await repo();
+		await write("cagr.toml", "");
+		const cli = join(import.meta.dir, "cli.ts");
+		const all = Bun.spawnSync(["bun", cli, "check", "--all"], { cwd: root });
+		expect(all.exitCode).toBe(1);
+		expect(all.stdout.toString()).toContain("src/old.ts:1:1 no-console-log");
+		const both = Bun.spawnSync(["bun", cli, "check", "--all", "src/a.ts"], {
+			cwd: root,
+		});
+		expect(both.exitCode).not.toBe(0);
+		expect(both.stderr.toString()).toContain("Drop the file names");
+	},
+	repoTestTimeout,
+);

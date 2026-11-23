@@ -13,11 +13,14 @@ export type Snapshot = {
 	changes: Change[];
 	pending: boolean;
 };
+export const collectionBudget = { defaultMs: 15_000 };
+
 export async function collect(
 	config: Config,
 	options: { base?: string; committed?: boolean; deadline?: number } = {},
 ): Promise<Snapshot> {
-	const deadline = options.deadline ?? performance.now() + 15_000;
+	const deadline =
+		options.deadline ?? performance.now() + collectionBudget.defaultMs;
 	let temporaryIndex: string | undefined;
 	let overrides: string[] = [];
 	const execute = async (args: string[], stdin?: string) => {

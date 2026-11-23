@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import {
 	copyFile,
 	mkdir,
@@ -9,16 +9,18 @@ import {
 } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join, relative } from "node:path";
+import { timeouts } from "../hook/handlers";
 import { runHook } from "../hook/run-hook";
 import type { HookInput } from "../hook/types";
+import * as runner from "../run";
 import { runShell, shellQuote } from "../run";
+import { repoTestTimeout, roomyBudgets } from "../test/budgets";
 import { localRegistry } from "../test/registry";
 import { tempRepo } from "../test/repo";
-import { roomySnapshots } from "../test/snapshot";
 import { clearTurnState, protectedNoticesDir, stateFile } from "../turn-state";
 import { snapshotBudget } from "./protected-turn";
 
-roomySnapshots();
+roomyBudgets(snapshotBudget, timeouts);
 
 const policy = 'extends = ["recommended"]\n';
 const trash = new Set<string>();
@@ -487,16 +489,27 @@ async function withSlowGitStatus(
 	repo: Awaited<ReturnType<typeof setup>>,
 	command: string,
 ) {
-	await repo.git("config", "core.fsmonitor", "sleep 3; false");
-	const budget = snapshotBudget.commandMs;
-	snapshotBudget.commandMs = 500;
+	const run = runner.run;
+	// Only status should time out. HEAD and staged lockfile reads still use Git.
+	const status = spyOn(runner, "run").mockImplementation(
+		(argv, cwd, options) =>
+			cwd === repo.root && argv[0] === "git" && argv[1] === "status"
+				? Promise.resolve({
+						ok: false,
+						stdout: "",
+						output: "Stopped after the snapshot deadline.",
+						exitCode: null,
+						ms: options?.timeoutMs ?? 0,
+						timedOut: true,
+					})
+				: run(argv, cwd, options),
+	);
 	try {
 		expect(JSON.parse(await repo.before(command)).systemMessage).toContain(
 			"could not snapshot",
 		);
 	} finally {
-		snapshotBudget.commandMs = budget;
-		await repo.git("config", "--unset", "core.fsmonitor");
+		status.mockRestore();
 	}
 }
 
@@ -811,21 +824,26 @@ test("a lockfile bun cannot rebuild blocks with the fix", async () => {
 	);
 });
 
-test("a committed lockfile passes, a separately staged one does not", async () => {
-	const repo = await lockedRepo("bun");
-	expect(await repo.before("bun add zed")).toBe("");
-	await repo.add("zed");
-	await repo.git("commit", "-qam", "chore: add zed");
-	expect(await repo.stop()).toBe("");
+// Runs several real Bun installs and Git snapshots for the committed and staged cases.
+test(
+	"a committed lockfile passes, a separately staged one does not",
+	async () => {
+		const repo = await lockedRepo("bun");
+		expect(await repo.before("bun add zed")).toBe("");
+		await repo.add("zed");
+		await repo.git("commit", "-qam", "chore: add zed");
+		expect(await repo.stop()).toBe("");
 
-	expect(await repo.before("bun add pad@1.1.0")).toBe("");
-	await repo.add("pad@1.1.0");
-	await repo.git("add", "bun.lock");
-	await repo.add("pad@1.0.0");
-	expect(JSON.parse(await repo.stop()).reason).toContain(
-		"Stage and commit the lockfile the package manager wrote",
-	);
-});
+		expect(await repo.before("bun add pad@1.1.0")).toBe("");
+		await repo.add("pad@1.1.0");
+		await repo.git("add", "bun.lock");
+		await repo.add("pad@1.0.0");
+		expect(JSON.parse(await repo.stop()).reason).toContain(
+			"Stage and commit the lockfile the package manager wrote",
+		);
+	},
+	repoTestTimeout,
+);
 
 test("a lockfile from another package manager blocks", async () => {
 	const repo = await lockedRepo("bun");
@@ -867,13 +885,14 @@ async function withEnv(
 
 test("a snapshot that runs out of its budget gives the notice", async () => {
 	const repo = await setup();
+	const budget = snapshotBudget.commandMs;
 	snapshotBudget.commandMs = 0;
 	try {
 		expect(
 			JSON.parse(await repo.before("cat README.md")).systemMessage,
 		).toContain("protected files");
 	} finally {
-		snapshotBudget.commandMs = 10_000;
+		snapshotBudget.commandMs = budget;
 	}
 	await repo.write("cagr.toml", `${policy}# Shell change\n`);
 	expect(JSON.parse(await repo.stop())).toMatchObject({

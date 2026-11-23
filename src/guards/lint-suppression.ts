@@ -125,6 +125,8 @@ export function addedLines(patch: string): Set<number> {
 	return lines;
 }
 
+export const suppressionBudget = { worktreeMs: 750, headProbeMs: 100 };
+
 /** Hooks compare the worktree to HEAD; CI reads the committed branch, never formatter output. */
 export async function checkSuppressions(
 	config: Config,
@@ -134,7 +136,8 @@ export async function checkSuppressions(
 ): Promise<SuppressionFinding[]> {
 	if (!config.suppressions.enabled) return [];
 	const findings: SuppressionFinding[] = [];
-	const deadline = performance.now() + (head ? 60_000 : 750);
+	const deadline =
+		performance.now() + (head ? 60_000 : suppressionBudget.worktreeMs);
 	const git = async (args: string[]) => {
 		const remaining = Math.floor(deadline - performance.now());
 		if (remaining <= 0)
@@ -152,7 +155,7 @@ export async function checkSuppressions(
 		const ref = await run(
 			["git", "rev-parse", "--verify", "--quiet", "HEAD"],
 			config.root,
-			{ timeoutMs: 100 },
+			{ timeoutMs: suppressionBudget.headProbeMs },
 		);
 		if (!ref.ok) {
 			await git(["rev-parse", "--is-inside-work-tree"]);
