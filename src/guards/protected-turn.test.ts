@@ -669,11 +669,8 @@ for (const manager of ["bun", "pnpm", "npm", "yarn"] as const)
 		30_000,
 	);
 
-// Words such as require in comments, strings and object keys load nothing.
-const pnpmfile = `// pnpm does not require this peer, nor import it
-const { basename } = require('node:path')
-const entry = { import: './a.mjs', require: './a.cjs' }
-module.exports = { hooks: { readPackage(pkg) { pkg.description = basename("seen, moved from 'old'"); return pkg } } }
+const pnpmfile = `const { basename } = require('node:path')
+module.exports = { hooks: { readPackage(pkg) { pkg.description = basename('seen'); return pkg } } }
 `;
 
 test.skipIf(missing("pnpm"))(

@@ -489,39 +489,34 @@ function workspaceRoot(repo: string, project: string) {
 	return project;
 }
 
-/** Node core modules. A fixed list, since the runtime running cagr (Bun) lists modules Node resolves from disk. */
-const nodeModules = new Set(
-	"assert assert/strict async_hooks buffer child_process cluster console constants crypto dgram diagnostics_channel dns dns/promises domain events fs fs/promises http http2 https inspector inspector/promises module net os path path/posix path/win32 perf_hooks process punycode querystring readline readline/promises repl stream stream/consumers stream/promises stream/web string_decoder sys timers timers/promises tls trace_events tty url util util/types v8 vm wasi worker_threads zlib".split(
+/** Node core modules a pnpmfile may load. A fixed list, since Bun lists modules Node resolves from disk, and without those that run other code or files, such as child_process, vm and module. */
+const coreModules = new Set(
+	"assert assert/strict async_hooks buffer console constants crypto dgram diagnostics_channel dns dns/promises domain events fs fs/promises http http2 https net os path path/posix path/win32 perf_hooks process punycode querystring readline readline/promises stream stream/consumers stream/promises stream/web string_decoder sys timers timers/promises tls trace_events tty url util util/types v8 zlib".split(
 		" ",
 	),
 );
 
 /**
- * Whether a pnpmfile loads only Node built-ins. Anything else resolves to
- * files in the temp folder or its parents, which the agent can write. The
- * calls are read from the raw text, since a regex literal can make comments
- * and strings look like they start or end elsewhere. A `require` or `import`
- * word that is not called, such as in a comment, an object key or a member
- * name, loads nothing.
+ * Whether a pnpmfile loads only Node core modules. Anything else resolves to
+ * files in the temp folder or its parents, which the agent can write. JavaScript
+ * has too many ways to reach `require` for a pattern to list, so every
+ * `require` or `import` word must be a direct load of a core module by a
+ * literal name, wherever it appears, and the other ways to load or run code
+ * are refused. That also refuses those words in comments and object keys.
  */
 export function builtinsOnly(text: string) {
-	const load =
-		/\b(?:require|import)\s*\(\s*(["'`])([^"'`]+)\1\s*\)|\b(?:import|export)\s+(?:[\w$*{},\s]+?\s+from\s+)?(["'])([^"']+)\3/g;
-	for (const match of text.matchAll(load)) {
-		const name = (match[2] ?? match[4] ?? "").replace(/^node:/, "");
-		if (!nodeModules.has(name)) return false;
-	}
-	const rest = text.replace(load, " ");
-	// A call with a computed name, another way to load, or require passed on as a value.
-	if (
-		/\b(?:require|import)\s*\(|\bcreateRequire\b|\b_load\b|[=,(]\s*require\b(?!\s*[.:(,}])/.test(
-			rest,
+	const loads =
+		/\brequire\s*\(\s*(["'])([^"'\n]+)\1\s*\)|\bimport\s*\(\s*(["'])([^"'\n]+)\3\s*\)|\b(?:import|export)\s+(?:[\w$*{},\s]+?\s+from\s+)?(["'])([^"'\n]+)\5/g;
+	for (const match of text.matchAll(loads))
+		if (
+			!coreModules.has(
+				(match[2] ?? match[4] ?? match[6] ?? "").replace(/^node:/, ""),
+			)
 		)
-	)
-		return false;
-	const quoted = /"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'|`(?:[^`\\]|\\.)*`/g;
-	// A static import the scan above did not read, such as one split by comments.
-	return !/\bfrom\s*["'`]/.test(rest.replace(quoted, ""));
+			return false;
+	return !/\b(?:require|import|eval|Function|constructor|arguments|globalThis|WebAssembly|mainModule|_load|execve|dlopen|binding)\b|\\u|\bmodule\s*(?:\?\.\s*)?\[|\bfrom\s*["'`]/.test(
+		text.replace(loads, " "),
+	);
 }
 
 /**
