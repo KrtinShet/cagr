@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, realpath, rm, utimes } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { repoTestTimeout } from "../test/budgets";
 import { tempRepo } from "../test/repo";
 import {
 	builtinsOnly,
@@ -68,31 +69,47 @@ test("a lockfile the stack's manager does not write says which manager to use", 
 	);
 });
 
-test("a JavaScript stack is chosen over another ecosystem's on the same paths", async () => {
-	const other = await check("package-lock.json", [stack("uv"), stack("bun")]);
-	expect(other?.message).toContain("uses bun, which does not write");
-	const only = await check("bun.lock", [stack("uv")]);
-	expect(only?.message).toContain("only when a [[stack]] with package_manager");
-	const writer = await check("bun.lock", [stack("pnpm"), stack("bun")], false);
-	expect(writer?.message).toContain("bun.lock is deleted");
-});
+// Creates three real Git repositories for the stack and lockfile combinations.
+test(
+	"a JavaScript stack is chosen over another ecosystem's on the same paths",
+	async () => {
+		const other = await check("package-lock.json", [stack("uv"), stack("bun")]);
+		expect(other?.message).toContain("uses bun, which does not write");
+		const only = await check("bun.lock", [stack("uv")]);
+		expect(only?.message).toContain(
+			"only when a [[stack]] with package_manager",
+		);
+		const writer = await check(
+			"bun.lock",
+			[stack("pnpm"), stack("bun")],
+			false,
+		);
+		expect(writer?.message).toContain("bun.lock is deleted");
+	},
+	repoTestTimeout,
+);
 
-test("a deleted lockfile, or a folder in its place, asks for a restore", async () => {
-	const deleted = await check("bun.lock", [stack("bun")], false);
-	expect(deleted?.message).toContain("bun.lock is deleted");
-	const repo = await tempRepo();
-	roots.add(repo.root);
-	await repo.write("bun.lock/inner", "x\n");
-	const verdict = await checkLockfile({
-		root: repo.root,
-		path: "bun.lock",
-		stacks: [stack("bun")],
-		baseline: null,
-		head: null,
-		deadline: performance.now() + 30_000,
-	});
-	expect(verdict?.message).toContain("bun.lock is not a regular file");
-});
+// Creates separate Git repositories for the deleted file and directory cases.
+test(
+	"a deleted lockfile, or a folder in its place, asks for a restore",
+	async () => {
+		const deleted = await check("bun.lock", [stack("bun")], false);
+		expect(deleted?.message).toContain("bun.lock is deleted");
+		const repo = await tempRepo();
+		roots.add(repo.root);
+		await repo.write("bun.lock/inner", "x\n");
+		const verdict = await checkLockfile({
+			root: repo.root,
+			path: "bun.lock",
+			stacks: [stack("bun")],
+			baseline: null,
+			head: null,
+			deadline: performance.now() + 30_000,
+		});
+		expect(verdict?.message).toContain("bun.lock is not a regular file");
+	},
+	repoTestTimeout,
+);
 
 test("a Yarn 2 or later lockfile is not rebuilt", async () => {
 	const repo = await tempRepo();
@@ -277,6 +294,7 @@ test("a pnpm setting changed in the root package.json is for a human", async () 
 	);
 });
 
+// Runs the committed Yarn release in a real Git fixture.
 test.skipIf(Bun.which("yarn") === null)(
 	"Yarn 1 runs the yarn-path release from the starting commit",
 	async () => {
@@ -301,8 +319,10 @@ test.skipIf(Bun.which("yarn") === null)(
 		);
 		expect(verdict?.message).toContain("could not check that yarn wrote");
 	},
+	repoTestTimeout,
 );
 
+// Runs Yarn against a Git fixture with a different neighboring file on disk.
 test.skipIf(Bun.which("yarn") === null)(
 	"a yarn-path release does not load files beside it from the working copy",
 	async () => {
@@ -328,6 +348,7 @@ test.skipIf(Bun.which("yarn") === null)(
 		);
 		expect(verdict?.message).toContain("could not check that yarn wrote");
 	},
+	repoTestTimeout,
 );
 
 test.each([
@@ -685,32 +706,39 @@ test.each([
 	expect(verdict?.message).toContain("that is not one file in the repo");
 });
 
+// Builds two Git repositories per case to check the import and the edited file.
 test.each([
 	[".npmrc", "pnpmfile=tools/hooks.cjs\n"],
 	[".npmrc", 'pnpmfile = "./tools/hooks.cjs"\n'],
 	["pnpm-workspace.yaml", "packages: []\npnpmfile: tools/hooks.cjs\n"],
-])("a pnpmfile named in %s gets the same checks: %p", async (config, text) => {
-	const lockfile = "lockfileVersion: '9.0'\n";
-	const files = {
-		"package.json": '{ "name": "app" }\n',
-		[config]: text,
-		"tools/hooks.cjs":
-			"const hooks = require('./more')\nmodule.exports = { hooks }\n",
-		"pnpm-lock.yaml": lockfile,
-	};
-	const edited = { "pnpm-lock.yaml": `${lockfile}# edited\n` };
-	expect(
-		(await editedCheck("pnpm-lock.yaml", "pnpm", files, edited))?.message,
-	).toContain("could not prove that tools/hooks.cjs loads only Node built-ins");
-	expect(
-		(
-			await editedCheck("pnpm-lock.yaml", "pnpm", files, {
-				...edited,
-				"tools/hooks.cjs": "module.exports = {}\n",
-			})
-		)?.message,
-	).toContain("tools/hooks.cjs differs from the last commit");
-});
+])(
+	"a pnpmfile named in %s gets the same checks: %p",
+	async (config, text) => {
+		const lockfile = "lockfileVersion: '9.0'\n";
+		const files = {
+			"package.json": '{ "name": "app" }\n',
+			[config]: text,
+			"tools/hooks.cjs":
+				"const hooks = require('./more')\nmodule.exports = { hooks }\n",
+			"pnpm-lock.yaml": lockfile,
+		};
+		const edited = { "pnpm-lock.yaml": `${lockfile}# edited\n` };
+		expect(
+			(await editedCheck("pnpm-lock.yaml", "pnpm", files, edited))?.message,
+		).toContain(
+			"could not prove that tools/hooks.cjs loads only Node built-ins",
+		);
+		expect(
+			(
+				await editedCheck("pnpm-lock.yaml", "pnpm", files, {
+					...edited,
+					"tools/hooks.cjs": "module.exports = {}\n",
+				})
+			)?.message,
+		).toContain("tools/hooks.cjs differs from the last commit");
+	},
+	repoTestTimeout,
+);
 
 test.each([
 	"pnpmfile=tools/real.cjs\nPnpmfile=tools/benign.cjs\n",
