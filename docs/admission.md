@@ -5,7 +5,7 @@ nav_order: 13
 
 # Machine admission
 
-cagr shares one memory pool across the repos and worktrees using the same local home directory. It starts medium and heavy commands when the machine has enough free tokens and memory pressure is normal.
+cagr shares one memory pool across the repos and worktrees using the same local home directory on macOS and Linux. It starts medium and heavy commands when the machine has enough free tokens and memory pressure is normal. On Windows, cagr leaves agent commands unchanged and `cagr run` executes them directly.
 
 ## Classes and the wrapper
 
@@ -50,5 +50,7 @@ cagr measure -- bun run verify
 Both readers sample pressure while the command runs. A timeout or SIGKILL that saw elevated pressure is **load-tainted**. cagr logs a retry and requeues it once with its original priority and a new ticket, or retries a light command immediately. An ordinary nonzero exit is returned unchanged. After a second load-tainted result, the wrapper exits 75 and asks you to rerun when the machine is quieter. CI reports a deferred check.
 
 Each queue wait is limited to 60 seconds. Pre-push refuses the push if admission expires and asks you to retry. The turn-end hook shares a shorter deadline when needed between waiting and execution. If admission cannot start within that window, the hook reports `load: turn-end checks deferred` and allows the turn to finish if the other checks pass.
+
+If admission setup fails before a wrapper starts the command, `cagr run` reports the error and executes directly. If the command already started, cagr reports the error without starting another copy.
 
 See [limits and troubleshooting](limits.md#memory-admission).

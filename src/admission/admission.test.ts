@@ -517,7 +517,7 @@ test("measurement in an ordinary clone is reused in local CI's bare-origin workt
 			if (!result.success) throw new Error(result.stderr.toString());
 		}
 		git("init", "-q", "checkout");
-		git("-C", "checkout", "remote", "add", "origin", "git@github.com:Example/Project.git");
+		git("-C", "checkout", "remote", "add", "origin", "git@GitHub.COM:Example/Project.git");
 		git("-C", "checkout", "-c", "user.name=cagr", "-c", "user.email=cagr@example.com",
 			"commit", "-qm", "chore: init", "--allow-empty");
 		git("clone", "--bare", "-q", "checkout", "scratch");
@@ -591,3 +591,65 @@ exec "$@"
 		}
 	},
 );
+
+test("Windows allows Bash without rewriting and runs explicit wrappers directly", async () => {
+	const cwd = fixture();
+	writeFileSync(join(cwd, "cagr.toml"), '[admission]\nheavy = ["bun"]\n');
+	const proc = spawn(cwd, [
+		"-e",
+		`
+		Object.defineProperty(process, "platform", { value: "win32" });
+		const { runHook } = await import(${JSON.stringify(resolve(import.meta.dir, "../hook/run-hook.ts"))});
+		const { runCli } = await import(${JSON.stringify(cliPath)});
+		const output = await runHook("codex", "command.before", JSON.stringify({
+			cwd: process.cwd(), tool_input: { command: "bun run verify" }
+		}), process.cwd());
+		console.error("hook " + JSON.stringify(output));
+		runCli(["run", "--", process.execPath, "-e", "console.error('command ran'); process.exit(42)"]);
+	`,
+	]);
+	const { code, output } = await proc.finished();
+	expect(output).toContain('hook ""');
+	expect(output).toContain("command ran");
+	expect(code).toBe(42);
+});
+
+test("the explicit wrapper fails open before spawn if the pool is inaccessible", async () => {
+	const cwd = fixture();
+	writeFileSync(join(cwd, ".cache"), "");
+	writeFileSync(join(cwd, "cagr.toml"), '[admission]\nheavy = ["echo"]\n');
+	const proc = spawn(cwd, [
+		cliPath,
+		"run",
+		"--",
+		"sh",
+		"-c",
+		"echo command-ran >&2; exit 42",
+	]);
+	const { code, output } = await proc.finished();
+	expect(output).toContain("Running without admission");
+	expect(output.match(/^command-ran$/gm)).toHaveLength(1);
+	expect(code).toBe(42);
+});
+
+test("the explicit wrapper does not repeat a started command after watchdog failure", async () => {
+	const proc = spawn(fixture(), [
+		"-e",
+		`
+		const { runCli } = await import(${JSON.stringify(cliPath)});
+		const spawn = Bun.spawn;
+		let attempts = 0;
+		Bun.spawn = (argv, options) => {
+			if (argv.includes("cagr-watch")) throw new Error("EMFILE: watchdog failed");
+			if (argv.includes("sleep 30")) console.error("command starts", ++attempts);
+			return spawn(argv, options);
+		};
+		runCli(["run", "--", "sh", "-c", "sleep 30"]);
+	`,
+	]);
+	const { code, output } = await proc.finished();
+	expect(output).toContain("EMFILE: watchdog failed");
+	expect(output.match(/^command starts /gm)).toHaveLength(1);
+	expect(output).not.toContain("Running without admission");
+	expect(code).toBe(2);
+});

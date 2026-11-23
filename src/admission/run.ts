@@ -23,6 +23,7 @@ import {
 	gib,
 	type Pressure,
 	pressureReader,
+	supportsAdmission,
 	usableMemory,
 } from "./pressure";
 import { canScope, memorySampler } from "./sample";
@@ -133,6 +134,7 @@ async function execute(
 			processGroup: true,
 			waitForGroup: true,
 			onSpawn: (pid) => {
+				options.onSpawn?.(pid);
 				if (locks.length || options.inherit) stopWatch = watchOwner(pid, locks);
 				if (measure) sample = memorySampler(pid, unit);
 			},
@@ -274,23 +276,31 @@ async function repoIdentity(cwd: string, checkout: string) {
 		.replace(/\/+$/, "")
 		.replace(/\.git$/, "")
 		.slice(1);
+	const hostname = url.hostname.toLowerCase();
 	const host =
-		url.protocol === "ssh:" && url.port === "22" ? url.hostname : url.host;
-	return url.hostname === "github.com"
+		url.protocol === "ssh:" && url.port === "22"
+			? hostname
+			: url.host.toLowerCase();
+	return hostname === "github.com"
 		? `${host}/${path.toLowerCase()}`
 		: `${host}/${path}`;
 }
 
 export async function runAdmitted(request: Request): Promise<RunResult> {
 	const { argv, cwd, config, options, measure } = request;
+	if (!supportsAdmission && measure)
+		throw new Error("Run cagr measure on macOS or Linux.");
 	const env = { ...process.env, ...options.env };
 	const marker = env[reservationEnv];
-	const inherited = marker !== undefined && new Pool().hasReservation(marker);
+	const inherited =
+		supportsAdmission &&
+		marker !== undefined &&
+		new Pool().hasReservation(marker);
 	if (inherited && measure)
 		throw new Error(
 			"Run cagr measure outside an existing admission reservation.",
 		);
-	if (inherited || (!measure && !config.enabled)) {
+	if (inherited || !supportsAdmission || (!measure && !config.enabled)) {
 		const limit = runLimit(options);
 		if (limit <= 0) return unsettled("deferred", deferred);
 		return (options.execute ?? run)(argv, cwd, {

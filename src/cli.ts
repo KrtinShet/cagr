@@ -43,6 +43,7 @@ import {
 	RuleError,
 	testRules,
 } from "./rules/rules";
+import { run } from "./run";
 import {
 	GitSetupError,
 	installGitHooks,
@@ -168,13 +169,36 @@ async function main(argv: string[]): Promise<number> {
 				loadConfig(cwd) ?? resolveConfig({}, cwd, resolve(cwd, "cagr.toml"));
 			process.once("SIGINT", () => process.exit(130));
 			process.once("SIGTERM", () => process.exit(143));
-			const result = await runAdmitted({
-				argv: args.slice(1),
-				cwd,
-				config: config.admission,
-				measure: command === "measure",
-				options: { inherit: true, log: console.error },
-			});
+			const argv = args.slice(1);
+			let started = false;
+			let result: Awaited<ReturnType<typeof runAdmitted>>;
+			try {
+				result = await runAdmitted({
+					argv,
+					cwd,
+					config: config.admission,
+					measure: command === "measure",
+					options: {
+						inherit: true,
+						log: console.error,
+						onSpawn: () => {
+							started = true;
+						},
+					},
+				});
+			} catch (error) {
+				if (command === "measure") throw error;
+				if (started) {
+					console.error(
+						`cagr: memory admission failed after the command started. ${error}`,
+					);
+					return 2;
+				}
+				console.error(
+					`cagr: memory admission is unavailable. ${error} Running without admission.`,
+				);
+				result = await run(argv, cwd, { inherit: true });
+			}
 			if (result.admission || (result.exitCode == null && result.output))
 				console.error(result.output);
 			return result.admission ? 75 : (result.exitCode ?? 1);

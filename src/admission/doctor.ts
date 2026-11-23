@@ -1,9 +1,11 @@
 import type { Config } from "../config/schema";
 import { describeTicket, Pool, poolSize } from "./pool";
-import { gib, pressureReader } from "./pressure";
+import { gib, pressureReader, supportsAdmission } from "./pressure";
 
 export async function admissionReport(config: Config["admission"]) {
 	const line = (text: string) => ({ ok: true, text });
+	if (!supportsAdmission)
+		return [line("Memory admission is available on macOS and Linux.")];
 	try {
 		const pool = new Pool();
 		const snapshot = await pool.transaction(performance.now() + 500, () => ({

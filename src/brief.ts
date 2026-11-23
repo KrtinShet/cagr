@@ -1,3 +1,4 @@
+import { supportsAdmission } from "./admission/pressure";
 import type { Config } from "./config/schema";
 import { findingCommand } from "./findings/command";
 import { protectedEntries } from "./guards/edit";
@@ -13,7 +14,7 @@ export function brief(
 	const lines = [
 		"cagr checks this repo. When it blocks something, its message says what to do instead.",
 	];
-	if (config.admission.enabled)
+	if (supportsAdmission && config.admission.enabled)
 		lines.push("- Medium and heavy commands run through `cagr run --`.");
 	if (config.suppressions.enabled)
 		lines.push(

@@ -8,6 +8,7 @@ import {
 	simpleCommands,
 	withoutHeredocBodies,
 } from "../shell";
+import { supportsAdmission } from "./pressure";
 
 const managers = ["bun", "npm", "pnpm", "yarn"];
 export const defaultMedium = [
@@ -305,7 +306,7 @@ export function admissionCommand(
 	cwd: string,
 	originalArgv?: string[],
 ) {
-	if (!config.admission.enabled) return null;
+	if (!supportsAdmission || !config.admission.enabled) return null;
 	const commands = wordsOf(line, commandLimit + 1);
 	const configured = agentProgram(config);
 	const classify = classifier(config.admission, cwd);

@@ -4,6 +4,8 @@ import { join } from "node:path";
 import type { Config } from "../config/schema";
 
 export const gib = 1024 ** 3;
+export const supportsAdmission =
+	process.platform === "darwin" || process.platform === "linux";
 export type Pressure = {
 	elevated: boolean;
 	description: string;
