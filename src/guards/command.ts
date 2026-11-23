@@ -5,6 +5,7 @@ import {
 	serialRef,
 	useLeaseCommand,
 } from "../leases/refs";
+import { extraReviewEnv } from "../review/types";
 import {
 	commandsWithRedirections,
 	programName,
@@ -121,23 +122,32 @@ function simpleCommandFinding(
 	context: CommandContext,
 ): Finding | null {
 	const { git } = config;
-	if (
-		git.block_hook_skips &&
-		words.some((word) => word.startsWith(`${git.skip_env}=`))
-	)
+	const assigns = (name: string) =>
+		words.some(
+			(word) => word.startsWith(`${name}=`) || word.startsWith(`${name}+=`),
+		);
+	if (git.block_hook_skips && assigns(git.skip_env))
 		return { id: "hook-skip", reason: commandReasons.skipHooks(config) };
-	if (words.some((word) => word.startsWith(`${config.files.gate_edit_env}=`)))
+	if (assigns(config.files.gate_edit_env))
 		return {
 			id: "gate-edit-env",
 			reason: `${config.files.gate_edit_env} is for humans only. Tell the user which gate file you would change and why.`,
 		};
-	if (words.some((word) => word.startsWith(`${allowLeaseBreak}=`)))
+	if (assigns(extraReviewEnv))
+		return {
+			id: "gate-edit-env",
+			reason: `${extraReviewEnv} is for humans only. Answer the remaining Important findings, or ask the user to run the extra round.`,
+		};
+	if (assigns(allowLeaseBreak))
 		return {
 			id: "lease-break-env",
 			reason: `${allowLeaseBreak} is for humans only. Run cagr lease list to check the holder and wait, or ask a human to intervene.`,
 		};
-	if (words.some((word) => word.startsWith(`${leasePush}=`)))
-		return { id: "lease-ref", reason: useLeaseCommand };
+	if (assigns(leasePush))
+		return {
+			id: "lease-ref",
+			reason: `${leasePush} is for humans only. ${useLeaseCommand}`,
+		};
 	const program = programWords(words);
 	const manager = packageManagerFinding(program, config);
 	if (manager) return manager;

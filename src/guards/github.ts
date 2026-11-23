@@ -434,6 +434,16 @@ export function gateTarget(
 	return { branch: named };
 }
 
+/** These commands use a branch already on GitHub, even when the local branch has moved. */
+export function usesRemoteHead(line: string, config: Config) {
+	return gateCommandsOf(line, config).some(
+		({ words }) =>
+			words[1] === "pr" &&
+			(words[2] === "ready" ||
+				(words[2] === "create" && headFlag(words) !== null)),
+	);
+}
+
 export function prTemplate(sections: string[]) {
 	return sections
 		.map((section) => `## ${section}\n\n`)

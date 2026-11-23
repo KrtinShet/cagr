@@ -7,8 +7,19 @@ import { gitContext } from "../git";
 import { stackDir, stackInstall } from "../github-files";
 import { LeaseRefs } from "../leases/refs";
 import { claudeAgent } from "../review/agent";
-import { ciReview, type Gh, ghAt, type PullRequest } from "../review/github";
-import { checksContext, postStatus, reviewContext } from "../review/status";
+import {
+	ciReview,
+	type Gh,
+	ghAt,
+	hasOpenCiFinding,
+	type PullRequest,
+} from "../review/github";
+import {
+	checksContext,
+	postStatus,
+	reviewContext,
+	successfulStatuses,
+} from "../review/status";
 import { run, shellArgv } from "../run";
 import { LocalCiError, lockWatch, makeCache, type WatchPaths } from "./cache";
 
@@ -99,22 +110,27 @@ async function refusal(gh: Gh, repo: string, pr: PrDetails) {
 	return null;
 }
 
-async function pendingTasks(gh: Gh, repo: string, sha: string) {
-	const statuses = (
-		await gh([
-			"api",
-			"--paginate",
-			`repos/${repo}/commits/${sha}/statuses?per_page=100`,
-			"--jq",
-			".[] | [(.context | ascii_downcase), .state] | @tsv",
-		])
-	).split(/\r?\n/);
-	const succeeded = (context: string) =>
-		statuses.find((status) => status.startsWith(`${context}\t`)) ===
-		`${context}\tsuccess`;
+async function pendingTasks(
+	gh: Gh,
+	repo: string,
+	number: number,
+	sha: string,
+	headBranch: string,
+	reviewedHere: boolean,
+) {
+	const passed = await successfulStatuses(gh, repo, sha);
+	const statusPassed = reviewedHere || passed.has(reviewContext);
 	return {
-		checks: !succeeded(checksContext),
-		review: !succeeded(reviewContext),
+		checks: !passed.has(checksContext),
+		review:
+			!statusPassed ||
+			(await hasOpenCiFinding(gh, {
+				repo,
+				number,
+				headRepo: repo,
+				headBranch,
+			}).catch(() => true)),
+		statusPassed,
 	};
 }
 
@@ -136,7 +152,8 @@ async function checkPullRequest(
 	details: PrDetails,
 	cache: string,
 	runtime: Runtime,
-	tasks: { checks: boolean; review: boolean },
+	tasks: { checks: boolean; review: boolean; statusPassed: boolean },
+	sourceRoot: string,
 	renewLeaseFor?: string,
 ) {
 	const { gh, run: execute, log } = runtime;
@@ -236,6 +253,7 @@ async function checkPullRequest(
 		}
 		if (tasks.review) {
 			let reviewOk = false;
+			let coverage: string | undefined;
 			try {
 				// Checks can change files. Review a fresh checkout of the exact head.
 				await git("worktree", "add", "--detach", reviewTree, pr.head);
@@ -243,22 +261,24 @@ async function checkPullRequest(
 				if (!login)
 					throw new LocalCiError("Run gh auth login before local CI.");
 				const result = await ciReview(readConfig(reviewTree), reviewTree, {
-					local: { pr, login },
+					local: { pr, login, sourceRoot, statusPassed: tasks.statusPassed },
 					gh,
 					agent: claudeAgent(execute),
 					progress: log,
 				});
 				log(result.report);
 				reviewOk = result.ok && result.complete;
+				coverage = result.coverage;
 			} catch (error) {
 				log((error as Error).message);
 			}
 			const sent = await post(
 				reviewContext,
 				reviewOk,
-				reviewOk
-					? "Local CI review passed."
-					: "Local CI review failed. See the PR and the watch log.",
+				coverage ??
+					(reviewOk
+						? "Local CI review passed."
+						: "Local CI review failed. See the PR and the watch log."),
 			);
 			ok = ok && reviewOk && sent;
 		}
@@ -309,19 +329,30 @@ export async function localCi(
 							"--repo",
 							repo,
 							"--json",
-							"number,isDraft,headRefOid",
+							"number,isDraft,headRefOid,headRefName",
 						]),
-					) as Pick<PrDetails, "number" | "isDraft" | "headRefOid">[])
-				: [{ number: mode, isDraft: false, headRefOid: "" }];
+					) as Pick<
+						PrDetails,
+						"number" | "isDraft" | "headRefOid" | "headRefName"
+					>[])
+				: [{ number: mode, isDraft: false, headRefOid: "", headRefName: "" }];
 		let ok = true;
-		const seen = new Set<string>();
-		for (const { number, isDraft, headRefOid } of prs) {
+		const checkedHeads = new Set<string>();
+		const reviewedHeads = new Set<string>();
+		for (const { number, isDraft, headRefOid, headRefName } of prs) {
 			if (mode === "watch" && isDraft) continue;
 			try {
-				let tasks = { checks: true, review: true };
+				let tasks = { checks: true, review: true, statusPassed: false };
 				if (mode === "watch" && /^[a-f0-9]{40}$/.test(headRefOid)) {
-					if (seen.has(headRefOid)) continue;
-					tasks = await pendingTasks(gh, repo, headRefOid);
+					tasks = await pendingTasks(
+						gh,
+						repo,
+						number,
+						headRefOid,
+						headRefName,
+						reviewedHeads.has(headRefOid),
+					);
+					if (checkedHeads.has(headRefOid)) tasks.checks = false;
 					if (!tasks.checks && !tasks.review) continue;
 				}
 				const details = JSON.parse(
@@ -348,9 +379,19 @@ export async function localCi(
 					throw new LocalCiError(
 						`PR #${number} has no valid head. Check its head on GitHub and retry.`,
 					);
-				if (mode === "watch" && head !== headRefOid) {
-					if (seen.has(head)) continue;
-					tasks = await pendingTasks(gh, repo, head);
+				if (
+					mode === "watch" &&
+					(head !== headRefOid || details.headRefName !== headRefName)
+				) {
+					tasks = await pendingTasks(
+						gh,
+						repo,
+						number,
+						head,
+						details.headRefName,
+						reviewedHeads.has(head),
+					);
+					if (checkedHeads.has(head)) tasks.checks = false;
 					if (!tasks.checks && !tasks.review) continue;
 				}
 				const reason = await refusal(gh, repo, details);
@@ -365,6 +406,8 @@ export async function localCi(
 						number,
 						repo,
 						head,
+						headBranch: details.headRefName,
+						headRepo: repo,
 						base: details.baseRefName,
 						body: details.body ?? "",
 					},
@@ -372,11 +415,12 @@ export async function localCi(
 					paths.cache,
 					runtime,
 					tasks,
+					config.root,
 					renewLeaseFor,
 				);
 				if (!passed) ok = false;
-				// A second PR can point at the same SHA before GitHub returns a posted status.
-				seen.add(head);
+				if (tasks.checks) checkedHeads.add(head);
+				if (tasks.review && passed) reviewedHeads.add(head);
 			} catch (error) {
 				log(`PR #${number}: ${(error as Error).message}`);
 				ok = false;
