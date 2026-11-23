@@ -21,7 +21,7 @@ export function commandsWithNesting(
 ): { words: string[]; nested: boolean }[] {
 	return split(line)
 		.filter((command) => command.words.length > 0)
-		.map(({ words, nested }) => ({ words, nested }));
+		.map(({ words, scope }) => ({ words, nested: scope !== null }));
 }
 
 /**
@@ -29,14 +29,11 @@ export function commandsWithNesting(
  * as a word of its own, then its target. `[commands] blocked` matches on these.
  */
 export function commandsWithRedirections(line: string) {
-	return split(line).map(({ words, raw, redirections }) => ({
-		words,
-		raw,
-		redirections,
-	}));
+	return split(line);
 }
 
 type Redirection = { operator: string; target: string };
+type ShellScope = { parent: ShellScope | null };
 
 function split(line: string) {
 	const splitter = new Splitter();
@@ -58,7 +55,7 @@ class Splitter {
 		words: string[];
 		raw: string[];
 		redirections: Redirection[];
-		nested: boolean;
+		scope: ShellScope | null;
 	}[] = [];
 	private words: string[] = [];
 	private raw: string[] = [];
@@ -68,7 +65,7 @@ class Splitter {
 	// The word has a quoted or escaped part, so it cannot be a file descriptor number.
 	private literal = false;
 	private operator: string | null = null;
-	private depth = 0;
+	private scope: ShellScope | null = null;
 	private inBacktick = false;
 
 	read(line: string, index: number): number {
@@ -88,7 +85,7 @@ class Splitter {
 		}
 		if (char === "$" && line[index + 1] === "(") {
 			this.endCommand();
-			this.depth++;
+			this.scope = { parent: this.scope };
 			return index + 1;
 		}
 		const operator = (operatorTail[char] ?? []).find((text) =>
@@ -97,9 +94,14 @@ class Splitter {
 		if (operator) return this.redirect(operator, index);
 		if (separators.has(char)) {
 			this.endCommand();
-			if (char === "(") this.depth++;
-			else if (char === ")") this.depth = Math.max(0, this.depth - 1);
-			else if (char === "`") this.inBacktick = !this.inBacktick;
+			if (char === "(") this.scope = { parent: this.scope };
+			else if (char === ")") this.scope = this.scope?.parent ?? null;
+			else if (char === "`") {
+				this.scope = this.inBacktick
+					? (this.scope?.parent ?? null)
+					: { parent: this.scope };
+				this.inBacktick = !this.inBacktick;
+			}
 		} else if (char === " " || char === "\t") this.endWord();
 		else this.add(char);
 		return index;
@@ -125,7 +127,7 @@ class Splitter {
 				words: this.words,
 				raw: this.raw,
 				redirections: this.redirections,
-				nested: this.depth > 0 || this.inBacktick,
+				scope: this.scope,
 			});
 		this.words = [];
 		this.raw = [];
