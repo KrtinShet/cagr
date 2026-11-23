@@ -88,8 +88,9 @@ export const guards: GuardInfo[] = [
 		summary: (config) =>
 			`setting the human-only switch ${config.files.gate_edit_env}`,
 		event: "command.before",
-		catches: "Assigning the human-only gate edit variable.",
-		fix: "Tell the user which gate file you would change and why.",
+		catches:
+			"Assigning the human-only gate edit variable or CAGR_ALLOW_EXTRA_REVIEW.",
+		fix: "Tell the user which gate file you would change and why, or ask them to run the extra review round.",
 		config: "[files] gate_edit_env",
 	},
 	{

@@ -18,6 +18,7 @@ import {
 	githubReasons,
 	isGateCommand,
 	prBodyFinding,
+	usesRemoteHead,
 } from "../guards/github";
 import { checkSuppressions } from "../guards/lint-suppression";
 import {
@@ -27,8 +28,8 @@ import {
 	snapshotNotice,
 } from "../guards/protected-turn";
 import { insideRoot } from "../paths";
-import { gateResult, reachFrom } from "../review/gate";
-import { readRecord, recordPath } from "../review/store";
+import { gateAtHead } from "../review/gate";
+import { readBranchRecord, recordPath } from "../review/store";
 import { formatLayout, type LayoutRule, layoutFindings } from "../rules/layout";
 import {
 	findInFiles,
@@ -178,7 +179,7 @@ function readText(path: string) {
 	}
 }
 
-/** Reads the branch's review record: two quick git calls (three when the command names a branch), one file, and one parallel ancestry check per commit where a finding was judged fixed, to stay inside the command budget. */
+/** Reads the branch review and local Git refs without a network call. */
 async function reviewGate(
 	command: string,
 	cwd: string,
@@ -233,18 +234,48 @@ async function reviewGate(
 				}),
 			};
 	}
-	const record = readRecord(recordPath(git.commonDir, branch));
-	const result = gateResult(
-		record,
-		head,
-		config,
-		await reachFrom(record, head, cwd),
-	);
+	const record = readBranchRecord(recordPath(git.commonDir, branch), branch);
+	const result = await gateAtHead(record, head, config, cwd);
 	if (result.kind === "deny")
 		return {
 			kind: "deny",
 			reason: render({ id: "review-gate", reason: result.reason }),
 		};
+	if (usesRemoteHead(command, config)) {
+		const refs = (
+			await run(
+				[
+					"git",
+					"for-each-ref",
+					"--format=%(refname)%09%(objectname)%09%(push)%09%(upstream)",
+					`refs/heads/${branch}`,
+					"refs/remotes",
+				],
+				cwd,
+			)
+		).stdout
+			.trim()
+			.split("\n")
+			.map((line) => line.split("\t"));
+		const local = refs.find(([ref]) => ref === `refs/heads/${branch}`);
+		const pushRef = !named && (local?.[2] || local?.[3]);
+		const candidates = refs.filter(([ref]) =>
+			pushRef
+				? ref === pushRef
+				: ref?.startsWith("refs/remotes/") &&
+					ref.slice("refs/remotes/".length).split("/").slice(1).join("/") ===
+						branch,
+		);
+		const mismatch = candidates.find(([, sha]) => sha !== head)?.[0];
+		if (candidates.length === 0 || mismatch)
+			return {
+				kind: "deny",
+				reason: render({
+					id: "review-gate",
+					reason: `The remote-tracking ref${mismatch ? ` ${mismatch}` : ` for ${branch}`} does not show the reviewed commit ${head?.slice(0, 7)}. Push the reviewed commit first, or fetch the branch if it is already pushed, then retry.`,
+				}),
+			};
+	}
 	return result.notice
 		? { kind: "allow", notice: result.notice }
 		: { kind: "allow" };

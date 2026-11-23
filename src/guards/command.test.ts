@@ -283,11 +283,27 @@ describe("redirections", () => {
 });
 
 test.each([
-	"CAGR_ALLOW_GATE_EDIT=1 bun fix",
-	"export CAGR_ALLOW_GATE_EDIT=1",
-	"env CAGR_ALLOW_GATE_EDIT=1 bun fix",
-])("refuses the human gate edit switch in %s", (line) => {
-	expect(onFeature(line)).toContain("CAGR_ALLOW_GATE_EDIT is for humans only");
+	"CAGR_ALLOW_GATE_EDIT",
+	"CAGR_ALLOW_EXTRA_REVIEW",
+	"CRM_SKIP_HOOKS",
+])("refuses assignments to the human-only %s switch", (name) => {
+	for (const operator of ["=", "+="]) {
+		const assignment = `${name}${operator}1`;
+		for (const prefix of [
+			"",
+			"export ",
+			"declare ",
+			"typeset ",
+			"local ",
+			"readonly ",
+			"env ",
+		])
+			expect(
+				onFeature(
+					`${prefix}${assignment}${prefix === "env " ? " cagr review" : ""}`,
+				),
+			).toContain(`${name} is for humans only`);
+	}
 });
 
 test("uses the configured gate edit switch independently of block_hook_skips", () => {

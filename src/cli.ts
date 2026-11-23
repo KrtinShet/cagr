@@ -36,6 +36,7 @@ import { ghCli } from "./review/github";
 import { AnswerError } from "./review/report";
 import { ReviewInputError } from "./review/review";
 import { postStatusAfterPush } from "./review/status";
+import { ReviewRecordBusy } from "./review/store";
 import { explainLayout, testLayoutRules } from "./rules/layout";
 import {
 	type CodeExample,
@@ -574,6 +575,7 @@ const expected = (error: unknown) =>
 	error instanceof ConfigError ||
 	error instanceof RuleError ||
 	error instanceof ReviewInputError ||
+	error instanceof ReviewRecordBusy ||
 	error instanceof ReviewerError ||
 	error instanceof LocalCiError ||
 	error instanceof AnswerError;

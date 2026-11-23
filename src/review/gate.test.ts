@@ -40,14 +40,6 @@ test("nits, answered and fixed findings do not hold the gate", () => {
 	});
 });
 
-test("after max_rounds the denial says no further full round runs", () => {
-	const rounds = [round({ n: 1 }), round({ n: 2, scope: "diff" })];
-	const result = gateResult(record(rounds, [finding()]), head, settings);
-	expect(result.kind === "deny" && result.reason).toContain(
-		"no further full round runs",
-	);
-});
-
 test("a review that could not run lets the PR through and tells the human", () => {
 	const result = gateResult(
 		record([round({ error: "claude not found" })]),
@@ -101,7 +93,7 @@ test("an older head is judged by the current finding states, so a reopened findi
 	expect(result.kind === "deny" && result.reason).toContain("f1 src/a.ts:4");
 	const later = finding({ id: "f2", round: 3 });
 	expect(gateResult(record(rounds, [later]), older, settings).kind).toBe(
-		"allow",
+		"deny",
 	);
 });
 
@@ -131,22 +123,26 @@ test("a fix judged on a later commit does not pass an older head", () => {
 	);
 });
 
-test("a full round starts a new cycle, so the cap counts from there", () => {
+test("a full round still counts toward the branch cap after a cycle starts", () => {
 	const rounds = [
 		round({ n: 1 }),
 		round({ n: 2, scope: "diff" }),
 		round({ n: 3, scope: "full" }),
 	];
 	const result = gateResult(record(rounds, [finding()]), head, settings);
-	expect(result.kind === "deny" && result.reason).not.toContain("round cap");
+	expect(result.kind === "deny" && result.reason).toContain(
+		"Review is capped at 3 rounds",
+	);
 });
 
-test("failed rounds and verifier-only checks do not count toward the cap", () => {
+test("a failed round does not use the last round in the budget", () => {
 	const rounds = [
 		round({ n: 1 }),
 		round({ n: 2, error: "x" }),
 		round({ n: 2, scope: "verify" }),
 	];
 	const result = gateResult(record(rounds, [finding()]), head, settings);
-	expect(result.kind === "deny" && result.reason).not.toContain("round cap");
+	expect(result.kind === "deny" && result.reason).not.toContain(
+		"Review is capped",
+	);
 });

@@ -31,11 +31,13 @@ export type ReviewFinding = Candidate & {
 	status: "open" | "fixed" | "answered";
 	answer: { kind: AnswerKind; reason: string } | null;
 	fixedIn: string | null;
-	/** Verdicts the verifier gave while the finding was open. Older records lack it. */
+	/** Verdicts while open, including stale fixes checked after the cap. Older records lack it. */
 	verdicts?: number;
 };
 
 export type Round = {
+	/** Identifies the same run when it appears in multiple review records. */
+	runId?: string;
 	n: number;
 	head: string;
 	from: string;
@@ -49,6 +51,8 @@ export type Round = {
 	error: string | null;
 	/** The earlier findings the verifier judged in this round. Older records lack it. */
 	verified?: string[];
+	/** A fix check after the cap, without finder coverage or a round charge. */
+	verificationOnly?: true;
 };
 
 export type ReviewRecord = {
@@ -76,16 +80,38 @@ export const blocking = (record: ReviewRecord) =>
 /**
  * The number of the round that started the current review cycle: the last
  * full round that ran. A rebase, a reused branch name or `--full` starts a new
- * cycle, and the round cap counts from there.
+ * cycle for the verifier's context.
  */
 export const cycleStart = (record: ReviewRecord) =>
 	record.rounds.findLast((round) => !round.error && round.scope === "full")
 		?.n ?? 0;
 
-/** Rounds in the current cycle that ran finders. These count toward `[review] max_rounds`. */
-export const discoveryRounds = (record: ReviewRecord) => {
-	const start = cycleStart(record);
-	return record.rounds.filter(
-		(round) => !round.error && round.scope !== "verify" && round.n >= start,
-	).length;
-};
+/** Every completed branch round counts toward `[review] max_rounds`. */
+export const countsTowardCap = (round: Round) =>
+	!round.error && !round.verificationOnly;
+export const completedRounds = (record: ReviewRecord) =>
+	record.rounds.filter(countsTowardCap).length;
+
+export function countPriorRounds(
+	current: ReviewRecord,
+	otherRecords: ReviewRecord[],
+) {
+	const key = (round: Round) =>
+		round.runId ??
+		JSON.stringify([
+			round.n,
+			round.head,
+			round.from,
+			round.scope,
+			round.reviewer,
+			round.at,
+		]);
+	const seen = new Set(current.rounds.filter(countsTowardCap).map(key));
+	const own = seen.size;
+	for (const record of otherRecords)
+		for (const round of record.rounds.filter(countsTowardCap))
+			seen.add(key(round));
+	return seen.size - own;
+}
+
+export const extraReviewEnv = "CAGR_ALLOW_EXTRA_REVIEW";

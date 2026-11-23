@@ -3,20 +3,24 @@ import { mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadConfig } from "../config/load";
-import type { Gh } from "../review/github";
+import { encodeState, type Gh } from "../review/github";
+import { recordPath, writeRecord } from "../review/store";
 import { run } from "../run";
 import { sync } from "../sync";
 import { repoTestTimeout } from "../test/budgets";
 import { tempRepo } from "../test/repo";
+import { finding, record, round } from "../test/review";
 import { watchPaths } from "./cache";
 import { localCi } from "./run";
 
 async function fixture({
 	install,
 	prePush,
+	maxRounds,
 }: {
 	install?: string;
 	prePush?: string;
+	maxRounds?: number;
 } = {}) {
 	const repo = await tempRepo();
 	await repo.write(
@@ -30,6 +34,7 @@ commit_message = "conventional"
 ${prePush ? `pre_push = ${JSON.stringify(prePush)}` : ""}
 [review]
 pr_sections = ["Testing"]
+${maxRounds === undefined ? "" : `enabled = true\nmax_rounds = ${maxRounds}`}
 [ci]
 local = true
 ${install ? `install = ${JSON.stringify(install)}` : ""}
@@ -86,6 +91,7 @@ function runtime(
 		heads?: { number: number; headRefOid: string; isDraft?: boolean }[];
 		statuses?: Record<string, [context: string, state: string][]>;
 		installFails?: boolean;
+		reviewState?: string;
 	} = {},
 ) {
 	const log: string[] = [];
@@ -102,7 +108,10 @@ function runtime(
 			});
 		if (command === "pr" && sub === "list")
 			return JSON.stringify(
-				settings.heads ?? [{ number: 3, headRefOid: f.head }],
+				(settings.heads ?? [{ number: 3, headRefOid: f.head }]).map((pr) => ({
+					...pr,
+					headRefName: "feat/example",
+				})),
 			);
 		if (command === "pr" && sub === "view") {
 			if (resource !== "3") throw new Error(`Unexpected PR view ${resource}`);
@@ -126,7 +135,16 @@ function runtime(
 			return settings.permission ?? "write";
 		if (args.includes("user")) return "owner";
 		if (args.includes("graphql")) return "{}";
-		if (args.includes(`repos/o/r/issues/3/comments`)) return "";
+		if (args.includes("repos/o/r/pulls?per_page=100")) return "3";
+		if (args.includes("repos/o/r/collaborators/owner/permission"))
+			return "admin";
+		if (args.includes("POST") && args.includes("repos/o/r/issues/3/comments"))
+			return "{}";
+		if (args.some((arg) => /^repos\/o\/r\/issues\/\d+\/comments$/.test(arg)))
+			return settings.reviewState
+				? JSON.stringify({ id: 42, login: "owner", body: settings.reviewState })
+				: "";
+		if (args.includes("repos/o/r/issues/comments/42")) return "{}";
 		const sha = args.find((arg) => arg.includes("/commits/"))?.split("/")[4];
 		if (sha) {
 			const rows = settings.statuses?.[sha] ?? [];
@@ -230,6 +248,131 @@ test(
 				/^\d{4}-\d{2}-\d{2}T/,
 			);
 			expect(await f.repo.git("status", "--porcelain")).toBe("");
+		} finally {
+			f.clean();
+		}
+	},
+	repoTestTimeout,
+);
+
+test(
+	"local CI posts the coverage gap on a successful capped review",
+	async () => {
+		const f = await fixture();
+		try {
+			const state = record([
+				round({ head: f.base }),
+				round({ n: 2, head: f.base, scope: "diff" }),
+				round({ n: 3, head: f.base, scope: "verify" }),
+			]);
+			state.base = "target";
+			const r = runtime(f, {
+				reviewState: encodeState(state),
+				statuses: { [f.head]: [["cagr/checks", "success"]] },
+			});
+			expect(await localCi(f.config, f.paths, "watch", r)).toBe(true);
+			expect(r.commands.some((args) => args[0] === "claude")).toBe(false);
+			expect(
+				r.calls.find((args) => args.includes("context=cagr/review")),
+			).toEqual(
+				expect.arrayContaining([
+					"state=success",
+					"description=Reviewed through round 3 (cap 3); 1 later commit was not reviewed.",
+				]),
+			);
+		} finally {
+			f.clean();
+		}
+	},
+	repoTestTimeout,
+);
+
+test(
+	"watch judges CI findings even after both statuses succeed",
+	async () => {
+		const f = await fixture();
+		try {
+			const r = runtime(f, {
+				reviewState: encodeState(
+					record([round({ head: f.head })], [finding()]),
+				),
+				statuses: {
+					[f.head]: [
+						["cagr/checks", "success"],
+						["cagr/review", "success"],
+					],
+				},
+			});
+			expect(await localCi(f.config, f.paths, "watch", r)).toBe(false);
+			expect(r.commands.some((args) => args[0] === "claude")).toBe(false);
+			expect(
+				r.calls.find((args) => args.includes("context=cagr/review")),
+			).toContain("state=failure");
+			expect(
+				r.calls.find((args) => args.includes("context=cagr/checks")),
+			).toBeUndefined();
+		} finally {
+			f.clean();
+		}
+	},
+	repoTestTimeout,
+);
+
+test(
+	"explicit local CI counts the source checkout's branch record",
+	async () => {
+		const f = await fixture();
+		try {
+			writeRecord(
+				recordPath(join(f.repo.root, ".git"), "feat/example"),
+				record(
+					[
+						round({ head: f.base }),
+						round({ n: 2, head: f.base }),
+						round({ n: 3, head: f.base }),
+					],
+					[],
+					"feat/example",
+				),
+			);
+			const r = runtime(f);
+			expect(await localCi(f.config, f.paths, 3, r)).toBe(true);
+			expect(r.commands.some((args) => args[0] === "claude")).toBe(false);
+			expect(r.lines.join("\n")).toContain(
+				"CI is judging the gate from existing findings",
+			);
+		} finally {
+			f.clean();
+		}
+	},
+	repoTestTimeout,
+);
+
+test(
+	"local review refuses a finder round after local CI used the branch cap",
+	async () => {
+		const f = await fixture({ maxRounds: 1 });
+		try {
+			const r = runtime(f);
+			expect(await localCi(f.config, f.paths, 3, r)).toBe(true);
+			expect(r.reviewBodies).toHaveLength(1);
+			await f.repo.git("fetch", f.source.root, "refs/pull/3/head");
+			await f.repo.git("checkout", "-qb", "feat/example", "FETCH_HEAD");
+			const review = Bun.spawnSync(
+				[process.execPath, join(import.meta.dir, "../cli.ts"), "review"],
+				{
+					cwd: f.repo.root,
+					env: {
+						...process.env,
+						PATH: "/usr/bin:/bin",
+						CAGR_ALLOW_EXTRA_REVIEW: "",
+					},
+				},
+			);
+			expect(review.stdout.toString()).toContain(
+				"Review is capped at 1 round for this branch.",
+			);
+			expect(review.exitCode).toBe(2);
 		} finally {
 			f.clean();
 		}

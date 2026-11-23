@@ -162,7 +162,9 @@ Set `gate = true` on an entry to let a human open it for a session. The recommen
 
 **Blocks** commands that assign the configured gate-edit variable. The default is `CAGR_ALLOW_GATE_EDIT`. A human can start the agent session with `CAGR_ALLOW_GATE_EDIT=1` to open entries marked `gate = true`.
 
-**Configure** the variable name with `[files] gate_edit_env`.
+The guard also refuses agent commands that assign `CAGR_ALLOW_EXTRA_REVIEW`. A human can use it to run one extra review round. See [Rounds](review.md#rounds).
+
+**Configure** the gate-edit variable name with `[files] gate_edit_env`.
 
 ## blocked-command
 
@@ -250,11 +252,12 @@ the pull request title. A squash merge can use that title as the commit subject.
 
 The gate denies the command when:
 
-- The branch has no review: "This branch has not been reviewed. Commit, run `cagr review`, fix or answer every Important finding, then re-check any new commits. Push once the review passes. Give the review a 15 minute timeout, then run this command again."
-- The commit was not reviewed: "This commit differs from the last review (abc1234). Run `cagr review` to check the new commits. ..." An older commit that a round reviewed passes while none of the findings known then is open.
-- Important findings are open. It lists them (`- f1 src/deals.ts:42  title`), then says: "Fix the findings, commit, and re-check with `cagr review` before pushing", or answer them with `cagr review answer`. After `max_rounds` rounds no further full round runs; new commits still get finders on their diff. See [Rounds](review.md#rounds).
+- The branch has no review: "This branch has not been reviewed. Commit, run `cagr review`, fix or answer Important findings, and re-check while rounds remain. Push once, after every Important finding is verified fixed or answered. Give the review a 15 minute timeout, then run this command again."
+- Rounds remain and the commit was not reviewed: "This commit differs from the last review (abc1234). Run `cagr review` to check the new commits. ..." An older commit that a round reviewed passes while none of the findings known then is open.
+- Important findings are open. It lists them (`- f1 src/deals.ts:42  title`), then says: "Fix the findings, commit, and re-check with `cagr review` before pushing", or answer them with `cagr review answer`. At the cap, commit the fix and run `cagr review` to verify it without using a round, or answer the finding. See [Rounds](review.md#rounds).
 - `HEAD` is detached. It says to `git switch <branch>` or pass `--head <branch>`.
 - `--head` names a branch that does not exist locally.
+- For `gh pr create --head` or `gh pr ready`, the local remote-tracking refs must show the reviewed commit. Push the reviewed commit first, or fetch if it is already on GitHub.
 - `gh pr ready` names a pull request by number or URL. cagr cannot tell which branch that is, so it says to check out the pull request's branch and run `gh pr ready` there with no argument. `markPullRequestReadyForReview` through `gh api` is denied the same way.
 - A `gh api` call opens a pull request from a branch other than the checked-out one (the `head` field, `headRefName`, or, when `--input` is given, only the `head` in that file, since gh then sends the fields as query parameters), or cagr cannot tell which branch it names. It says to check out that branch and use `gh pr create`.
 - The line opens or readies pull requests for more than one branch.
@@ -263,7 +266,7 @@ The gate denies the command when:
 
 The gate lets the command through when:
 
-- The current commit passed: no Important finding is open.
+- The current commit passed: no Important finding is open. At the cap, the gate also passes later commits when no Important finding is open and says how many were not reviewed.
 - The last review could not run and no finding is open. The human sees: "cagr: the review of ... could not run (...), so this pull request goes out unreviewed. Review it yourself before you approve it." If earlier findings are still open, the gate still denies.
 - The folder is not a git repo.
 

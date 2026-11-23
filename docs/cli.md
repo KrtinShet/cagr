@@ -134,9 +134,9 @@ cagr review help
 
 | Form                                                  | What it does                                                                                            |
 | ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
-| `review`                                              | Review this branch's commits. After round 1, only the new ones.                                         |
+| `review`                                              | Review this branch's commits. After round 1, only the new ones while rounds remain.                                         |
 | `--base <branch>`                                     | Compare with this base instead of the protected branch.                                                 |
-| `--full`                                              | Force a full round of the whole branch, even at a reviewed commit. Starts a new review cycle.           |
+| `--full`                                              | Force a full round of the whole branch, even at a reviewed commit. Uses one round in the branch budget.           |
 | `--effort <level>`                                    | Use this effort for this run.                                                                           |
 | `--scan <globs...>`                                   | Review the tracked files that match, instead of the branch's commits.                                   |
 | `--issue`                                             | With `--scan`: open a GitHub issue with the findings.                                                   |
@@ -147,7 +147,7 @@ cagr review help
 | `eval`                                                | Score the reviewer on `.cagr/review-evals/*.toml`. `--case` runs one case. `--effort` picks the effort. |
 | `help`                                                | Print this list.                                                                                        |
 
-Exit codes: 0 passed, 1 Important findings open, 2 error. With `[review] status = true`, `review` and `answer` also send the `cagr/review` commit status to GitHub. See [Review](review.md).
+Exit codes: 0 passed, 1 Important findings open, 2 review cap reached or error. With `[review] status = true`, `review` and `answer` also send the `cagr/review` commit status to GitHub. See [Review](review.md).
 
 ## risk
 
