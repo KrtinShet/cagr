@@ -1,4 +1,5 @@
 import type { Config } from "../config/schema";
+import { allowLeaseBreak, serialRef } from "../leases/refs";
 import {
 	commandsWithRedirections,
 	programName,
@@ -125,6 +126,11 @@ function simpleCommandFinding(
 			id: "gate-edit-env",
 			reason: `${config.files.gate_edit_env} is for humans only. Tell the user which gate file you would change and why.`,
 		};
+	if (words.some((word) => word.startsWith(`${allowLeaseBreak}=`)))
+		return {
+			id: "lease-break-env",
+			reason: `${allowLeaseBreak} is for humans only. Run cagr lease list to check the holder and wait, or ask a human to intervene.`,
+		};
 	const program = programWords(words);
 	const manager = packageManagerFinding(program, config);
 	if (manager) return manager;
@@ -151,6 +157,19 @@ function gitFinding(
 	}
 	const subcommand = args[index];
 	const rest = args.slice(index + 1);
+	if (
+		(subcommand === "push" || subcommand === "update-ref") &&
+		rest.some((arg) =>
+			arg
+				.split(":")
+				.some((part) => part.replace(/^\+/, "").startsWith(serialRef)),
+		)
+	)
+		return {
+			id: "lease-ref",
+			reason:
+				"Use cagr lease to take, renew or release the lease and keep your place in line.",
+		};
 
 	if (skips) {
 		if (rest.includes("--no-verify"))

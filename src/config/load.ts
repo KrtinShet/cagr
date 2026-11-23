@@ -13,6 +13,7 @@ import {
 	defaultCommitTypes,
 	defaultExtensions,
 	type Effort,
+	type Lease,
 	type NameRule,
 	type PackageManager,
 	type RiskTier,
@@ -143,6 +144,7 @@ function withFragments(
 
 /** The lists of tables that add up across files and presets, even when one is empty. */
 const listsThatAddUp = new Set([
+	"lease",
 	"changes.rules",
 	"stack",
 	"files.protected",
@@ -271,10 +273,23 @@ function applyDefaults(
 	const commitTypes =
 		(git.commit_types as string[] | undefined) ?? defaultCommitTypes;
 	const prePush = git.pre_push;
+	const lease = ((raw.lease as Lease[] | undefined) ?? []).map((entry) => ({
+		...entry,
+		ttl_seconds: entry.ttl_seconds ?? 1800,
+	}));
+	const names = new Set<string>();
+	for (const entry of lease) {
+		if (names.has(entry.name))
+			throw new ConfigError(
+				`Lease "${entry.name}" is declared twice. Keep one [[lease]] per name.`,
+			);
+		names.add(entry.name);
+	}
 	return {
 		root,
 		source,
 		sources,
+		lease,
 		extends: (raw.extends as string[] | undefined) ?? [],
 		agents: {
 			enabled: (agents.enabled as AgentName[] | undefined) ?? [

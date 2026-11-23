@@ -209,3 +209,45 @@ test("after edit blocks a new suppression with file, line, comment and fix", asy
 		expect(decision.reason).toContain("cagr: lint-suppression");
 	}
 });
+
+test("serial edit context is sent once per lease per session across turns and simultaneous edits", async () => {
+	await mkdir(join(root, ".cagr"));
+	await writeFile(
+		join(root, ".cagr/serial.toml"),
+		`[[lease]]
+name = "db-migrations"
+paths = ["migrations/**"]
+[[lease]]
+name = "wire"
+paths = ["protocol.ts"]
+`,
+	);
+	const cfg = config();
+	const edit = input("file.before_edit", {
+		files: [join(root, "migrations/0002.sql")],
+	});
+	const seen = await Promise.all([handle(edit, cfg), handle(edit, cfg)]);
+	expect(seen).toContainEqual({
+		kind: "allow",
+		context: expect.stringContaining("serial: db-migrations"),
+	});
+	expect(seen).toContainEqual({ kind: "allow" });
+	await handle(input("turn.end"), cfg);
+	expect(await handle(edit, cfg)).toEqual({ kind: "allow" });
+	expect(
+		await handle({ ...edit, files: [join(root, "protocol.ts")] }, cfg),
+	).toMatchObject({
+		kind: "allow",
+		context: expect.stringContaining("serial: wire"),
+	});
+	expect(
+		await handle({ ...edit, sessionId: crypto.randomUUID() }, cfg),
+	).toMatchObject({
+		kind: "allow",
+		context: expect.stringContaining("serial: db-migrations"),
+	});
+	expect(await handle(input("session.start"), cfg)).toMatchObject({
+		kind: "allow",
+		context: expect.stringContaining("Serial resources: db-migrations, wire"),
+	});
+});

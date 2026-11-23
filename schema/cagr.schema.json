@@ -4,6 +4,42 @@
 	"type": "object",
 	"additionalProperties": false,
 	"properties": {
+		"lease": {
+			"type": "array",
+			"items": {
+				"type": "object",
+				"additionalProperties": false,
+				"properties": {
+					"name": {
+						"type": "string",
+						"pattern": "^[a-z0-9][a-z0-9_-]*$"
+					},
+					"paths": {
+						"type": "array",
+						"items": {
+							"type": "string",
+							"minLength": 1
+						},
+						"minItems": 1,
+						"description": "Globs for paths that need this lease before pushing."
+					},
+					"after_acquire": {
+						"type": "string",
+						"description": "Advice printed after taking the lease."
+					},
+					"ttl_seconds": {
+						"type": "integer",
+						"minimum": 1,
+						"description": "Seconds without renewal before the lease or a ticket expires. Defaults to 1800."
+					}
+				},
+				"required": [
+					"name",
+					"paths"
+				]
+			},
+			"description": "Resources that one branch at a time may land."
+		},
 		"stats": {
 			"type": "object",
 			"additionalProperties": false,

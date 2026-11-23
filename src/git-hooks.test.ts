@@ -256,3 +256,15 @@ describe("pre-push", () => {
 		).toBe(true);
 	});
 });
+
+test("a lease and ticket ref-only push skips verification", async () => {
+	const cfg = config({ git: { pre_push: "exit 1", block_force_push: true } });
+	const refs = [
+		"HEAD 111 refs/cagr/lease/db-migrations 222",
+		"HEAD 111 refs/cagr/wait/db-migrations/123-builder 222",
+	];
+	expect(await prePush(refs.join("\n"), cfg, cfg.root, {})).toEqual({
+		ok: true,
+		messages: [],
+	});
+});

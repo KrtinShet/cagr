@@ -2,10 +2,12 @@ import { spawn } from "node:child_process";
 import { appendFileSync, mkdirSync, openSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { Config } from "./config/schema";
-import { gitContext } from "./git";
+import { gitContext, gitHookEnv } from "./git";
 import { commandReasons } from "./guards/command";
 import { render } from "./guards/finding";
 import { branchFinding, commitMessageFinding } from "./guards/names";
+import { PushLeases } from "./leases/push";
+import { serialRef } from "./leases/refs";
 import { run, runShell } from "./run";
 
 export const gitHookNames = ["commit-msg", "pre-push"] as const;
@@ -35,7 +37,7 @@ export function commitMsg(
 		: { ok: true, messages: [] };
 }
 
-type PushedRef = {
+export type PushedRef = {
 	localRef: string;
 	localSha: string;
 	remoteRef: string;
@@ -56,11 +58,7 @@ export function parsePushLines(stdin: string): PushedRef[] {
 }
 
 // Git sets these for hooks; a pre_push command that runs git in another repo must not inherit them.
-export const gitEnv = {
-	GIT_DIR: undefined,
-	GIT_WORK_TREE: undefined,
-	GIT_INDEX_FILE: undefined,
-};
+export const gitEnv = gitHookEnv;
 
 /** Starts `cagr <args>` detached, so the push goes on while it runs. Output goes to `log`. */
 export type StartInBackground = (
@@ -103,11 +101,18 @@ export async function prePush(
 	cwd: string,
 	env = process.env,
 	start: StartInBackground = startInBackground,
+	remoteUrl?: string,
 ): Promise<GitHookResult> {
 	if (skipped(config, env)) return { ok: true, messages: [] };
+	const refs = parsePushLines(stdin).filter(
+		({ remoteRef }) => !remoteRef.startsWith(serialRef),
+	);
+	if (refs.length === 0) return { ok: true, messages: [] };
 	const messages: string[] = [];
+	const warnings: string[] = [];
+	const leases = new PushLeases(config, cwd, messages, warnings);
 	const pushed: { branch: string; sha: string }[] = [];
-	for (const ref of parsePushLines(stdin)) {
+	for (const ref of refs) {
 		const branch = ref.remoteRef.replace(/^refs\/heads\//, "");
 		const isBranch = ref.remoteRef.startsWith("refs/heads/");
 		if (isBranch && branch === config.git.protected_branch) {
@@ -142,20 +147,33 @@ export async function prePush(
 			});
 		}
 	}
-	if (messages.length > 0) return { ok: false, messages };
-	for (const command of config.git.pre_push) {
-		const result = await runShell(command, config.root, { env: gitEnv });
-		if (!result.ok)
-			return {
-				ok: false,
-				messages: [
-					`\`${command}\` failed, so the push was stopped.\n${result.output.trimEnd()}`,
-				],
-			};
+	try {
+		await leases.inspect(refs, remoteUrl);
+	} catch (error) {
+		warnings.push(
+			`Serial lease checks were incomplete: ${(error as Error).message}. Run cagr lease list and verify ownership before landing.`,
+		);
 	}
-	if (!config.review.status || pushed.length === 0)
-		return { ok: true, messages: [] };
-	return { ok: true, messages: await sendStatuses(config, cwd, pushed, start) };
+	if (!messages.length)
+		await leases.verify(async () => {
+			for (const command of config.git.pre_push) {
+				if (messages.length) break;
+				const result = await runShell(command, config.root, {
+					env: { ...gitEnv, ...leases.priorityEnv },
+				});
+				if (!result.ok)
+					messages.push(
+						`\`${command}\` failed, so the push was stopped.\n${result.output.trimEnd()}`,
+					);
+			}
+		}, config.git.pre_push.length > 0);
+	if (messages.length > 0) {
+		await leases.release();
+		return { ok: false, messages: [...messages, ...warnings] };
+	}
+	if (config.review.status && pushed.length > 0)
+		warnings.push(...(await sendStatuses(config, cwd, pushed, start)));
+	return { ok: true, messages: warnings };
 }
 
 /**

@@ -24,6 +24,7 @@ import {
 	rememberProtected,
 	snapshotNotice,
 } from "../guards/protected-turn";
+import { serialNotice } from "../leases/notice";
 import { insideRoot } from "../paths";
 import { gateResult, reachFrom } from "../review/gate";
 import { readRecord, recordPath } from "../review/store";
@@ -258,7 +259,15 @@ async function fileBeforeEdit(
 	if (config.findings.mode === "new")
 		for (const file of input.files)
 			captureBaseline(config.root, input.sessionId, file);
-	return { kind: "allow" };
+	const context = await serialNotice(
+		config,
+		input.sessionId,
+		input.files,
+	).catch(
+		(error: unknown) =>
+			`cagr: Could not record the serial lease notice: ${(error as Error).message}`,
+	);
+	return context ? { kind: "allow", context } : { kind: "allow" };
 }
 
 /** The layout rules, or none when a rule file is broken: the Rules check reports that. */

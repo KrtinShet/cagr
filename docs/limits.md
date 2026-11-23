@@ -132,3 +132,9 @@ leaves `pyproject.toml`, `package.json` and `tsconfig.json` editable because age
 need them for other work. Lint rules and type checking can still be weakened in
 those files. Review their changes. Suppressions already present at HEAD (or at
 the branch base in CI) are not audited. See `docs/guards.md` for lexical limits.
+
+## Serial leases
+
+Leases need one origin push URL and a remote that can advertise, fetch and update custom refs with `--force-with-lease`. GitHub supports custom refs. Checks run in local hooks and fail open with a warning if they cannot read the remote. The remote does not enforce branch lease ownership for clients that bypass those hooks.
+
+The lease stays with the branch through the PR merge. A pre-push hook can release it when the hook refuses the push or verification fails. Git server rejections after pre-push returns are recovered by manual release or expiry. Git ancestry detects regular merges. Squash and rebase merges may need explicit release. See [Serial leases](leases.md).

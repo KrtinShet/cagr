@@ -1,6 +1,13 @@
 import { dirname } from "node:path";
 import { run } from "./run";
 
+// A hook can run Git in a different checkout from the one that invoked it.
+export const gitHookEnv = {
+	GIT_DIR: undefined,
+	GIT_WORK_TREE: undefined,
+	GIT_INDEX_FILE: undefined,
+};
+
 export type GitContext = {
 	branch: string | null;
 	toplevel: string | null;

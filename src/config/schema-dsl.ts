@@ -19,7 +19,11 @@ const typeName = (value: unknown) =>
 			: `a ${typeof value}`;
 
 export function str(
-	opts: Doc & { enum?: readonly string[]; minLength?: number } = {},
+	opts: Doc & {
+		enum?: readonly string[];
+		minLength?: number;
+		pattern?: RegExp;
+	} = {},
 ): Node {
 	return {
 		check(value, path, errors) {
@@ -33,11 +37,14 @@ export function str(
 				);
 			if (opts.minLength && value.length < opts.minLength)
 				errors.push(`${path} must not be empty.`);
+			if (opts.pattern && !opts.pattern.test(value))
+				errors.push(`${path} must match ${opts.pattern.source}.`);
 		},
 		json: () => ({
 			type: "string",
 			...(opts.enum ? { enum: opts.enum } : {}),
 			...(opts.minLength ? { minLength: opts.minLength } : {}),
+			...(opts.pattern ? { pattern: opts.pattern.source } : {}),
 			...(opts.description ? { description: opts.description } : {}),
 		}),
 	};
@@ -71,13 +78,15 @@ export function num(opts: Doc & { min?: number } = {}): Node {
 	};
 }
 
-export function arr(item: Node, opts: Doc = {}): Node {
+export function arr(item: Node, opts: Doc & { minItems?: number } = {}): Node {
 	return {
 		check(value, path, errors) {
 			if (!Array.isArray(value)) {
 				errors.push(`${path} must be a list, not ${typeName(value)}.`);
 				return;
 			}
+			if (opts.minItems && value.length < opts.minItems)
+				errors.push(`${path} needs at least ${opts.minItems} item(s).`);
 			value.forEach((entry, index) => {
 				item.check(entry, `${path}[${index}]`, errors);
 			});
