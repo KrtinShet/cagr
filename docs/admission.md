@@ -28,7 +28,7 @@ The queue lists the position and the PIDs, repos, branches, commands and entry t
 
 ## Tokens and measurement
 
-One token covers one GiB of peak memory, rounded up to the next whole token. cagr keeps one OS lock per held token in `~/.cache/cagr/slots`. The OS releases a lock when its last holder closes it or dies. A watchdog stops the admitted process group if its wrapper dies. Tickets from dead processes are removed when a waiter or doctor inspects the queue.
+One token covers one GiB of peak memory, rounded up to the next whole token. cagr keeps one OS lock per held token in `~/.cache/cagr/slots`. The OS releases a lock when its last holder closes it or dies. A watchdog stops the admitted process group if its wrapper dies. Each ticket also holds an ownership lock, so a waiter or doctor can clear stale tickets even if the system has reused their PIDs.
 
 Before calibration, the pool has at most two tokens and at most half the machine's RAM, with a one-token minimum. Unmeasured medium and heavy commands reserve the entire effective pool. `pool_tokens` can reduce the pool size for a repo. A measured command larger than the effective pool reports the mismatch immediately.
 

@@ -1,11 +1,18 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+	closeSync,
+	mkdtempSync,
+	readFileSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { resolveConfig } from "../config/load";
 import { handle } from "../hook/handlers";
 import { classifyArgv } from "./classify";
-import type { Costs } from "./pool";
+import { tryLock } from "./locks";
+import { type Costs, Pool } from "./pool";
 import { gib, parseLinuxMemory } from "./pressure";
 
 const modulePath = resolve(import.meta.dir, "run.ts");
@@ -99,6 +106,43 @@ function queued(cwd: string, argv: string[], priority?: string) {
 		priority,
 	);
 }
+
+test("a returned lock descriptor keeps another process out", async () => {
+	const cwd = fixture();
+	const lock = tryLock(join(cwd, "token.lock"));
+	if (lock === null) throw new Error("Test lock was already held");
+	const probe = () =>
+		spawn(cwd, [
+			"-e",
+			`
+		import { tryLock } from ${JSON.stringify(resolve(import.meta.dir, "locks.ts"))};
+		process.exit(tryLock("token.lock") === null ? 75 : 0);
+	`,
+		]).finished();
+	try {
+		expect((await probe()).code).toBe(75);
+	} finally {
+		closeSync(lock);
+	}
+	expect((await probe()).code).toBe(0);
+});
+
+test("a stale ticket cannot survive PID reuse", async () => {
+	const cwd = fixture();
+	const pool = new Pool(cwd);
+	pool.save({
+		id: "stale",
+		pid: process.pid,
+		repo: cwd,
+		branch: "feat/prior",
+		command: "sleep 30",
+		since: Date.now(),
+		order: 1,
+		priority: "normal",
+		slots: [0],
+	});
+	expect(await pool.transaction(Infinity, () => pool.list())).toEqual([]);
+});
 
 test("a heavy waiter acquires the held token after normal exit", async () => {
 	const cwd = fixture();

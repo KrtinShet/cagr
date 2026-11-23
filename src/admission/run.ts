@@ -144,61 +144,74 @@ async function admit(
 	const { config, measure, options } = request;
 	const deadline = options.deadline ?? Infinity;
 	let last = "";
-	while (performance.now() < deadline) {
-		const snapshot = await pool.transaction(deadline, () => {
-			const entries = pool.list();
-			if (ticket.order === 0) {
-				ticket.order = Math.max(0, ...entries.map((entry) => entry.order)) + 1;
-				ticket.since = Date.now();
-				pool.save(ticket);
-				entries.push(ticket);
-				entries.sort(ticketOrder);
-			}
-			const queue = entries.filter((entry) => entry.slots.length === 0);
-			const index = queue.findIndex((entry) => entry.id === ticket.id);
-			const costs = pool.costs();
-			const size = poolSize(config, costs);
-			const peak = measure ? undefined : costs?.peaks[key];
-			const tokens = peak ? Math.ceil(peak / gib) : size;
-			if (tokens > size)
-				return {
-					blocked: `load: the measured command needs ${tokens} tokens and this pool has ${size}. Free memory and run cagr measure again, or raise admission.pool_tokens if it capped the pool.`,
-				};
-			if (index > 0)
-				return {
-					message: `load: queue #${index + 1}, behind ${queue.slice(0, index).map(describeTicket).join("; ")}`,
-				};
-			const current = pressure();
-			if (
-				current.elevated ||
-				(current.available !== undefined && current.available < tokens * gib)
-			)
-				return {
-					message: `load: queue #1, waiting for ${tokens} GiB and normal pressure (${current.description})`,
-				};
-			const held = entries.filter((entry) => entry.slots.length > 0);
-			const reserved = pool.reserve(ticket, held, size, tokens);
-			return reserved
-				? { ...reserved, tokens, current }
-				: {
-						message: `load: queue #1, waiting for tokens held by ${held.map(describeTicket).join("; ") || "another command"}`,
+	const ownership: { fd?: number } = {};
+	try {
+		while (performance.now() < deadline) {
+			const snapshot = await pool.transaction(deadline, () => {
+				const entries = pool.list();
+				if (ownership.fd === undefined) {
+					ownership.fd = pool.own(ticket);
+					ticket.order =
+						Math.max(0, ...entries.map((entry) => entry.order)) + 1;
+					ticket.since = Date.now();
+					pool.save(ticket);
+					entries.push(ticket);
+					entries.sort(ticketOrder);
+				}
+				const queue = entries.filter((entry) => entry.slots.length === 0);
+				const index = queue.findIndex((entry) => entry.id === ticket.id);
+				const costs = pool.costs();
+				const size = poolSize(config, costs);
+				const peak = measure ? undefined : costs?.peaks[key];
+				const tokens = peak ? Math.ceil(peak / gib) : size;
+				if (tokens > size)
+					return {
+						blocked: `load: the measured command needs ${tokens} tokens and this pool has ${size}. Free memory and run cagr measure again, or raise admission.pool_tokens if it capped the pool.`,
 					};
-		});
-		if (!snapshot) break;
-		if (snapshot.blocked) return snapshot.blocked;
-		if ("release" in snapshot) {
-			options.log?.(
-				`load: admitted ${ticket.command} with ${snapshot.tokens} token(s)`,
+				if (index > 0)
+					return {
+						message: `load: queue #${index + 1}, behind ${queue.slice(0, index).map(describeTicket).join("; ")}`,
+					};
+				const current = pressure();
+				if (
+					current.elevated ||
+					(current.available !== undefined && current.available < tokens * gib)
+				)
+					return {
+						message: `load: queue #1, waiting for ${tokens} GiB and normal pressure (${current.description})`,
+					};
+				const held = entries.filter((entry) => entry.slots.length > 0);
+				const reserved = pool.reserve(ticket, held, size, tokens);
+				return reserved
+					? { ...reserved, tokens, current }
+					: {
+							message: `load: queue #1, waiting for tokens held by ${held.map(describeTicket).join("; ") || "another command"}`,
+						};
+			});
+			if (!snapshot) break;
+			if (snapshot.blocked) return snapshot.blocked;
+			if ("release" in snapshot && ownership.fd !== undefined) {
+				const fd = ownership.fd;
+				ownership.fd = undefined;
+				return {
+					...snapshot,
+					locks: [...snapshot.locks, fd],
+					release: () => {
+						snapshot.release();
+						pool.remove(ticket, fd);
+					},
+				};
+			}
+			if (snapshot.message && last !== snapshot.message) {
+				last = snapshot.message;
+				options.log?.(last);
+			}
+			await Bun.sleep(
+				Math.min(pollMs, Math.max(0, deadline - performance.now())),
 			);
-			return snapshot;
 		}
-		if (snapshot.message && last !== snapshot.message) {
-			last = snapshot.message;
-			options.log?.(last);
-		}
-		await Bun.sleep(
-			Math.min(pollMs, Math.max(0, deadline - performance.now())),
-		);
+	} finally {
+		if (ownership.fd !== undefined) pool.remove(ticket, ownership.fd);
 	}
 }
 
@@ -268,6 +281,10 @@ export async function runAdmitted(request: Request): Promise<RunResult> {
 			if (!light && !admitted) return retry ?? unsettled("deferred", deferred);
 			if (typeof admitted === "string") return unsettled("deferred", admitted);
 			release = admitted?.release;
+			if (admitted)
+				options.log?.(
+					`load: admitted ${ticket.command} with ${admitted.tokens} token(s)`,
+				);
 			const dockerBytes = measure ? dockerMemory() : 0;
 			const poolTokens = measure
 				? Math.max(
@@ -308,7 +325,6 @@ export async function runAdmitted(request: Request): Promise<RunResult> {
 				);
 		} finally {
 			release?.();
-			if (ticket.order) pool.remove(ticket);
 		}
 	}
 	return retry ?? unsettled("deferred", deferred);

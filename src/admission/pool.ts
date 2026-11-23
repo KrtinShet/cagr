@@ -58,16 +58,6 @@ function writeJson(file: string, value: unknown) {
 	}
 }
 
-function alive(pid: number) {
-	try {
-		process.kill(pid, 0);
-		return true;
-	} catch (error) {
-		if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
-		return false;
-	}
-}
-
 export function poolSize(config: Config["admission"], costs?: Costs) {
 	const fallback = Math.max(1, Math.min(2, Math.floor(totalmem() / (2 * gib))));
 	return Math.min(
@@ -129,20 +119,40 @@ export class Pool {
 		for (const name of readdirSync(this.tickets)) {
 			if (!name.endsWith(".json")) continue;
 			const path = join(this.tickets, name);
+			const stale = tryLock(path);
+			if (stale !== null) {
+				closeSync(stale);
+				rmSync(path, { force: true });
+				continue;
+			}
 			const ticket = readJson<Ticket | null>(path, null);
-			if (!ticket) continue;
-			if (alive(ticket.pid)) entries.push(ticket);
-			else rmSync(path, { force: true });
+			if (ticket) entries.push(ticket);
 		}
 		return entries.sort(ticketOrder);
 	}
 
-	save(ticket: Ticket) {
-		writeJson(join(this.tickets, `${ticket.id}.json`), ticket);
+	own(ticket: Ticket) {
+		const fd = tryLock(join(this.tickets, `${ticket.id}.json`));
+		if (fd === null)
+			throw new Error("Could not lock the new admission ticket.");
+		return fd;
 	}
 
-	remove(ticket: Ticket) {
-		rmSync(join(this.tickets, `${ticket.id}.json`), { force: true });
+	save(ticket: Ticket) {
+		// The ticket's inode is locked, and the queue lock serializes its readers.
+		writeFileSync(
+			join(this.tickets, `${ticket.id}.json`),
+			JSON.stringify(ticket),
+			{ mode: 0o600 },
+		);
+	}
+
+	remove(ticket: Ticket, fd: number) {
+		try {
+			rmSync(join(this.tickets, `${ticket.id}.json`), { force: true });
+		} finally {
+			closeSync(fd);
+		}
 	}
 
 	reserve(ticket: Ticket, held: Ticket[], size: number, tokens: number) {
