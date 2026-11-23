@@ -521,3 +521,53 @@ test.each([
 	);
 	expect(verdict?.message).toContain("that is not one file in the repo");
 });
+
+test.each([
+	[".npmrc", "pnpmfile=tools/hooks.cjs\n"],
+	[".npmrc", 'pnpmfile = "./tools/hooks.cjs"\n'],
+	["pnpm-workspace.yaml", "packages: []\npnpmfile: tools/hooks.cjs\n"],
+])("a pnpmfile named in %s gets the same checks: %p", async (config, text) => {
+	const lockfile = "lockfileVersion: '9.0'\n";
+	const files = {
+		"package.json": '{ "name": "app" }\n',
+		[config]: text,
+		"tools/hooks.cjs":
+			"const hooks = require('./more')\nmodule.exports = { hooks }\n",
+		"pnpm-lock.yaml": lockfile,
+	};
+	const edited = { "pnpm-lock.yaml": `${lockfile}# edited\n` };
+	expect(
+		(await editedCheck("pnpm-lock.yaml", "pnpm", files, edited))?.message,
+	).toContain("could not prove that tools/hooks.cjs loads only Node built-ins");
+	expect(
+		(
+			await editedCheck("pnpm-lock.yaml", "pnpm", files, {
+				...edited,
+				"tools/hooks.cjs": "module.exports = {}\n",
+			})
+		)?.message,
+	).toContain("tools/hooks.cjs differs from the last commit");
+});
+
+test.each([
+	[".npmrc", "pnpmfile=../hooks.cjs\n"],
+	[".npmrc", "pnpmfile=/etc/hooks.cjs\n"],
+	[".npmrc", `pnpmfile=$${"{"}HOME}/hooks.cjs\n`],
+	["pnpm-workspace.yaml", "pnpmfile: ['../hooks.cjs']\n"],
+])("a pnpmfile in %s outside the repo is refused: %p", async (config, text) => {
+	const lockfile = "lockfileVersion: '9.0'\n";
+	const verdict = await editedCheck(
+		"pnpm-lock.yaml",
+		"pnpm",
+		{
+			"package.json": '{ "name": "app" }\n',
+			[config]: text,
+			"pnpm-lock.yaml": lockfile,
+		},
+		{ "pnpm-lock.yaml": `${lockfile}# edited\n` },
+	);
+	expect(verdict?.message).toContain(
+		`The committed ${config} sets pnpmfile to`,
+	);
+	expect(verdict?.message).toContain("not a path inside the repo");
+});

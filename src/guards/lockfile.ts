@@ -40,6 +40,13 @@ const writers: Record<string, Writer> = {
 	"yarn.lock": "yarn",
 };
 
+/** The repo file that holds each manager's registry setting. */
+const repoConfig: Record<Writer, string> = {
+	bun: "bunfig.toml",
+	pnpm: ".npmrc",
+	npm: ".npmrc",
+	yarn: ".yarnrc",
+};
 const workspaceFile = "pnpm-workspace.yaml";
 /** The pnpm-workspace.yaml keys a normal change edits. Every other key is a pnpm setting. */
 const workspaceKeys = new Set(["packages", "catalog", "catalogs"]);
@@ -533,6 +540,31 @@ export function builtinsOnly(text: string) {
 	return !refused.test(text.replace(literalLoads, " "));
 }
 
+/** The pnpmfile paths the committed .npmrc and pnpm-workspace.yaml at `workspace` name, with the file that names each. */
+async function namedPnpmfiles(
+	workspace: string,
+	fromHead: (file: string) => Promise<Uint8Array | null>,
+) {
+	const found: [string, string][] = [];
+	const npmrc = posix.join(workspace, ".npmrc");
+	const line = [
+		...(decode(await fromHead(npmrc)) ?? "").matchAll(
+			/^[ \t]*pnpmfile[ \t]*=[ \t]*(.*?)[ \t]*$/gm,
+		),
+	].at(-1)?.[1];
+	if (line) found.push([npmrc, line.replace(/^(["'])(.*)\1$/, "$2")]);
+	const yaml = posix.join(workspace, workspaceFile);
+	const text = decode(await fromHead(yaml));
+	let value: unknown;
+	try {
+		value = text === null ? undefined : Bun.YAML.parse(text);
+	} catch {}
+	const setting = (value as { pnpmfile?: unknown } | null)?.pnpmfile;
+	for (const named of [setting].flat())
+		if (typeof named === "string" && named) found.push([yaml, named]);
+	return found;
+}
+
 /**
  * A pnpmfile runs inside pnpm and changes the lockfile, so the check runs it
  * only when it matches the starting commit, byte for byte or as a CRLF
@@ -544,8 +576,21 @@ async function copyPnpmfiles(
 	target: string,
 	fromHead: (file: string) => Promise<Uint8Array | null>,
 ) {
-	for (const name of pnpmfiles) {
-		const file = posix.join(workspace, name);
+	const files = new Set(pnpmfiles.map((name) => posix.join(workspace, name)));
+	for (const [config, named] of await namedPnpmfiles(workspace, fromHead)) {
+		const file = posix.normalize(posix.join(workspace, named));
+		if (
+			named.includes("${") ||
+			isAbsolute(named) ||
+			posix.isAbsolute(named) ||
+			/^\.\.(\/|$)/.test(file)
+		)
+			throw new Refusal(
+				`The committed ${config} sets pnpmfile to ${named}, which is not a path inside the repo, so the check cannot take it from the commit. Restore the lockfile and ask the user to run the pnpm command.`,
+			);
+		files.add(file);
+	}
+	for (const file of files) {
 		const source = join(root, file);
 		const work = existsSync(source)
 			? new Uint8Array(await readFile(source))
@@ -573,6 +618,7 @@ async function copyPnpmfiles(
 			throw new Refusal(
 				`cagr could not prove that ${file} loads only Node built-ins. In the check any other module would come from the temp folder, which the agent can write, so cagr does not run it. Restore the lockfile and ask the user to run the pnpm command.`,
 			);
+		await mkdir(dirname(join(target, file)), { recursive: true });
 		await writeFile(join(target, file), work);
 	}
 }
@@ -687,8 +733,10 @@ async function regenerate(
 		const argv = [...spec.argv];
 		const env: Record<string, string> = {
 			...(await isolatedEnv(home)),
-			// With no packageManager in the repo, Corepack would keep looking above the temp folder.
-			...(pinned ? {} : { COREPACK_ENABLE_PROJECT_SPEC: "0" }),
+			// With no packageManager in the repo, Corepack, and Yarn 1 run without it, would keep looking above the temp folder.
+			...(pinned
+				? {}
+				: { COREPACK_ENABLE_PROJECT_SPEC: "0", SKIP_YARN_COREPACK_CHECK: "1" }),
 			...spec.env,
 		};
 		if (manager === "npm") argv.push("--prefix", folderOf);
@@ -851,7 +899,7 @@ export async function checkLockfile(options: {
 		if (error instanceof Refusal) return { message: error.message };
 		const project = posix.dirname(path);
 		return {
-			message: `cagr could not check that ${manager} wrote this lockfile. ${(error as Error).message} The check copies the manifests to a temp folder and runs ${manager} offline with scripts off. Make it pass: install ${manager}, or run \`${manager} install\` in ${shellQuote(join(root, project))} so its cache has every package, then stop again. If it cannot pass, restore the file with the steps that follow and ask the user to make the dependency change.`,
+			message: `cagr could not check that ${manager} wrote this lockfile. ${(error as Error).message} The check copies the manifests to a temp folder and runs ${manager} offline with scripts off. Make it pass: install ${manager}, or run \`${manager} install\` in ${shellQuote(join(root, project))} so its cache has every package, then stop again. The check reads no config under the home folder, so if the repo needs a registry or token from a file such as ~/.npmrc, ask the user to make the dependency change, or to commit the registry setting to the repo's ${repoConfig[manager]}. If it cannot pass, restore the file with the steps that follow and ask the user to make the dependency change.`,
 		};
 	}
 }

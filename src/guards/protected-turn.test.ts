@@ -528,6 +528,9 @@ test("a lockfile bun cannot rebuild blocks with the fix", async () => {
 	expect(reason).toContain("could not check that bun wrote this lockfile");
 	expect(reason).toContain("`bun install`");
 	expect(reason).toContain("ask the user to make the dependency change");
+	expect(reason).toContain(
+		"or to commit the registry setting to the repo's bunfig.toml",
+	);
 });
 
 test("a committed lockfile passes, a separately staged one does not", async () => {
@@ -677,6 +680,21 @@ test.skipIf(missing("pnpm"))(
 	"pnpm add in a repo with a pnpmfile passes turn end",
 	async () => {
 		const repo = await lockedRepo("pnpm", { ".pnpmfile.cjs": pnpmfile });
+		expect(await repo.read()).toContain("pnpmfileChecksum");
+		expect(await repo.before("pnpm add zed")).toBe("");
+		await repo.add("zed");
+		expect(await repo.stop()).toBe("");
+	},
+	30_000,
+);
+
+test.skipIf(missing("pnpm"))(
+	"pnpm add with a pnpmfile at a configured path passes turn end",
+	async () => {
+		const repo = await lockedRepo("pnpm", {
+			"pnpm-workspace.yaml": "pnpmfile: tools/hooks.cjs\n",
+			"tools/hooks.cjs": pnpmfile,
+		});
 		expect(await repo.read()).toContain("pnpmfileChecksum");
 		expect(await repo.before("pnpm add zed")).toBe("");
 		await repo.add("zed");
