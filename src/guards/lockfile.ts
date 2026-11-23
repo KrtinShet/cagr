@@ -581,16 +581,17 @@ async function namedPnpmfiles(
 		throw new Refusal(
 			`The committed ${npmrc} has a key cagr cannot read: ${odd[0]}. Write it with no quotes, backslash, ; or # in a commit, or restore the lockfile and ask the user to run the pnpm command.`,
 		);
-	const line = entries
-		.filter(([key = ""]) => /^pnpmfile$/i.test(key))
-		.at(-1)?.[1];
-	const unquoted = line?.replace(/^(["'])(.*)\1$/, "$2");
-	// The parser also decodes escapes and nested quotes in a value and may cut it at a comment, so only a plain one is read.
-	if (line && unquoted && /[\\;#'"`]/.test(unquoted))
-		throw new Refusal(
-			`The committed ${npmrc} sets pnpmfile to ${line}, which cagr cannot read as one path. Write it with no quotes inside, backslash, ; or # in a commit, or restore the lockfile and ask the user to run the pnpm command.`,
-		);
-	if (unquoted) found.push([npmrc, unquoted]);
+	// Every pnpmfile entry in any letter case, not only the one pnpm keeps, so a near spelling or a repeat cannot hide it.
+	for (const [key = "", line = ""] of entries) {
+		if (!/^pnpmfile$/i.test(key)) continue;
+		const unquoted = line.replace(/^(["'])(.*)\1$/, "$2");
+		// The parser also decodes escapes and nested quotes in a value and may cut it at a comment, so only a plain one is read.
+		if (/[\\;#'"`]/.test(unquoted))
+			throw new Refusal(
+				`The committed ${npmrc} sets pnpmfile to ${line}, which cagr cannot read as one path. Write it with no quotes inside, backslash, ; or # in a commit, or restore the lockfile and ask the user to run the pnpm command.`,
+			);
+		if (unquoted) found.push([npmrc, unquoted]);
+	}
 	const yaml = posix.join(workspace, workspaceFile);
 	const text = decode(await fromHead(yaml));
 	let value: unknown;

@@ -713,6 +713,28 @@ test.each([
 });
 
 test.each([
+	"pnpmfile=tools/real.cjs\nPnpmfile=tools/benign.cjs\n",
+	"PNPMFILE=tools/benign.cjs\npnpmfile=tools/real.cjs\n",
+])("every pnpmfile entry in .npmrc gets the checks: %p", async (npmrc) => {
+	const lockfile = "lockfileVersion: '9.0'\n";
+	const verdict = await editedCheck(
+		"pnpm-lock.yaml",
+		"pnpm",
+		{
+			"package.json": '{ "name": "app" }\n',
+			".npmrc": npmrc,
+			"tools/real.cjs": "module.exports = require('./more')\n",
+			"tools/benign.cjs": "module.exports = {}\n",
+			"pnpm-lock.yaml": lockfile,
+		},
+		{ "pnpm-lock.yaml": `${lockfile}# edited\n` },
+	);
+	expect(verdict?.message).toContain(
+		"could not prove that tools/real.cjs loads only Node built-ins",
+	);
+});
+
+test.each([
 	[".npmrc", "pnpmfile=../hooks.cjs\n"],
 	[".npmrc", "pnpmfile=/etc/hooks.cjs\n"],
 	[".npmrc", `pnpmfile=$${"{"}HOME}/hooks.cjs\n`],
