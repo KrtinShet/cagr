@@ -103,7 +103,10 @@ function runtime(
 			});
 		if (command === "pr" && sub === "list")
 			return JSON.stringify(
-				settings.heads ?? [{ number: 3, headRefOid: f.head }],
+				(settings.heads ?? [{ number: 3, headRefOid: f.head }]).map((pr) => ({
+					...pr,
+					headRefName: "feat/example",
+				})),
 			);
 		if (command === "pr" && sub === "view") {
 			if (resource !== "3") throw new Error(`Unexpected PR view ${resource}`);

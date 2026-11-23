@@ -59,6 +59,7 @@ function fakeGh(options: {
 	status?: string;
 	earlier?: number[];
 	earlierState?: string;
+	earlierResolved?: string[];
 	rejectInline?: boolean;
 	rejectAll?: boolean;
 	rejectState?: boolean;
@@ -71,7 +72,10 @@ function fakeGh(options: {
 					repository: {
 						pullRequest: {
 							reviewThreads: {
-								nodes: (options.resolved ?? []).map((id) => ({
+								nodes: (args.includes("number=2")
+									? (options.earlierResolved ?? [])
+									: (options.resolved ?? [])
+								).map((id) => ({
 									isResolved: true,
 									resolvedBy: { login: "ana" },
 									comments: {
@@ -331,8 +335,12 @@ test("CI combines local, earlier PR, and current PR rounds for the same branch",
 		recordPath(join(repo.root, ".git"), "feat/x"),
 		record([round({ head })]),
 	);
-	const state = encodeState(record([round({ head })], [finding()], "pr-3"));
-	const earlierState = encodeState(record([round({ head })], [], "pr-2"));
+	const state = encodeState(
+		record([round({ head, at: "2026-11-09T00:00:00Z" })], [finding()], "pr-3"),
+	);
+	const earlierState = encodeState(
+		record([round({ head, at: "2026-11-10T00:00:00Z" })], [], "pr-2"),
+	);
 	const later = await repo.commit("feat: more", { "src/b.ts": "more\n" });
 	const pr = { ...pullRequestFromEvent(env), head: later };
 	const { gh, posts } = fakeGh({
@@ -358,6 +366,57 @@ test("CI combines local, earlier PR, and current PR rounds for the same branch",
 	expect(
 		posts.some(({ args }) => args.some((arg) => arg.endsWith("/reviews"))),
 	).toBe(false);
+});
+
+test("a replacement PR stays blocked by findings on the earlier PR until its thread is resolved", async () => {
+	const { repo, config, env, head } = await prRepo();
+	const earlierState = encodeState(
+		record(
+			[round({ head }), round({ n: 2, head }), round({ n: 3, head })],
+			[finding()],
+			"pr-2",
+		),
+	);
+	const agent: ReviewAgent = {
+		name: "unexpected",
+		async ask() {
+			throw new Error("No branch rounds remain");
+		},
+	};
+	for (const status of ["pending", "success"])
+		for (const earlierResolved of [[], ["f1"]]) {
+			const { gh } = fakeGh({
+				earlier: [2],
+				earlierState,
+				earlierResolved,
+				status,
+			});
+			const result = await ciReview(config, repo.root, { gh, env, agent });
+			expect(result.ok).toBe(earlierResolved.length > 0);
+			if (!result.ok) expect(result.report).toContain("PR #2");
+		}
+});
+
+test("copies of the same branch rounds are counted once across earlier and current PR records", async () => {
+	const { repo, config, env, head } = await prRepo();
+	const rounds = [round({ head }), round({ n: 2, head })];
+	const later = await repo.commit("feat: more", { "src/b.ts": "more\n" });
+	const pr = { ...pullRequestFromEvent(env), head: later };
+	const { gh, posts } = fakeGh({
+		comments: [
+			{ id: 99, body: encodeState(record(rounds, [], "pr-3")), login: "owner" },
+		],
+		earlier: [2],
+		earlierState: encodeState(record(rounds, [], "pr-2")),
+	});
+	await ciReview(config, repo.root, {
+		gh,
+		local: { pr, login: "owner" },
+		agent: oneBug,
+	});
+	expect(
+		posts.some(({ args }) => args.includes("repos/o/r/pulls/3/reviews")),
+	).toBe(true);
 });
 
 test("a successful commit status skips finder review but cannot hide an open CI finding", async () => {

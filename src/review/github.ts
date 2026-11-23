@@ -10,10 +10,11 @@ import { reviewContext, successfulStatuses } from "./status";
 import { readBranchRecord, recordPath } from "./store";
 import {
 	blocking,
-	completedRounds,
+	countsTowardCap,
 	emptyRecord,
 	type ReviewFinding,
 	type ReviewRecord,
+	type Round,
 } from "./types";
 
 /** Runs `gh` with args, optional stdin, and returns stdout. Injected in tests. */
@@ -95,6 +96,9 @@ export function pullRequestFromEvent(
 }
 
 type Comment = { id: number; body: string; login: string };
+type PrRef = Pick<PullRequest, "repo" | "number">;
+type PrBranch = PrRef & Pick<PullRequest, "headRepo" | "headBranch">;
+type PrReviewState = { pr: PrRef; comment: Comment; record: ReviewRecord };
 
 /** The workflow posts as github-actions. REST names it "github-actions[bot]", GraphQL "github-actions". */
 export const isWorkflowBot = (login: string | null | undefined) =>
@@ -105,11 +109,7 @@ function sameAuthor(left: string | null | undefined, right: string) {
 	return left?.toLowerCase() === right.toLowerCase();
 }
 
-async function stateComments(
-	gh: Gh,
-	pr: Pick<PullRequest, "repo" | "number">,
-	login?: string,
-) {
+async function stateComments(gh: Gh, pr: PrRef, login?: string) {
 	const out = await gh([
 		"api",
 		"--paginate",
@@ -117,12 +117,12 @@ async function stateComments(
 		"--jq",
 		".[] | {id, body, login: .user.login}",
 	]);
-	const states = new Map<string, { comment: Comment; record: ReviewRecord }>();
+	const states = new Map<string, PrReviewState>();
 	for (const line of out.split("\n").filter(Boolean)) {
 		const comment = JSON.parse(line) as Comment;
 		const record = decodeState(comment.body);
 		if (record && comment.login)
-			states.set(comment.login.toLowerCase(), { comment, record });
+			states.set(comment.login.toLowerCase(), { pr, comment, record });
 	}
 	return (
 		await Promise.all(
@@ -149,12 +149,18 @@ async function stateComments(
 	).filter((state) => state !== null);
 }
 
-export async function hasOpenCiFinding(gh: Gh, repo: string, number: number) {
-	const states = await stateComments(gh, { repo, number });
-	return states.some(({ record }) => blocking(record).length > 0);
+export async function hasOpenCiFinding(gh: Gh, pr: PrBranch) {
+	const states = await stateComments(gh, pr);
+	if (states.some(({ record }) => blocking(record).length > 0)) return true;
+	for (const state of await earlierPrStates(gh, pr)) {
+		if (blocking(state.record).length === 0) continue;
+		await applyThreadAnswers(gh, state.pr, state.record, state.comment.login);
+		if (blocking(state.record).length > 0) return true;
+	}
+	return false;
 }
 
-async function earlierPrRecords(gh: Gh, pr: PullRequest, login?: string) {
+async function earlierPrStates(gh: Gh, pr: PrBranch, login?: string) {
 	if (!pr.headRepo || !pr.headBranch) return [];
 	const owner = pr.headRepo.split("/")[0];
 	const out = await gh([
@@ -175,14 +181,29 @@ async function earlierPrRecords(gh: Gh, pr: PullRequest, login?: string) {
 		.map(Number)
 		.filter((number) => number > 0 && number !== pr.number);
 	// Read one PR at a time to avoid a burst of requests on long-lived branches.
-	const records: ReviewRecord[] = [];
+	const states: PrReviewState[] = [];
 	for (const number of earlier)
-		records.push(
-			...(await stateComments(gh, { repo: pr.repo, number }, login)).map(
-				({ record }) => record,
-			),
-		);
-	return records;
+		states.push(...(await stateComments(gh, { repo: pr.repo, number }, login)));
+	return states;
+}
+
+function countPriorRounds(current: ReviewRecord, otherRecords: ReviewRecord[]) {
+	const key = (round: Round) =>
+		round.runId ??
+		JSON.stringify([
+			round.n,
+			round.head,
+			round.from,
+			round.scope,
+			round.reviewer,
+			round.at,
+		]);
+	const seen = new Set(current.rounds.filter(countsTowardCap).map(key));
+	const own = seen.size;
+	for (const record of otherRecords)
+		for (const round of record.rounds.filter(countsTowardCap))
+			seen.add(key(round));
+	return seen.size - own;
 }
 
 const resolvedQuery = `query($owner: String!, $name: String!, $number: Int!) {
@@ -194,7 +215,7 @@ const resolvedQuery = `query($owner: String!, $name: String!, $number: Int!) {
 /** Findings whose inline thread a person resolved on GitHub. Resolving counts as an answer. */
 export async function resolvedFindings(
 	gh: Gh,
-	pr: PullRequest,
+	pr: PrRef,
 	isReviewer = isWorkflowBot,
 ): Promise<Map<string, string>> {
 	const [owner, name] = pr.repo.split("/");
@@ -306,7 +327,7 @@ const readOnlyToken = /\b403\b|Resource not accessible by integration/i;
 
 async function applyThreadAnswers(
 	gh: Gh,
-	pr: PullRequest,
+	pr: PrRef,
 	record: ReviewRecord,
 	author: string,
 ) {
@@ -351,8 +372,9 @@ export async function ciReview(
 		throw new ReviewInputError(
 			`The checkout is ${checkedOut.slice(0, 7)}, not the pull request's head ${pr.head.slice(0, 7)}, so the review would cover the wrong commit. Check out the head: in actions/checkout, set \`ref: \${{ github.event.pull_request.head.sha }}\`, or run \`cagr sync\` to rewrite the workflow.`,
 		);
-	const [states, statusPassed] = await Promise.all([
+	const [states, earlier, statusPassed] = await Promise.all([
 		stateComments(gh, pr, login),
+		earlierPrStates(gh, pr, login),
 		options.local
 			? options.local.statusPassed === true
 			: successfulStatuses(gh, pr.repo, pr.head)
@@ -361,7 +383,7 @@ export async function ciReview(
 	]);
 	if (
 		statusPassed &&
-		states.every(({ record }) => blocking(record).length === 0)
+		[...states, ...earlier].every(({ record }) => blocking(record).length === 0)
 	)
 		return {
 			ok: true,
@@ -374,27 +396,33 @@ export async function ciReview(
 	const own = states.find(({ comment }) => sameAuthor(comment.login, login));
 	const existing = own?.comment ?? null;
 	const record = own?.record ?? emptyRecord(`pr-${pr.number}`, pr.base);
-	const others = states.filter((state) => state !== own);
-	for (const state of states)
+	const others = [...states.filter((state) => state !== own), ...earlier];
+	for (const state of [...states, ...earlier])
 		if (blocking(state.record).length > 0)
-			await applyThreadAnswers(gh, pr, state.record, state.comment.login);
+			await applyThreadAnswers(gh, state.pr, state.record, state.comment.login);
 
 	const otherOpen = (
 		await Promise.all(
-			others.map(async ({ record }) =>
-				unresolved(record, pr.head, await reachFrom(record, pr.head, cwd)),
+			others.map(async ({ pr: source, record }) =>
+				unresolved(record, pr.head, await reachFrom(record, pr.head, cwd)).map(
+					({ id, title }) => `PR #${source.number} ${id} ${title}`,
+				),
 			),
 		)
 	).flat();
 	if (statusPassed) {
-		const open = [
-			...unresolved(record, pr.head, await reachFrom(record, pr.head, cwd)),
-			...otherOpen,
-		];
+		const open = unresolved(
+			record,
+			pr.head,
+			await reachFrom(record, pr.head, cwd),
+		);
 		if (existing) await saveState(gh, pr, existing, record, open);
-		const detail = open.map(({ id, title }) => `${id} ${title}`).join(", ");
+		const detail = [
+			...open.map(({ id, title }) => `${id} ${title}`),
+			...otherOpen,
+		].join(", ");
 		return {
-			ok: open.length === 0,
+			ok: detail === "",
 			complete: true,
 			coverage: undefined,
 			report: `CI judged the gate from existing findings. ${detail ? `Open Important findings: ${detail}` : "No Important finding is open."}`,
@@ -408,12 +436,10 @@ export async function ciReview(
 		pr.headRepo.toLowerCase() === pr.repo.toLowerCase()
 			? readBranchRecord(recordPath(commonDir, pr.headBranch), pr.headBranch)
 			: null;
-	const earlier = await earlierPrRecords(gh, pr, login);
-	const priorRounds = [
-		...earlier,
+	const priorRounds = countPriorRounds(record, [
 		...others.map(({ record }) => record),
 		...(localRecord ? [localRecord] : []),
-	].reduce((total, history) => total + completedRounds(history), 0);
+	]);
 	const outcome = await review(config, {
 		cwd,
 		base: pr.base,
@@ -430,7 +456,7 @@ export async function ciReview(
 					await reachFrom(localRecord, pr.head, cwd),
 				)
 			: [];
-	const priorReview = localRecord ?? others[0]?.record ?? earlier[0];
+	const priorReview = localRecord ?? others[0]?.record;
 	const coverage =
 		outcome.coverage ??
 		(outcome.capped && priorReview
@@ -441,7 +467,10 @@ export async function ciReview(
 					config.review.max_rounds,
 				)
 			: undefined);
-	const externalOpen = [...otherOpen, ...localOpen];
+	const externalOpen = [
+		...otherOpen,
+		...localOpen.map(({ id, title }) => `${id} ${title}`),
+	];
 	let posted = "";
 	if (!outcome.skipped)
 		await postReview(gh, pr, outcome, config.review.max_rounds).catch(
@@ -460,7 +489,7 @@ export async function ciReview(
 		},
 	);
 	const external = externalOpen.length
-		? `\n\nImportant findings open in other branch review records: ${externalOpen.map(({ id, title }) => `${id} ${title}`).join(", ")}`
+		? `\n\nImportant findings open in other branch review records: ${externalOpen.join(", ")}`
 		: "";
 	const coverageNote = coverage && !outcome.coverage ? `\n\n${coverage}` : "";
 	const report = `${reviewReport(outcome, config.review.max_rounds)}${coverageNote}${external}${posted}${saved}`;

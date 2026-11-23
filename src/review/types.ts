@@ -36,6 +36,8 @@ export type ReviewFinding = Candidate & {
 };
 
 export type Round = {
+	/** Identifies the same run when it appears in multiple review records. */
+	runId?: string;
 	n: number;
 	head: string;
 	from: string;
@@ -85,8 +87,9 @@ export const cycleStart = (record: ReviewRecord) =>
 		?.n ?? 0;
 
 /** Every completed branch round counts toward `[review] max_rounds`. */
+export const countsTowardCap = (round: Round) =>
+	!round.error && !round.verificationOnly;
 export const completedRounds = (record: ReviewRecord) =>
-	record.rounds.filter((round) => !round.error && !round.verificationOnly)
-		.length;
+	record.rounds.filter(countsTowardCap).length;
 
 export const extraReviewEnv = "CAGR_ALLOW_EXTRA_REVIEW";

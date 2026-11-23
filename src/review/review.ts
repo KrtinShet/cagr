@@ -313,6 +313,7 @@ async function reviewTarget(
 	};
 
 	const round: Round = {
+		runId: crypto.randomUUID(),
 		n: roundNumber,
 		head,
 		from,

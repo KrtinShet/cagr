@@ -106,6 +106,7 @@ async function pendingTasks(
 	repo: string,
 	number: number,
 	sha: string,
+	headBranch: string,
 	reviewedHere: boolean,
 ) {
 	const passed = await successfulStatuses(gh, repo, sha);
@@ -114,7 +115,12 @@ async function pendingTasks(
 		checks: !passed.has(checksContext),
 		review:
 			!statusPassed ||
-			(await hasOpenCiFinding(gh, repo, number).catch(() => true)),
+			(await hasOpenCiFinding(gh, {
+				repo,
+				number,
+				headRepo: repo,
+				headBranch,
+			}).catch(() => true)),
 		statusPassed,
 	};
 }
@@ -308,14 +314,17 @@ export async function localCi(
 							"--repo",
 							repo,
 							"--json",
-							"number,isDraft,headRefOid",
+							"number,isDraft,headRefOid,headRefName",
 						]),
-					) as Pick<PrDetails, "number" | "isDraft" | "headRefOid">[])
-				: [{ number: mode, isDraft: false, headRefOid: "" }];
+					) as Pick<
+						PrDetails,
+						"number" | "isDraft" | "headRefOid" | "headRefName"
+					>[])
+				: [{ number: mode, isDraft: false, headRefOid: "", headRefName: "" }];
 		let ok = true;
 		const checkedHeads = new Set<string>();
 		const reviewedHeads = new Set<string>();
-		for (const { number, isDraft, headRefOid } of prs) {
+		for (const { number, isDraft, headRefOid, headRefName } of prs) {
 			if (mode === "watch" && isDraft) continue;
 			try {
 				let tasks = { checks: true, review: true, statusPassed: false };
@@ -325,6 +334,7 @@ export async function localCi(
 						repo,
 						number,
 						headRefOid,
+						headRefName,
 						reviewedHeads.has(headRefOid),
 					);
 					if (checkedHeads.has(headRefOid)) tasks.checks = false;
@@ -354,12 +364,16 @@ export async function localCi(
 					throw new LocalCiError(
 						`PR #${number} has no valid head. Check its head on GitHub and retry.`,
 					);
-				if (mode === "watch" && head !== headRefOid) {
+				if (
+					mode === "watch" &&
+					(head !== headRefOid || details.headRefName !== headRefName)
+				) {
 					tasks = await pendingTasks(
 						gh,
 						repo,
 						number,
 						head,
+						details.headRefName,
 						reviewedHeads.has(head),
 					);
 					if (checkedHeads.has(head)) tasks.checks = false;
