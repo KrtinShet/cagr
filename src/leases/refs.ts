@@ -190,17 +190,22 @@ export class LeaseRefs {
 
 export type LeaseSnapshot = Awaited<ReturnType<LeaseRefs["snapshot"]>>;
 
+function printable(value: unknown): value is string {
+	return (
+		typeof value === "string" && value.length > 0 && !/\p{Cc}/u.test(value)
+	);
+}
+
 function isHolder(value: unknown): value is Holder {
 	return (
 		typeof value === "object" &&
 		value !== null &&
 		"branch" in value &&
-		typeof value.branch === "string" &&
-		value.branch.length > 0 &&
+		printable(value.branch) &&
 		"host" in value &&
-		typeof value.host === "string" &&
+		printable(value.host) &&
 		"user" in value &&
-		typeof value.user === "string" &&
+		printable(value.user) &&
 		"id" in value &&
 		typeof value.id === "string" &&
 		"pid" in value &&

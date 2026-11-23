@@ -173,8 +173,8 @@ export async function ci(
 
 	const branch =
 		options.pr?.branch ||
-		env.GITHUB_HEAD_REF ||
 		pullRequest?.head?.ref ||
+		env.GITHUB_HEAD_REF ||
 		git.branch;
 	const branchProblem = branch ? branchFinding(branch, config) : null;
 	checks.push(
@@ -354,19 +354,29 @@ export async function ci(
 		const paths = changeResult.snapshot.changes.map(({ path }) => path);
 		const needed = config.lease.filter((lease) => touchesLease(lease, paths));
 		const problems: string[] = [];
-		if (needed.length) {
+		const githubPr =
+			!options.pr &&
+			(pullRequest ||
+				env.GITHUB_HEAD_REF ||
+				env.GITHUB_EVENT_NAME?.startsWith("pull_request"));
+		const headRepo = pullRequest?.head?.repo?.full_name;
+		const originRepo = env.GITHUB_REPOSITORY?.toLowerCase();
+		const sameRepo =
+			!githubPr ||
+			(originRepo &&
+				typeof headRepo === "string" &&
+				headRepo.toLowerCase() === originRepo);
+		if (needed.length && !sameRepo) {
+			problems.push(
+				"Leased paths require a PR branch in origin. Publish the branch in the same repository and rerun cagr ci with the PR event.",
+			);
+		} else if (needed.length) {
 			try {
 				const reader = options.leaseGit ?? new LeaseRefs(cwd);
 				const snapshot = await reader.snapshot();
-				const headRepo = pullRequest?.head?.repo?.full_name;
-				const sameRepo =
-					!headRepo ||
-					!env.GITHUB_REPOSITORY ||
-					headRepo === env.GITHUB_REPOSITORY;
 				for (const lease of needed) {
 					let held = await heldLease(reader, snapshot, lease);
 					if (
-						sameRepo &&
 						branch &&
 						held?.record.branch === branch &&
 						!expired(lease, held.record)

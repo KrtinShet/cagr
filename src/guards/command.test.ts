@@ -341,7 +341,8 @@ test("only a human may set the lease break override", () => {
 	expect(onFeature("git ls-remote origin 'refs/cagr/lease/*'")).toBeNull();
 });
 
-test("mirror and broad refspec pushes cannot write the lease namespace without a protected branch", () => {
+test("mirror and broad refspec pushes cannot write the lease namespace", () => {
+	expect(onFeature("git push --mirror origin")).toBe(reasons.pushAll);
 	const check = reasonOn("feat/work", false, config({}));
 	for (const line of [
 		"git push --mirror origin",

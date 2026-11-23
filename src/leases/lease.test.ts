@@ -337,12 +337,25 @@ test("a reverted leased change on an unpublished branch leaves the tree unchange
 });
 
 test("CI rejects an expired published lease and a failed update keeps a live one", async () => {
-	const { builder, remote, setRenewal } = await fixture();
+	const { builder, parent, remote, setRenewal } = await fixture();
 	const a = await builder("builder-a");
 	await a.migration("0002");
 	expect((await a.lease("take")).ok).toBe(true);
 	expect((await a.push()).ok).toBe(true);
-	const ci = () => run([process.execPath, cli, "ci"], a.cwd);
+	const event = join(parent, "pull-request.json");
+	const sha = await a.git("rev-parse", "HEAD");
+	const writeEvent = (repo: { full_name: string } | null) =>
+		Bun.write(
+			event,
+			JSON.stringify({ pull_request: { head: { sha, ref: a.branch, repo } } }),
+		);
+	const ci = () =>
+		run([process.execPath, cli, "ci"], a.cwd, {
+			env: { GITHUB_EVENT_PATH: event, GITHUB_REPOSITORY: "example/leases" },
+		});
+	await writeEvent(null);
+	expect((await ci()).stdout).toContain("FAIL Leases");
+	await writeEvent({ full_name: "example/leases" });
 	const live = await ci();
 	expect(live.stdout).toContain("PASS Leases");
 	expect(live.ok).toBe(true);
@@ -445,9 +458,10 @@ test("take skips and logs malformed records, and a human can prune tickets direc
 	const a = await builder("builder-a");
 	const broken = `${waitPrefix}123-broken`;
 	await setRecord(leaseRef, "not a lease");
-	await setRecord(broken, "not a ticket");
+	await setRecord(broken, JSON.stringify(holder("builder-b\u001b[2J")));
 	const listed = await a.lease("list");
 	expect(listed.stdout).toContain("malformed lease");
+	expect(listed.stdout).not.toContain("\u001b");
 	expect(listed.stdout).toContain(`Ignored malformed ticket at ${broken}`);
 	const pruned = await a.lease("release", ["--break", "--prune-tickets"]);
 	expect(pruned.stdout).toContain(
