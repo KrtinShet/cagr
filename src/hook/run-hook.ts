@@ -32,8 +32,9 @@ export async function runHook(
 	let target = "";
 	let key = "";
 	const entries: Observation[] = [];
+	let payload: unknown;
 	try {
-		const payload = stdin.trim() === "" ? {} : JSON.parse(stdin);
+		payload = stdin.trim() === "" ? {} : JSON.parse(stdin);
 		const input = parseInput(agent, event, payload, fallbackCwd);
 		session = input.sessionId;
 		target = input.command
@@ -87,5 +88,5 @@ export async function runHook(
 		recordTimings(root, [
 			{ event, check: "total", ms: Math.round(performance.now() - started) },
 		]);
-	return renderDecision(agent, event, decision);
+	return renderDecision(agent, event, decision, payload);
 }

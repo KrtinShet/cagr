@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import { admissionFinding, wrappedCommands } from "../admission/classify";
+import { admissionCommand, wrappedCommands } from "../admission/classify";
 import { runAdmittedShell } from "../admission/run";
 import { brief } from "../brief";
 import { checkChanges } from "../changes/check";
@@ -83,6 +83,15 @@ export async function handle(
 					? await commandBefore(input, config)
 					: await fileBeforeEdit(input, config);
 			if (decision.kind === "allow") {
+				if (input.event === "command.before" && input.command) {
+					const updatedCommand = admissionCommand(
+						input.command,
+						config,
+						input.commandCwd ?? input.cwd,
+						input.commandArgv,
+					);
+					if (updatedCommand) decision.updatedCommand = updatedCommand;
+				}
 				const auditedInput = input.command
 					? {
 							...input,
@@ -151,8 +160,6 @@ async function commandBefore(
 					"Run the pull request command directly so cagr can check its branch and body.",
 			}),
 		};
-	const load = admissionFinding(input.command, config);
-	if (load) return { kind: "deny", reason: render(load) };
 	if (!isGateCommand(input.command, config)) return { kind: "allow" };
 	const plan = gatePlan(input.command, config, input.cwd);
 	if ("finding" in plan) return { kind: "deny", reason: render(plan.finding) };
@@ -574,7 +581,7 @@ async function turnChecks(state: TurnState, config: Config, deadline: number) {
 				return null;
 			});
 			if (!result || result.admission) {
-				if (result?.admission) loadNotices.add(result.output);
+				if (result?.admission) loadNotices.add(`Unchecked: ${result.output}`);
 				observe(
 					commandId("on_turn_end", command),
 					"fail-open",

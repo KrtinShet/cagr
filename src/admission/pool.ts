@@ -105,6 +105,18 @@ export class Pool {
 		return readJson<Record<string, Costs>>(this.file, {})[machine];
 	}
 
+	hasReservation(marker: string) {
+		const match = /^([a-f0-9-]{36}):([1-9]\d*)$/.exec(marker);
+		if (!match) return false;
+		const path = join(this.tickets, `${match[1]}.json`);
+		const ticket = readJson<Ticket | null>(path, null);
+		if (!ticket || ticket.slots.length !== Number(match[2])) return false;
+		const fd = tryLock(path);
+		if (fd === null) return true;
+		closeSync(fd);
+		return false;
+	}
+
 	record(costs: Omit<Costs, "peaks">, key: string, peak: number) {
 		const machines = readJson<Record<string, Costs>>(this.file, {});
 		const peaks = machines[machine]?.peaks ?? {};

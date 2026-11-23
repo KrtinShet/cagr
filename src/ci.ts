@@ -67,12 +67,28 @@ export async function ci(
 	const env = options.env ?? process.env;
 	const runCheck =
 		options.runCheck ??
-		((command: string, cwd: string, runOptions: RunOptions) =>
-			runAdmittedShell(command, cwd, config.admission, {
-				...runOptions,
-				execute: options.executeCheck,
-				log: console.error,
-			}));
+		(async (
+			command: string,
+			cwd: string,
+			runOptions: RunOptions,
+		): Promise<RunResult> => {
+			try {
+				return await runAdmittedShell(command, cwd, config.admission, {
+					...runOptions,
+					execute: options.executeCheck,
+					log: console.error,
+				});
+			} catch (error) {
+				return {
+					ok: false,
+					admission: "deferred",
+					stdout: "",
+					ms: 0,
+					timedOut: false,
+					output: `cagr could not run the check. ${error} Rerun cagr ci to verify this command.`,
+				};
+			}
+		});
 	const git = await gitContext(options.cwd);
 	const cwd = config.root;
 	const baseName =

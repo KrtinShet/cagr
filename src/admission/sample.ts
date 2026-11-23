@@ -4,24 +4,36 @@ import { run } from "../run";
 
 let userScopes: Promise<boolean> | undefined;
 
-export function canScope(cwd: string) {
-	if (process.platform !== "linux" || !Bun.which("systemd-run"))
-		return Promise.resolve(false);
-	userScopes ??= run(
+export async function canScope(cwd: string) {
+	if (process.platform !== "linux" || !Bun.which("systemd-run")) return false;
+	userScopes ??= probeScope(cwd);
+	return userScopes;
+}
+
+async function probeScope(cwd: string) {
+	const version = await run(["systemd-run", "--version"], cwd, {
+		timeoutMs: 1000,
+	});
+	if (Number(/^systemd (\d+)/.exec(version.stdout)?.[1] ?? 0) < 254)
+		return false;
+	const result = await run(
 		[
 			"systemd-run",
 			"--user",
 			"--scope",
 			"--quiet",
+			"--expand-environment=no",
 			"-p",
 			"MemoryMax=infinity",
+			"-p",
+			"OOMPolicy=kill",
 			"--",
 			"true",
 		],
 		cwd,
 		{ timeoutMs: 1000 },
-	).then((result) => result.ok);
-	return userScopes;
+	);
+	return result.ok;
 }
 
 function scopePeak(pid: number, unit: string) {

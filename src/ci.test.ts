@@ -323,6 +323,28 @@ test("CI reports load-tainted checks as deferred and emits a warning", () => {
 	expect(annotations(result)).toEqual(["::warning title=Verify::load-tainted"]);
 });
 
+test(
+	"CI defers Verify when the admission runner has an internal error",
+	async () => {
+		const { repo, config } = await branch(
+			{ git: { pre_push: "bun run verify" } },
+			{ "docs/a.md": "updated\n" },
+			"docs: add a",
+		);
+		const result = await ci(config, {
+			cwd: repo.root,
+			base: "main",
+			env: {},
+			executeCheck: async () => {
+				throw new Error("EMFILE: watchdog failed");
+			},
+		});
+		expect(ciReport(result)).toContain("DEFERRED Verify");
+		expect(annotations(result).at(-1)).toContain("EMFILE: watchdog failed");
+	},
+	repoTestTimeout,
+);
+
 test("publish writes the step summary and the tier output", () => {
 	const dir = mkdtempSync(join(tmpdir(), "gw-pub-"));
 	const env = {

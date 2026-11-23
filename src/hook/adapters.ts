@@ -24,6 +24,7 @@ export function parseInput(
 	const cwd =
 		typeof raw.cwd === "string" && raw.cwd !== "" ? raw.cwd : fallbackCwd;
 	const toolInput = (raw.tool_input ?? {}) as Record<string, unknown>;
+	const command = toolInput.command;
 	const workdir = toolInput.workdir;
 	const isEdit = event === "file.before_edit" || event === "file.after_edit";
 	return {
@@ -33,7 +34,10 @@ export function parseInput(
 				? raw.session_id
 				: "unknown",
 		cwd,
-		command: event === "command.before" ? commandText(toolInput.command) : null,
+		command: event === "command.before" ? commandText(command) : null,
+		...(event === "command.before" && stringArgv(command)
+			? { commandArgv: command }
+			: {}),
 		...(agent === "codex" &&
 		event === "command.before" &&
 		typeof workdir === "string" &&
@@ -44,21 +48,23 @@ export function parseInput(
 	};
 }
 
+function stringArgv(command: unknown): command is string[] {
+	return (
+		Array.isArray(command) && command.every((word) => typeof word === "string")
+	);
+}
+
 function commandText(command: unknown): string | null {
 	if (typeof command === "string") return command;
-	if (
-		!Array.isArray(command) ||
-		!command.every((word) => typeof word === "string")
-	)
-		return null;
-	const [program, flag, script] = command as string[];
+	if (!stringArgv(command)) return null;
+	const [program, flag, script] = command;
 	if (
 		/(^|\/)(ba|z)?sh$/.test(program ?? "") &&
 		/^-l?c$/.test(flag ?? "") &&
 		script !== undefined
 	)
 		return script;
-	return (command as string[])
+	return command
 		.map((word) =>
 			/^[\w@%+=:,./-]+$/.test(word) ? word : `'${word.replace(/'/g, `'\\''`)}'`,
 		)
@@ -70,6 +76,7 @@ export function renderDecision(
 	_agent: AgentName,
 	event: AgentEvent,
 	decision: Decision,
+	payload?: unknown,
 ): string {
 	const hookEventName = nativeEvent[event];
 	if (decision.kind === "deny")
@@ -86,10 +93,21 @@ export function renderDecision(
 			reason: cap(decision.reason),
 			...(decision.notice ? { systemMessage: cap(decision.notice) } : {}),
 		});
-	if (decision.context && !decision.notice) return decision.context;
+	if (decision.context && !decision.notice && !decision.updatedCommand)
+		return decision.context;
 	const output: Record<string, unknown> = {};
 	if (decision.notice) output.systemMessage = cap(decision.notice);
-	if (decision.context)
+	if (decision.updatedCommand) {
+		const original = (
+			payload as { tool_input?: Record<string, unknown> } | null
+		)?.tool_input;
+		output.hookSpecificOutput = {
+			hookEventName,
+			permissionDecision: "allow",
+			updatedInput: { ...original, command: decision.updatedCommand },
+			...(decision.context ? { additionalContext: cap(decision.context) } : {}),
+		};
+	} else if (decision.context)
 		output.hookSpecificOutput = {
 			hookEventName,
 			additionalContext: cap(decision.context),

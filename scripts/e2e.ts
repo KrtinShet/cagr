@@ -81,13 +81,18 @@ function expect(label: string, ok: boolean, shown: string) {
 		);
 }
 
-type Kind = "allow" | "context" | "deny" | "block" | "notice";
+type Kind = "allow" | "rewrite" | "context" | "deny" | "block" | "notice";
 
 function kindOf(out: string): Kind {
 	if (out.trim() === "") return "allow";
 	try {
 		const parsed = JSON.parse(out);
 		if (parsed.hookSpecificOutput?.permissionDecision === "deny") return "deny";
+		if (
+			parsed.hookSpecificOutput?.permissionDecision === "allow" &&
+			typeof parsed.hookSpecificOutput?.updatedInput?.command === "string"
+		)
+			return "rewrite";
 		if (parsed.decision === "block") return "block";
 		if (parsed.systemMessage) return "notice";
 	} catch {}
@@ -310,14 +315,24 @@ function doctor(project: string) {
 		"deny",
 		"blocked command",
 	);
-	hook(
-		project,
-		"claude",
-		"PreToolUse",
-		bash("bun add zod && bun test"),
-		"allow",
-		"bun",
-	);
+	for (const agent of ["claude", "codex"] as const) {
+		const command = "bun add zod && bun test";
+		const output = hook(
+			project,
+			agent,
+			"PreToolUse",
+			bash(command),
+			"rewrite",
+			"bun",
+		);
+		const rewritten = JSON.parse(output || "{}").hookSpecificOutput
+			?.updatedInput?.command;
+		expect(
+			`${agent} wraps the whole shell expression`,
+			rewritten === `cagr run -- bash -c '${command}'`,
+			rewritten ?? "",
+		);
+	}
 	hook(
 		project,
 		"claude",

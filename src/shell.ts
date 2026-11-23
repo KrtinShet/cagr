@@ -9,9 +9,9 @@ const assignment = /^[A-Za-z_][A-Za-z0-9_]*=/;
  * quotes removed. Redirections (`> out`, `2>&1`, `<<EOF`) and their targets
  * are dropped: they are not arguments. Good enough to read intent, not a full shell parser.
  */
-export function simpleCommands(line: string): string[][] {
-	return split(line)
-		.filter((command) => command.words.length > 0)
+export function simpleCommands(line: string, limit = Infinity): string[][] {
+	return split(line, limit)
+		.filter((command) => limit !== Infinity || command.words.length > 0)
 		.map((command) => command.words);
 }
 
@@ -35,9 +35,13 @@ export function commandsWithRedirections(line: string) {
 type Redirection = { operator: string; target: string };
 type ShellScope = { parent: ShellScope | null };
 
-function split(line: string) {
+function split(line: string, limit = Infinity) {
 	const splitter = new Splitter();
-	for (let index = 0; index < line.length; index++)
+	for (
+		let index = 0;
+		index < line.length && splitter.commands.length < limit;
+		index++
+	)
 		index = splitter.read(line, index);
 	splitter.endCommand();
 	return splitter.commands;
@@ -70,6 +74,10 @@ class Splitter {
 
 	read(line: string, index: number): number {
 		const char = line[index] as string;
+		if (char === "#" && !this.inWord) {
+			const next = line.indexOf("\n", index);
+			return next < 0 ? line.length : next - 1;
+		}
 		if (char === "'" || char === '"') {
 			const quoted = readQuoted(line, index);
 			this.add(quoted.text);
@@ -179,10 +187,9 @@ export function programWords(words: string[]): string[] {
 	return words.slice(start);
 }
 
-const heredocStart = /(?<!<)<<(?!<)-?\s*(['"]?)(\w+)\1/g;
-
 /** Drops heredoc bodies: they are text fed to a command, not commands to run. */
 export function withoutHeredocBodies(line: string): string {
+	if (!line.includes("<<")) return line;
 	const kept: string[] = [];
 	let delimiter: string | null = null;
 	for (const text of line.split("\n")) {
@@ -191,8 +198,15 @@ export function withoutHeredocBodies(line: string): string {
 			continue;
 		}
 		kept.push(text);
-		const opened = [...text.matchAll(heredocStart)].at(-1);
-		if (opened) delimiter = opened[2] ?? null;
+		if (text.includes("<<")) {
+			const opened = split(text)
+				.flatMap(({ redirections }) => redirections)
+				.findLast(
+					({ operator, target }) =>
+						/^\d*<<-?$/.test(operator) && /^\w+$/.test(target),
+				);
+			if (opened) delimiter = opened.target;
+		}
 	}
 	return kept.join("\n");
 }

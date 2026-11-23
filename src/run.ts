@@ -5,6 +5,7 @@ export type RunResult = {
 	stdout: string;
 	stderr?: string;
 	exitCode?: number | null;
+	signal?: NodeJS.Signals | number;
 	ms: number;
 	timedOut: boolean;
 	admission?: "deferred" | "load-tainted";
@@ -13,6 +14,7 @@ export type RunResult = {
 export type RunOptions = {
 	timeoutMs?: number;
 	processGroup?: boolean;
+	waitForGroup?: boolean;
 	env?: Record<string, string | undefined>;
 	stdin?: string;
 	inherit?: boolean;
@@ -20,6 +22,27 @@ export type RunOptions = {
 };
 
 const quiet = { NO_COLOR: "1", FORCE_COLOR: "0" };
+const groupGraceMs = 10_000;
+const killGraceMs = 250;
+
+function signalGroup(pid: number, signal: NodeJS.Signals | 0) {
+	try {
+		process.kill(-pid, signal);
+		return true;
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+		return false;
+	}
+}
+
+async function waitForGroupExit(pid: number, deadline: number) {
+	while (signalGroup(pid, 0)) {
+		const remaining = deadline - performance.now();
+		if (remaining <= 0) return false;
+		await Bun.sleep(Math.min(50, remaining));
+	}
+	return true;
+}
 
 function capture(stream: ReadableStream<Uint8Array>) {
 	const reader = stream.getReader();
@@ -45,12 +68,17 @@ export async function run(
 	options: RunOptions = {},
 ): Promise<RunResult> {
 	const started = performance.now();
+	const { timeoutMs } = options;
+	const processGroup =
+		process.platform !== "win32" &&
+		(options.processGroup ?? timeoutMs !== undefined);
+	let child: Bun.Subprocess<
+		"ignore" | "inherit" | Uint8Array,
+		"pipe" | "inherit",
+		"pipe" | "inherit"
+	>;
 	try {
-		const { timeoutMs } = options;
-		const processGroup =
-			process.platform !== "win32" &&
-			(options.processGroup || timeoutMs !== undefined);
-		const child = Bun.spawn(argv, {
+		child = Bun.spawn(argv, {
 			cwd,
 			stdin:
 				options.stdin === undefined
@@ -67,12 +95,37 @@ export async function run(
 			},
 			detached: processGroup,
 		});
+	} catch (error) {
+		return {
+			ok: false,
+			output: `Could not start \`${argv.join(" ")}\`: ${(error as Error).message}`,
+			stdout: "",
+			stderr: "",
+			exitCode: null,
+			ms: Math.round(performance.now() - started),
+			timedOut: false,
+		};
+	}
+	const drain = processGroup && options.waitForGroup;
+	const kill = async () => {
+		if (
+			(!processGroup || !signalGroup(child.pid, "SIGKILL")) &&
+			child.exitCode === null
+		)
+			child.kill("SIGKILL");
+		const deadline = performance.now() + killGraceMs;
+		await Promise.race([child.exited, Bun.sleep(killGraceMs)]);
+		if (drain) await waitForGroupExit(child.pid, deadline);
+	};
+	try {
 		options.onSpawn?.(child.pid);
 		const out = child.stdout ? capture(child.stdout) : undefined;
 		const err = child.stderr ? capture(child.stderr) : undefined;
-		const completed = Promise.all([out?.done, err?.done, child.exited]).then(
-			([, , code]) => code,
-		);
+		const streams = Promise.all([out?.done, err?.done]);
+		const completed = Promise.all([
+			drain ? undefined : streams,
+			child.exited,
+		]).then(([, code]) => code);
 		let timer: ReturnType<typeof setTimeout> | undefined;
 		const exitCode =
 			timeoutMs === undefined
@@ -88,13 +141,20 @@ export async function run(
 					]).finally(() => clearTimeout(timer));
 		const timedOut = exitCode === null;
 		if (timedOut) {
-			try {
-				if (processGroup) process.kill(-child.pid, "SIGKILL");
-				else child.kill("SIGKILL");
-			} catch {
-				if (child.exitCode === null) child.kill("SIGKILL");
-			}
+			await kill();
+		} else if (drain) {
+			const empty = await waitForGroupExit(
+				child.pid,
+				Math.min(
+					performance.now() + groupGraceMs,
+					started + (timeoutMs ?? Infinity),
+				),
+			);
+			if (!empty) await kill();
+		}
+		if (timedOut || drain) {
 			// A process outside the group can still hold an inherited pipe.
+			if (drain && !timedOut) await Promise.race([streams, Bun.sleep(100)]);
 			void Promise.allSettled([out?.cancel(), err?.cancel()]);
 		}
 		const stdout = out?.text() ?? "";
@@ -109,19 +169,13 @@ export async function run(
 			stdout,
 			stderr,
 			exitCode,
+			...(child.signalCode ? { signal: child.signalCode } : {}),
 			ms,
 			timedOut,
 		};
 	} catch (error) {
-		return {
-			ok: false,
-			output: `Could not start \`${argv.join(" ")}\`: ${(error as Error).message}`,
-			stdout: "",
-			stderr: "",
-			exitCode: null,
-			ms: Math.round(performance.now() - started),
-			timedOut: false,
-		};
+		await kill();
+		throw error;
 	}
 }
 

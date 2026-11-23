@@ -27,7 +27,7 @@ const loginEnv = {
 const localRun: typeof run = (argv, cwd, options) =>
 	run(argv, cwd, {
 		...options,
-		processGroup: process.platform !== "win32",
+		processGroup: options?.processGroup ?? process.platform !== "win32",
 		env: { ...options?.env, ...loginEnv },
 	});
 

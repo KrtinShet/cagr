@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import type { Config } from "../config/schema";
 import { shellQuote } from "../run";
 import {
@@ -15,6 +17,8 @@ export const defaultMedium = [
 	"uv run pytest",
 	"go test",
 	"cargo test",
+	"vitest run",
+	"vitest",
 	"bun x tsc",
 	"bun tsc",
 	"pnpm tsc",
@@ -51,8 +55,10 @@ export const defaultHeavy = [
 export type CommandClass = "light" | "medium" | "heavy";
 type Classification = { kind: CommandClass; pattern: string };
 const rank = { light: 0, medium: 1, heavy: 2 };
+const commandLimit = 200;
 
-const wordsOf = (line: string) => simpleCommands(withoutHeredocBodies(line));
+const wordsOf = (line: string, limit?: number) =>
+	simpleCommands(withoutHeredocBodies(line), limit);
 
 function normalized(words: string[]) {
 	const program = programWords(words);
@@ -104,49 +110,163 @@ function oneTestFile(args: string[]) {
 	);
 }
 
+const managerOptionsWithValue = new Set([
+	"--filter",
+	"--filter-prod",
+	"--workspace",
+	"--cwd",
+	"--dir",
+	"-C",
+	"--prefix",
+	"--shell",
+	"--script-shell",
+	"--config",
+	"--userconfig",
+	"--registry",
+	"--env-file",
+	"--preload",
+]);
+
+function skipManagerOptions(words: string[], start: number) {
+	let index = start;
+	while (words[index]?.startsWith("-")) {
+		const flag = words[index++];
+		if (flag === "--") break;
+		if (
+			(flag && managerOptionsWithValue.has(flag)) ||
+			(words[0] === "npm" && flag === "-w") ||
+			(words[0] === "pnpm" && flag === "-F")
+		)
+			index++;
+	}
+	return index;
+}
+
+function normalizeManager(words: string[]) {
+	const manager = words[0];
+	if (!manager || !managers.includes(manager)) return words;
+	let start = skipManagerOptions(words, 1);
+	if (manager === "yarn" && words[start] === "workspace")
+		start = skipManagerOptions(words, start + 2);
+	const action = words[start];
+	if (!action) return [manager];
+	const args =
+		action === "run" ? skipManagerOptions(words, start + 1) : start + 1;
+	return [manager, action, ...words.slice(args)];
+}
+
+function packageScripts(cwd: string): Record<string, unknown> {
+	for (let dir = cwd; ; dir = dirname(dir)) {
+		try {
+			const pkg = JSON.parse(readFileSync(join(dir, "package.json"), "utf8"));
+			return pkg?.scripts ?? {};
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "ENOENT") return {};
+		}
+		if (dirname(dir) === dir) return {};
+	}
+}
+
+const directTests = new Set([
+	"bun test",
+	"vitest run",
+	"vitest",
+	"pytest",
+	"python -m pytest",
+	"uv run pytest",
+	"go test",
+	"cargo test",
+]);
+
+function classifier(config: Config["admission"], cwd?: string) {
+	const patterns = (["light", "heavy", "medium"] as const).flatMap((kind) =>
+		config[kind].map((pattern) => ({
+			kind,
+			pattern,
+			prefix: wordsOf(pattern)[0],
+		})),
+	);
+	const active = new Set<string>();
+	let scripts: ReturnType<typeof packageScripts> | undefined;
+	let remaining = commandLimit;
+
+	function shell(line: string, direct: boolean): Classification {
+		const commands = wordsOf(line, remaining + 1);
+		if (commands.length > remaining) return { kind: "heavy", pattern: line };
+		remaining -= commands.length;
+		let best: Classification = { kind: "light", pattern: line };
+		for (const words of commands) {
+			const next = argv(words, direct);
+			if (commands.length === 1) return next;
+			if (rank[next.kind] > rank[best.kind])
+				best = { kind: next.kind, pattern: line };
+			if (best.kind === "heavy") break;
+		}
+		return best;
+	}
+
+	function argv(args: string[], direct = true): Classification {
+		const script = shellScript(args);
+		if (script !== undefined) return shell(script, direct);
+		const words = normalizeManager(normalized(args));
+		const [manager, action, name] = words;
+		const shorthand =
+			manager === "pnpm" || manager === "yarn" || manager === "bun";
+		const named = action === "run" ? name : shorthand ? action : undefined;
+		const explicit =
+			shorthand && named && action !== "run"
+				? [manager, "run", ...words.slice(1)]
+				: undefined;
+		const fallback: Classification = {
+			kind: "light",
+			pattern: words.map(shellQuote).join(" "),
+		};
+		for (const { kind, pattern, prefix } of patterns) {
+			if (!prefix?.length) continue;
+			const exact = prefix.every((word, i) => word === words[i]);
+			if (!exact && !prefix.every((word, i) => word === explicit?.[i]))
+				continue;
+			if (
+				direct &&
+				exact &&
+				kind === "medium" &&
+				config.medium === defaultMedium &&
+				directTests.has(pattern) &&
+				oneTestFile(words.slice(prefix.length))
+			)
+				return fallback;
+			return { kind, pattern };
+		}
+		if (
+			!cwd ||
+			!manager ||
+			!managers.includes(manager) ||
+			!named ||
+			active.has(named)
+		)
+			return fallback;
+		scripts ??= packageScripts(cwd);
+		const body = scripts[named];
+		if (typeof body !== "string") return fallback;
+		active.add(named);
+		const { kind } = shell(body, false);
+		active.delete(named);
+		return { kind, pattern: `${manager} run ${shellQuote(named)}` };
+	}
+
+	return argv;
+}
+
 export function classifyArgv(
 	argv: string[],
 	config: Config["admission"],
+	cwd?: string,
 ): Classification {
-	const script = shellScript(argv);
-	if (script !== undefined) return classifyShell(script, config);
-	const words = normalized(argv);
-	for (const kind of ["light", "heavy", "medium"] as const) {
-		for (const pattern of config[kind]) {
-			const prefix = wordsOf(pattern)[0];
-			if (!prefix?.length || !prefix.every((word, i) => word === words[i]))
-				continue;
-			if (
-				kind === "medium" &&
-				config.medium === defaultMedium &&
-				/(?:\btest|\bpytest)$/.test(pattern) &&
-				oneTestFile(words.slice(prefix.length))
-			)
-				return { kind: "light", pattern: words.map(shellQuote).join(" ") };
-			return { kind, pattern };
-		}
-	}
-	return { kind: "light", pattern: words.map(shellQuote).join(" ") };
+	return classifier(config, cwd)(argv);
 }
 
-function classifyShell(
-	line: string,
-	config: Config["admission"],
-): Classification {
-	const commands = wordsOf(line);
-	const classes = commands.map((words) => classifyArgv(words, config));
-	const largest = classes.reduce<Classification>(
-		(best, next) => (rank[next.kind] > rank[best.kind] ? next : best),
-		{ kind: "light", pattern: classes[0]?.pattern ?? line },
-	);
-	return commands.length > 1 ? { ...largest, pattern: line } : largest;
-}
-
-function wrappedArgv(words: string[], config: Config) {
+function wrappedArgv(words: string[], configured?: string[]) {
 	const program = programWords(words);
-	const configured = wordsOf(
-		config.agents.command.replaceAll("{root}", config.root),
-	)[0];
 	const offset =
 		programName(program) === "cagr"
 			? 1
@@ -160,33 +280,50 @@ function wrappedArgv(words: string[], config: Config) {
 		: null;
 }
 
-export function wrappedCommands(line: string, config: Config): string[] {
-	return wordsOf(line).flatMap((words) => {
-		const argv = wrappedArgv(words, config);
-		if (!argv?.length) return [];
-		const command = shellScript(argv) ?? argv.map(shellQuote).join(" ");
-		return [command, ...wrappedCommands(command, config)];
-	});
+function agentProgram(config: Config) {
+	return wordsOf(config.agents.command)[0]?.map((word) =>
+		word.replaceAll("{root}", config.root),
+	);
 }
 
-export function admissionFinding(line: string, config: Config) {
+export function wrappedCommands(line: string, config: Config): string[] {
+	const configured = agentProgram(config);
+	function unwrap(command: string): string[] {
+		return wordsOf(command).flatMap((words) => {
+			const argv = wrappedArgv(words, configured);
+			if (!argv?.length) return [];
+			const inner = shellScript(argv) ?? argv.map(shellQuote).join(" ");
+			return [inner, ...unwrap(inner)];
+		});
+	}
+	return unwrap(line);
+}
+
+export function admissionCommand(
+	line: string,
+	config: Config,
+	cwd: string,
+	originalArgv?: string[],
+) {
 	if (!config.admission.enabled) return null;
-	const commands = wordsOf(line);
-	const needsWrapper = commands.some(
-		(words) =>
-			!wrappedArgv(words, config) &&
-			classifyArgv(words, config.admission).kind !== "light",
-	);
+	const commands = wordsOf(line, commandLimit + 1);
+	const configured = agentProgram(config);
+	const classify = classifier(config.admission, cwd);
+	const needsWrapper =
+		commands.length > commandLimit ||
+		commands.some(
+			(words) =>
+				!wrappedArgv(words, configured) && classify(words).kind !== "light",
+		);
 	if (!needsWrapper) return null;
-	const advice =
-		commands.length === 1 &&
-		programWords(commands[0] ?? [])
-			.map(shellQuote)
-			.join(" ") === line.trim()
+	const advice = originalArgv
+		? originalArgv.map(shellQuote).join(" ")
+		: commands.length === 1 &&
+				programWords(commands[0] ?? [])
+					.map(shellQuote)
+					.join(" ") === line.trim()
 			? line.trim()
-			: `sh -c ${shellQuote(line)}`;
-	return {
-		id: "admission",
-		reason: `This command needs memory admission. Rerun as cagr run -- ${advice}`,
-	};
+			: `bash -c ${shellQuote(line)}`;
+	const program = configured?.map(shellQuote).join(" ") || "cagr";
+	return `${program} run -- ${advice}`;
 }

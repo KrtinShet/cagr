@@ -244,7 +244,7 @@ test("queue admission respects the turn-end deadline", async () => {
 	expect(output).not.toContain("load: admitted");
 });
 
-test("command.before denies direct heavy commands and allows light and wrapped calls within budget", async () => {
+test("command.before wraps direct suites and preserves command guards within budget", async () => {
 	const cwd = fixture();
 	const config = resolveConfig(
 		{
@@ -268,8 +268,8 @@ test("command.before denies direct heavy commands and allows light and wrapped c
 		);
 	const start = performance.now();
 	expect(await before("bun run verify")).toMatchObject({
-		kind: "deny",
-		reason: expect.stringContaining("cagr run -- bun run verify"),
+		kind: "allow",
+		updatedCommand: "cagr run -- bun run verify",
 	});
 	expect(await before("bun test src/run.test.ts --timeout 500")).toEqual({
 		kind: "allow",
@@ -281,10 +281,8 @@ test("command.before denies direct heavy commands and allows light and wrapped c
 		reason: expect.stringContaining("Keep changes."),
 	});
 	expect(await before("bun run lint && bun run e2e")).toMatchObject({
-		kind: "deny",
-		reason: expect.stringContaining(
-			"cagr run -- sh -c 'bun run lint && bun run e2e'",
-		),
+		kind: "allow",
+		updatedCommand: "cagr run -- bash -c 'bun run lint && bun run e2e'",
 	});
 	expect(classifyArgv(["pnpm", "test"], config.admission).kind).toBe("medium");
 });
@@ -325,3 +323,271 @@ test("reads Linux PSI avg10 and converts MemAvailable to bytes", () => {
 	).toEqual({ some: 10.31, full: 1.03, available: 8_211_104 * 1024 });
 	expect(() => parseLinuxMemory("some avg10=0.00", "")).toThrow("MemAvailable");
 });
+
+test("suite aliases and manager options retain their admission class", () => {
+	const cwd = fixture();
+	writeFileSync(
+		join(cwd, "package.json"),
+		JSON.stringify({
+			scripts: {
+				"check-all": "bun run verify",
+				specs: "vitest run src/run.test.ts",
+			},
+		}),
+	);
+	const { admission } = resolveConfig({}, cwd, join(cwd, "cagr.toml"));
+	const cases = [
+		[["bun", "run", "--filter", "*", "verify"], "heavy"],
+		[["bun", "run", "test", "src/run.test.ts"], "medium"],
+		[["pnpm", "-r", "--filter=@app/web", "check-all", "--", "--fast"], "heavy"],
+		[["npm", "--workspace", "app", "run", "specs"], "medium"],
+		[["yarn", "run", "verify", "--reporter", "dot"], "heavy"],
+		[["pnpm", "-w", "run", "verify"], "heavy"],
+		[["yarn", "workspace", "app", "run", "verify"], "heavy"],
+		[["bun", "test", "src/run.test.ts"], "light"],
+		[["vitest", "run", "src/run.test.ts"], "light"],
+		[["vitest", "run"], "medium"],
+	] as const;
+	for (const [argv, kind] of cases)
+		expect(classifyArgv([...argv], admission, cwd).kind, argv.join(" ")).toBe(
+			kind,
+		);
+});
+
+test("shell comments are ignored without hiding real commands", () => {
+	const cwd = fixture();
+	const { admission } = resolveConfig({}, cwd, join(cwd, "cagr.toml"));
+	const kind = (line: string) =>
+		classifyArgv(["sh", "-c", line], admission).kind;
+	expect(kind("printf ok # note; bun run verify")).toBe("light");
+	expect(kind("printf %s '#'; bun run verify")).toBe("heavy");
+	expect(kind("printf ok # note <<EOF\nbun run verify")).toBe("heavy");
+});
+
+test("oversized command lists are classified as heavy within the hook budget", () => {
+	const cwd = fixture();
+	const { admission } = resolveConfig({}, cwd, join(cwd, "cagr.toml"));
+	const kind = (line: string) =>
+		classifyArgv(["sh", "-c", line], admission).kind;
+	const start = performance.now();
+	expect(kind("printf ok\n".repeat(1_000))).toBe("heavy");
+	expect(kind(`bun run verify\n${"printf ok\n".repeat(1_000)}`)).toBe("heavy");
+	expect(performance.now() - start).toBeLessThan(50);
+});
+
+test("ordinary exit codes survive pressure without repeating side effects", async () => {
+	const proc = spawn(
+		fixture(),
+		runner(`
+		const result = await runAdmitted({
+			argv: ["sh", "-c", "echo side-effect >&2; exit 42"], cwd, config, measure: false,
+			options: {
+				inherit: true, log: console.error,
+				pressure: () => ({ elevated: true, description: "injected pressure" }),
+			},
+		});
+		process.exit(result.exitCode ?? 1);
+	`),
+	);
+	const { code, output } = await proc.finished();
+	expect(code).toBe(42);
+	expect(output.trim()).toBe("side-effect");
+});
+
+test("nested commands inherit a real reservation from the outer wrapper", async () => {
+	const cwd = fixture();
+	writeFileSync(
+		join(cwd, "cagr.toml"),
+		'[admission]\npool_tokens = 1\nheavy = ["sleep"]\n',
+	);
+	const proc = spawn(
+		cwd,
+		runner(`
+		const nested = [process.execPath, ${JSON.stringify(cliPath)}, "run", "--", "sh", "-c", "sleep 0; exit 42"];
+		const line = 'sleep 0; "$@"';
+		const result = await runAdmitted({
+			argv: ["sh", "-c", line, "sh", ...nested], cwd, config, measure: false,
+			options: {
+				log: console.error, timeoutMs: 1500,
+				pressure: () => ({ elevated: false, description: "normal" }),
+			},
+		});
+		console.error(result.output);
+		process.exit(result.exitCode ?? 1);
+	`),
+	);
+	const { code, output } = await proc.finished();
+	expect(output).toContain("with 1 token(s)");
+	expect(code).toBe(42);
+});
+
+test("a push waiting past its admission deadline asks for a retry", async () => {
+	const proc = spawn(
+		fixture(),
+		runner(`
+		const result = await runAdmitted({
+			argv: ["sleep", "1"], cwd, config, measure: false,
+			options: {
+				priority: "push", deadline: performance.now() + 100,
+				pressure: () => ({ elevated: true, description: "injected pressure" }),
+			},
+		});
+		console.error(result.admission, result.output);
+	`),
+	);
+	const { output } = await proc.finished();
+	expect(output).toContain("load-tainted");
+	expect(output).toMatch(/[Rr]etry|[Rr]erun/);
+});
+
+test("tokens stay held while the shell's background child is still running", async () => {
+	const cwd = fixture();
+	const holder = queued(cwd, ["sh", "-c", "sleep 1 </dev/null & exit 0"]);
+	await holder.seen("load: admitted");
+	const waiter = queued(cwd, ["sleep", "0.01"]);
+	await waiter.seen(`tokens held by pid ${holder.child.pid}`);
+	expect((await holder.finished()).code).toBe(0);
+	expect((await waiter.finished()).code).toBe(0);
+});
+
+test("watchdog startup failure kills the command and pre-push allows with a notice", async () => {
+	const proc = spawn(
+		fixture(),
+		runner(`
+		import { prePush } from ${JSON.stringify(resolve(import.meta.dir, "../git-hooks.ts"))};
+		import { resolveConfig } from ${JSON.stringify(resolve(import.meta.dir, "../config/load.ts"))};
+		const spawn = Bun.spawn;
+		let pid;
+		Bun.spawn = (argv, options) => {
+			if (argv.includes("cagr-watch")) throw new Error("EMFILE: watchdog failed");
+			const child = spawn(argv, options);
+			if (argv.includes("sleep 30")) pid = child.pid;
+			return child;
+		};
+		const originalPressure = { linux_some_avg10: 100, linux_full_avg10: 100, mac_pressure_level: 8 };
+		const hookConfig = resolveConfig({
+			admission: { ...originalPressure, medium: ["sleep"], pool_tokens: 1 },
+			git: { pre_push: ["sleep 30"] },
+		}, cwd, "cagr.toml");
+		const result = await prePush("", hookConfig, cwd);
+		console.error(JSON.stringify(result));
+		if (!pid) process.exit(2);
+		try {
+			process.kill(pid, 0);
+			process.kill(-pid, "SIGKILL");
+			process.exit(3);
+		} catch (error) {
+			if (error.code !== "ESRCH") throw error;
+		}
+	`),
+	);
+	const { code, output } = await proc.finished();
+	expect(output).toContain('"ok":true');
+	expect(output).toContain("EMFILE: watchdog failed");
+	expect(code).toBe(0);
+});
+
+test("an actual SIGKILL under pressure requeues but an explicit exit 137 does not", async () => {
+	const proc = spawn(
+		fixture(),
+		runner(`
+		const result = await runAdmitted({
+			argv: ["sh", "-c", "if test -f ran; then echo second >&2; exit 137; fi; touch ran; kill -KILL $$"],
+			cwd, config, measure: false,
+			options: {
+				inherit: true, log: console.error,
+				pressure: () => ({ elevated: true, description: "injected pressure" }),
+			},
+		});
+		console.error(JSON.stringify({ code: result.exitCode, admission: result.admission }));
+	`),
+	);
+	const { output } = await proc.finished();
+	expect(output.match(/retrying/g)).toHaveLength(1);
+	expect(output).toContain("second");
+	expect(output).toContain('{"code":137}');
+});
+
+test("measurement in an ordinary clone is reused in local CI's bare-origin worktree", async () => {
+	const proc = spawn(
+		fixture(),
+		runner(`
+		function git(...args) {
+			const result = Bun.spawnSync(["git", ...args]);
+			if (!result.success) throw new Error(result.stderr.toString());
+		}
+		git("init", "-q", "checkout");
+		git("-C", "checkout", "remote", "add", "origin", "git@github.com:Example/Project.git");
+		git("-C", "checkout", "-c", "user.name=cagr", "-c", "user.email=cagr@example.com",
+			"commit", "-qm", "chore: init", "--allow-empty");
+		git("clone", "--bare", "-q", "checkout", "scratch");
+		git("--git-dir=scratch", "remote", "set-url", "origin", "https://github.com/example/project.git");
+		git("--git-dir=scratch", "worktree", "add", "--detach", "-q", "ci", "HEAD");
+		const argv = ["sleep", "0.4"];
+		const options = {
+			log: console.error,
+			pressure: () => ({ elevated: false, available: 8 * 1024 ** 3, description: "normal" }),
+		};
+		const config2 = { ...config, pool_tokens: 2 };
+		const measured = await runAdmitted({ argv, cwd: cwd + "/checkout", config: config2, measure: true, options });
+		if (!measured.ok) throw new Error(measured.output);
+		console.error("scratch run:");
+		const result = await runAdmitted({ argv, cwd: cwd + "/ci", config: config2, measure: false, options });
+		process.exit(result.exitCode ?? 1);
+	`),
+	);
+	const { code, output } = await proc.finished();
+	expect(code).toBe(0);
+	expect(output).toContain(
+		"scratch run:\nload: admitted sleep 0.4 with 1 token(s)",
+	);
+});
+
+test.skipIf(process.platform !== "linux")(
+	"systemd 254 keeps scope arguments literal and 253 skips the scope",
+	async () => {
+		const cwd = fixture();
+		writeFileSync(
+			join(cwd, "systemd-run"),
+			`#!/bin/sh
+if [ "$1" = "--version" ]; then
+	printf 'systemd %s\\n' "$SCOPE_VERSION"
+	exit 0
+fi
+printf 'scope %s\\n' "$*" >> scope.log
+while [ "$1" != "--" ]; do shift; done
+shift
+exec "$@"
+`,
+			{ mode: 0o700 },
+		);
+		for (const version of [253, 254]) {
+			const proc = spawn(
+				cwd,
+				runner(`
+			process.env.SCOPE_VERSION = "${version}";
+			process.env.PATH = cwd + ":" + process.env.PATH;
+			config.heavy = ["printf"];
+			const result = await runAdmitted({
+				argv: ["printf", "%s", "$HOME"], cwd, config, measure: false,
+				options: { log: console.error, pressure: () => ({ elevated: false, description: "normal" }) },
+			});
+			console.error(result.stdout);
+			process.exit(result.exitCode ?? 1);
+		`),
+			);
+			const { code, output } = await proc.finished();
+			expect(code).toBe(0);
+			expect(output.trimEnd()).toEndWith("$HOME");
+			if (version === 253) {
+				expect(output).toContain("running without a systemd scope");
+				expect(await Bun.file(join(cwd, "scope.log")).exists()).toBe(false);
+			} else {
+				const scope = readFileSync(join(cwd, "scope.log"), "utf8");
+				expect(scope).toMatch(
+					/--expand-environment=no[^\n]* -- printf %s \$HOME/,
+				);
+			}
+		}
+	},
+);

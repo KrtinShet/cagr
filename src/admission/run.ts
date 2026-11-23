@@ -1,4 +1,5 @@
 import { totalmem } from "node:os";
+import { isAbsolute, resolve } from "node:path";
 import type { Config } from "../config/schema";
 import { gitContext } from "../git";
 import {
@@ -46,6 +47,8 @@ const deferred = "load: turn-end checks deferred";
 const tainted =
 	"load-tainted: the command failed under elevated memory pressure. Rerun when the machine is quieter.";
 const pollMs = 250;
+const admissionWaitMs = 60_000;
+const reservationEnv = "CAGR_ADMISSION_HELD";
 
 function unsettled(
 	admission: NonNullable<RunResult["admission"]>,
@@ -80,9 +83,14 @@ async function execute(
 	tokens: number,
 	heavy: boolean,
 	locks: number[],
+	marker?: string,
 ) {
 	const { argv, cwd, options, measure } = request;
 	const scope = (heavy || measure) && (await canScope(cwd));
+	if (!scope && (heavy || measure) && process.platform === "linux")
+		options.log?.(
+			"cagr: running without a systemd scope. Enable user scopes on systemd 254 or later to use a memory ceiling with literal arguments.",
+		);
 	const unit = scope ? `cagr-${crypto.randomUUID()}.scope` : undefined;
 	const command = unit
 		? [
@@ -90,7 +98,10 @@ async function execute(
 				"--user",
 				"--scope",
 				"--quiet",
+				"--expand-environment=no",
 				`--unit=${unit}`,
+				"-p",
+				"OOMPolicy=kill",
 				...(heavy && !measure ? ["-p", `MemoryMax=${tokens}G`] : []),
 				"--",
 				...argv,
@@ -115,10 +126,12 @@ async function execute(
 	try {
 		const result = await (options.execute ?? run)(command, cwd, {
 			...options,
+			env: marker ? { ...options.env, [reservationEnv]: marker } : options.env,
 			timeoutMs: Number.isFinite(limit)
 				? Math.max(1, Math.floor(limit))
 				: undefined,
 			processGroup: true,
+			waitForGroup: true,
 			onSpawn: (pid) => {
 				if (locks.length || options.inherit) stopWatch = watchOwner(pid, locks);
 				if (measure) sample = memorySampler(pid, unit);
@@ -138,11 +151,14 @@ async function admit(
 	pool: Pool,
 	ticket: Ticket,
 	request: Request,
-	key: string,
+	keys: { current: string; legacy: string },
 	pressure: () => Pressure,
 ) {
 	const { config, measure, options } = request;
-	const deadline = options.deadline ?? Infinity;
+	const deadline = Math.min(
+		options.deadline ?? Infinity,
+		performance.now() + admissionWaitMs,
+	);
 	let last = "";
 	const ownership: { fd?: number } = {};
 	try {
@@ -162,7 +178,9 @@ async function admit(
 				const index = queue.findIndex((entry) => entry.id === ticket.id);
 				const costs = pool.costs();
 				const size = poolSize(config, costs);
-				const peak = measure ? undefined : costs?.peaks[key];
+				const peak = measure
+					? undefined
+					: (costs?.peaks[keys.current] ?? costs?.peaks[keys.legacy]);
 				const tokens = peak ? Math.ceil(peak / gib) : size;
 				if (tokens > size)
 					return {
@@ -230,35 +248,82 @@ function priority(options: AdmissionOptions): Priority {
 		: (options.priority ?? (value === "push" ? "push" : "normal"));
 }
 
+function loadTainted(result: RunResult, elevated: boolean) {
+	return (
+		elevated &&
+		(result.timedOut || result.signal === "SIGKILL" || result.signal === 9)
+	);
+}
+
+async function repoIdentity(cwd: string, checkout: string) {
+	const remote = await run(
+		["git", "config", "--get", "remote.origin.url"],
+		cwd,
+	);
+	const origin = remote.stdout.trim();
+	if (!origin) return checkout;
+	if (isAbsolute(origin)) return resolve(origin);
+	const scp = /^(?:[^@/]+@)?([^:/]+):(?!\/\/)(.+)$/.exec(origin);
+	const url = URL.parse(
+		scp ? `ssh://${scp[1]}/${scp[2]?.replace(/^\//, "")}` : origin,
+	);
+	if (!url) return resolve(checkout, origin);
+	if (url.protocol === "file:")
+		return resolve(decodeURIComponent(url.pathname));
+	const path = url.pathname
+		.replace(/\/+$/, "")
+		.replace(/\.git$/, "")
+		.slice(1);
+	const host =
+		url.protocol === "ssh:" && url.port === "22" ? url.hostname : url.host;
+	return url.hostname === "github.com"
+		? `${host}/${path.toLowerCase()}`
+		: `${host}/${path}`;
+}
+
 export async function runAdmitted(request: Request): Promise<RunResult> {
 	const { argv, cwd, config, options, measure } = request;
-	const classification = classifyArgv(argv, config);
-	const light = classification.kind === "light";
-	if (!measure && !config.enabled) {
+	const env = { ...process.env, ...options.env };
+	const marker = env[reservationEnv];
+	const inherited = marker !== undefined && new Pool().hasReservation(marker);
+	if (inherited && measure)
+		throw new Error(
+			"Run cagr measure outside an existing admission reservation.",
+		);
+	if (inherited || (!measure && !config.enabled)) {
 		const limit = runLimit(options);
 		if (limit <= 0) return unsettled("deferred", deferred);
 		return (options.execute ?? run)(argv, cwd, {
 			...options,
+			// The outer watchdog covers this group and holds the tokens until it exits.
+			...(inherited ? { processGroup: false } : {}),
 			timeoutMs: Number.isFinite(limit) ? limit : undefined,
 		});
 	}
+	const classification = classifyArgv(argv, config, cwd);
+	const light = classification.kind === "light";
 	const pressure = options.pressure ?? pressureReader(config);
 	if (!measure && light) {
 		const first = await execute(request, pressure, 0, false, []);
-		if (first.result.ok || !first.elevated || first.result.admission)
-			return first.result;
+		if (!loadTainted(first.result, first.elevated)) return first.result;
 		options.log?.(
-			"load-tainted: retrying the light command once after a failure under elevated memory pressure.",
+			"load-tainted: retrying the light command once after a timeout or SIGKILL under elevated memory pressure.",
 		);
 		const second = await execute(request, pressure, 0, false, []);
-		return !second.result.ok && (second.elevated || second.result.admission)
-			? { ...second.result, admission: "load-tainted", output: tainted }
-			: second.result;
+		if (second.result.admission)
+			return { ...first.result, admission: "load-tainted", output: tainted };
+		if (loadTainted(second.result, second.elevated))
+			return { ...second.result, admission: "load-tainted", output: tainted };
+		return second.result;
 	}
 	const pool = new Pool();
 	const git = await gitContext(cwd);
 	const repo = git.mainCheckout ?? git.toplevel ?? cwd;
-	const key = JSON.stringify([repo, classification.pattern]);
+	const identity = await repoIdentity(cwd, repo);
+	const keys = {
+		current: JSON.stringify([identity, classification.pattern]),
+		legacy: JSON.stringify([repo, classification.pattern]),
+	};
 	const command = argv.map(shellQuote).join(" ");
 	let retry: RunResult | undefined;
 	for (let attempt = 0; attempt < (measure ? 1 : 2); attempt++) {
@@ -277,8 +342,17 @@ export async function runAdmitted(request: Request): Promise<RunResult> {
 		try {
 			const admitted = light
 				? undefined
-				: await admit(pool, ticket, request, key, pressure);
-			if (!light && !admitted) return retry ?? unsettled("deferred", deferred);
+				: await admit(pool, ticket, request, keys, pressure);
+			if (!light && !admitted)
+				return (
+					retry ??
+					(options.deadline !== undefined && options.priority !== "push"
+						? unsettled("deferred", deferred)
+						: unsettled(
+								"load-tainted",
+								"load-tainted: memory admission wait expired. Retry when the machine is quieter.",
+							))
+				);
 			if (typeof admitted === "string") return unsettled("deferred", admitted);
 			release = admitted?.release;
 			if (admitted)
@@ -300,6 +374,7 @@ export async function runAdmitted(request: Request): Promise<RunResult> {
 				admitted?.tokens ?? 0,
 				classification.kind === "heavy",
 				admitted?.locks ?? [],
+				admitted ? `${ticket.id}:${admitted.tokens}` : undefined,
 			);
 			if (measure && result.ok) {
 				if (!peak?.bytes)
@@ -309,7 +384,7 @@ export async function runAdmitted(request: Request): Promise<RunResult> {
 				await pool.transaction(Infinity, () =>
 					pool.record(
 						{ totalBytes: totalmem(), poolTokens, dockerBytes },
-						key,
+						keys.current,
 						peak.bytes,
 					),
 				);
@@ -317,11 +392,12 @@ export async function runAdmitted(request: Request): Promise<RunResult> {
 					`load: measured ${peak.bytes} bytes (${peak.source}), pool ${poolTokens} token(s)`,
 				);
 			}
-			if (result.ok || !elevated || result.admission) return result;
+			if (result.admission) return retry ?? result;
+			if (!loadTainted(result, elevated)) return result;
 			retry = { ...result, admission: "load-tainted", output: tainted };
 			if (!measure && attempt === 0)
 				options.log?.(
-					"load-tainted: re-queuing once after a failure under elevated memory pressure.",
+					"load-tainted: re-queuing once after a timeout or SIGKILL under elevated memory pressure.",
 				);
 		} finally {
 			release?.();
