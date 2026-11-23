@@ -319,3 +319,14 @@ test("only a human may set the lease break override", () => {
 	expect(onFeature("cagr lease release --break db-migrations")).toBeNull();
 	expect(onFeature("git ls-remote origin 'refs/cagr/lease/*'")).toBeNull();
 });
+
+test("mirror and broad refspec pushes cannot write the lease namespace without a protected branch", () => {
+	const check = reasonOn("feat/work", false, config({}));
+	for (const line of [
+		"git push --mirror origin",
+		"git push origin 'refs/*:refs/*'",
+		"git push origin 'refs/c*:refs/c*'",
+	])
+		expect(check(line)).toContain("Use cagr lease");
+	expect(check("git push origin 'refs/tags/*:refs/tags/*'")).toBeNull();
+});

@@ -158,12 +158,11 @@ function gitFinding(
 	const subcommand = args[index];
 	const rest = args.slice(index + 1);
 	if (
-		(subcommand === "push" || subcommand === "update-ref") &&
-		rest.some((arg) =>
-			arg
-				.split(":")
-				.some((part) => part.replace(/^\+/, "").startsWith(serialRef)),
-		)
+		((subcommand === "push" || subcommand === "update-ref") &&
+			rest.some(touchesSerialRefs)) ||
+		(subcommand === "push" &&
+			!config.git.protected_branch &&
+			rest.includes("--mirror"))
 	)
 		return {
 			id: "lease-ref",
@@ -184,6 +183,15 @@ function gitFinding(
 	}
 	if (subcommand === "push") return pushFinding(rest, config, branch);
 	return null;
+}
+
+function touchesSerialRefs(arg: string) {
+	return arg.split(":").some((part) => {
+		const ref = part.replace(/^\+/, "");
+		if (ref.startsWith(serialRef)) return true;
+		const wildcard = ref.indexOf("*");
+		return wildcard >= 0 && serialRef.startsWith(ref.slice(0, wildcard));
+	});
 }
 
 function pushFinding(
