@@ -16,6 +16,7 @@ test("every guard describes its configured policy and notes when off", () => {
 	expect(summaries.map((guard) => guard.id)).toEqual(guardIds);
 	for (const guard of summaries) expect(guard.summary).toBeTruthy();
 	const disabled = config({
+		admission: { enabled: false },
 		git: {
 			protected_branch: "",
 			branch_name: "off",

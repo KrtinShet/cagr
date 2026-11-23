@@ -92,7 +92,11 @@ describe("pre-push", () => {
 		second = await git("rev-parse", "HEAD");
 	});
 	const repo = (raw = {}) =>
-		resolveConfig({ extends: ["recommended"], ...raw }, root, "x");
+		resolveConfig(
+			{ extends: ["recommended"], admission: { enabled: false }, ...raw },
+			root,
+			"x",
+		);
 	const line = (branch: string, local: string, remote = zero) =>
 		`refs/heads/${branch} ${local} refs/heads/${branch} ${remote}\n`;
 

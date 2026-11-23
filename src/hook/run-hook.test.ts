@@ -110,3 +110,30 @@ test("a suppression git error fails open and tells the human", async () => {
 	);
 	expect(output.decision).toBeUndefined();
 });
+
+test.each(["claude", "codex"] as const)(
+	"%s denies admission without rewriting Bash",
+	async (agent) => {
+		const repo = config({ agents: { command: "bun {root}/src/cli.ts" } });
+		const tool_input = {
+			command: "cd subdir && bun run verify",
+			description: "Run the tests",
+		};
+		const output = JSON.parse(
+			await runHook(
+				agent,
+				"command.before",
+				JSON.stringify({ tool_input }),
+				repo.root,
+				() => repo,
+			),
+		);
+		expect(output.hookSpecificOutput).toEqual({
+			hookEventName: "PreToolUse",
+			permissionDecision: "deny",
+			permissionDecisionReason: expect.stringContaining(
+				`Rerun as bun ${repo.root}/src/cli.ts run -- sh -c 'cd subdir && bun run verify'`,
+			),
+		});
+	},
+);

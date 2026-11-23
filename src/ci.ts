@@ -1,5 +1,6 @@
 import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
+import { runAdmittedShell } from "./admission/run";
 import { checkChanges } from "./changes/check";
 import type { Config } from "./config/schema";
 import { gitContext } from "./git";
@@ -11,7 +12,7 @@ import { stackFiles, tidy, withFiles } from "./hook/stack-files";
 import { classify, riskReport } from "./risk";
 import { type LayoutRule, layoutFindings } from "./rules/layout";
 import { findInFiles, loadRuleSet, RuleError } from "./rules/rules";
-import { type RunResult, run, runShell } from "./run";
+import { type RunOptions, type RunResult, run, type runShell } from "./run";
 import { SyncError, sync } from "./sync";
 
 export type Annotation = { file?: string; line?: number; message: string };
@@ -20,6 +21,7 @@ export type CiCheck = {
 	ok: boolean;
 	output: string;
 	annotations: Annotation[];
+	deferred?: boolean;
 };
 export type CiResult = { ok: boolean; checks: CiCheck[]; tier: string };
 
@@ -58,11 +60,35 @@ export async function ci(
 		base?: string;
 		pr?: PullRequest & { branch: string };
 		runCheck?: typeof runShell;
+		executeCheck?: typeof run;
 		env?: Record<string, string | undefined>;
 	},
 ): Promise<CiResult> {
 	const env = options.env ?? process.env;
-	const runCheck = options.runCheck ?? runShell;
+	const runCheck =
+		options.runCheck ??
+		(async (
+			command: string,
+			cwd: string,
+			runOptions: RunOptions,
+		): Promise<RunResult> => {
+			try {
+				return await runAdmittedShell(command, cwd, config.admission, {
+					...runOptions,
+					execute: options.executeCheck,
+					log: console.error,
+				});
+			} catch (error) {
+				return {
+					ok: false,
+					admission: "deferred",
+					stdout: "",
+					ms: 0,
+					timedOut: false,
+					output: `cagr could not run the check. ${error} Rerun cagr ci to verify this command.`,
+				};
+			}
+		});
 	const git = await gitContext(options.cwd);
 	const cwd = config.root;
 	const baseName =
@@ -211,6 +237,7 @@ export async function ci(
 	}
 
 	const editProblems: string[] = [];
+	const editDeferred: string[] = [];
 	for (const stack of config.stack) {
 		const paths = stackFiles(stack, absolute, config);
 		if (paths.length === 0) continue;
@@ -219,7 +246,9 @@ export async function ci(
 				timeoutMs: 300_000,
 			});
 			if (!result.ok)
-				editProblems.push(`${command}\n${tidy(result.output, 4000)}`);
+				(result.admission ? editDeferred : editProblems).push(
+					`${command}\n${tidy(result.output, 4000)}`,
+				);
 		}
 	}
 	const touched = await out(
@@ -230,7 +259,7 @@ export async function ci(
 		editProblems.push(
 			`The edit checks changed files, so the branch was not formatted or fixed before commit. Run the checks locally (\`cagr check <files>\`) and commit:\n${touched}`,
 		);
-	checks.push(check("Edit checks", editProblems));
+	pushScheduledCheck(checks, "Edit checks", editProblems, editDeferred);
 
 	const verifyCommands = config.git.pre_push.filter((command) =>
 		command.trim(),
@@ -244,6 +273,7 @@ export async function ci(
 			commands.set(command, [...(commands.get(command) ?? []), ...paths]);
 	}
 	const endProblems: string[] = [];
+	const endDeferred: string[] = [];
 	for (const [command, paths] of commands) {
 		if (command.includes("{files}") && paths.length === 0) continue;
 		const expanded = withFiles(command, paths);
@@ -255,9 +285,11 @@ export async function ci(
 		);
 		if (shared) turnEndResults.set(expanded, result);
 		if (!result.ok)
-			endProblems.push(`${command}\n${tidy(result.output, 4000)}`);
+			(result.admission ? endDeferred : endProblems).push(
+				`${command}\n${tidy(result.output, 4000)}`,
+			);
 	}
-	checks.push(check("Checks", endProblems));
+	pushScheduledCheck(checks, "Checks", endProblems, endDeferred);
 
 	let layoutRules: LayoutRule[] = [];
 	try {
@@ -328,13 +360,17 @@ export async function ci(
 	}
 	if (verifyCommands.length > 0) {
 		const problems: string[] = [];
+		const deferred: string[] = [];
 		for (const command of verifyCommands) {
 			const result =
 				turnEndResults.get(command) ??
 				(await runCheck(command, cwd, verifyOptions));
-			if (!result.ok) problems.push(`${command}\n${tidy(result.output, 4000)}`);
+			if (!result.ok)
+				(result.admission ? deferred : problems).push(
+					`${command}\n${tidy(result.output, 4000)}`,
+				);
 		}
-		checks.push(check("Verify", problems));
+		pushScheduledCheck(checks, "Verify", problems, deferred);
 	}
 	if (await out(["git", "status", "--porcelain", "-z"], cwd))
 		checks.push(
@@ -353,6 +389,20 @@ export async function ci(
 	return { ok: checks.every((entry) => entry.ok), checks, tier: risk.tier };
 }
 
+function pushScheduledCheck(
+	checks: CiCheck[],
+	name: string,
+	problems: string[],
+	deferred: string[],
+) {
+	if (problems.length || !deferred.length) checks.push(check(name, problems));
+	if (deferred.length)
+		checks.push({
+			...check(problems.length ? `${name} (load)` : name, deferred),
+			deferred: true,
+		});
+}
+
 const escapeData = (text: string) =>
 	text.replace(/%/g, "%25").replace(/\r/g, "%0D").replace(/\n/g, "%0A");
 const escapeProperty = (text: string) =>
@@ -369,7 +419,7 @@ export function annotations(result: CiResult): string[] {
 							`::error ${note.file ? `file=${escapeProperty(note.file)}${note.line ? `,line=${note.line}` : ""},` : ""}title=${escapeProperty(entry.name)}::${escapeData(note.message)}`,
 					)
 				: [
-						`::error title=${escapeProperty(entry.name)}::${escapeData(entry.output)}`,
+						`::${entry.deferred ? "warning" : "error"} title=${escapeProperty(entry.name)}::${escapeData(entry.output)}`,
 					],
 		);
 }
@@ -378,18 +428,19 @@ export function ciReport(result: CiResult): string {
 	return result.checks
 		.map(
 			(entry) =>
-				`${entry.ok ? "PASS" : "FAIL"} ${entry.name}${entry.output ? `\n${entry.output.replace(/^/gm, "  ")}` : ""}`,
+				`${entry.ok ? "PASS" : entry.deferred ? "DEFERRED" : "FAIL"} ${entry.name}${entry.output ? `\n${entry.output.replace(/^/gm, "  ")}` : ""}`,
 		)
 		.join("\n");
 }
 
 export function summary(result: CiResult) {
 	const rows = result.checks.map(
-		(entry) => `| ${entry.ok ? "pass" : "**fail**"} | ${entry.name} |`,
+		(entry) =>
+			`| ${entry.ok ? "pass" : entry.deferred ? "**deferred**" : "**fail**"} | ${entry.name} |`,
 	);
 	const failed = result.checks.filter((entry) => !entry.ok);
 	return [
-		`## cagr: ${result.ok ? "all checks pass" : `${failed.length} check${failed.length === 1 ? "" : "s"} failed`}`,
+		`## cagr: ${result.ok ? "all checks pass" : `${failed.length} check${failed.length === 1 ? "" : "s"} incomplete or failed`}`,
 		"",
 		`Risk tier: **${result.tier}**`,
 		"",

@@ -19,6 +19,8 @@ An option a command does not take is an error that lists the options it does tak
 | [`sync`](#sync)                           | Rewrite the generated files, or fail when they drift.                 |
 | [`install-git-hooks`](#install-git-hooks) | Write the git hooks and set `core.hooksPath`.                         |
 | [`stats`](#stats) | Show local guard and rule decision counts. |
+| [`run -- <cmd...>`](#run-and-measure) | Run a command through the machine memory pool. |
+| [`measure -- <cmd...>`](#run-and-measure) | Record peak memory and calibrate the memory pool. |
 | [`doctor`](#doctor)                       | Check the config, the wiring, the tools, and hook timings.            |
 | [`review`](#review)                       | Review the branch with a reviewer agent.                              |
 | [`risk`](#risk)                           | The change's risk tier, the approvals it needs, and the owners.       |
@@ -78,13 +80,22 @@ cagr install-git-hooks
 
 Writes the git hooks to `[git] hooks_path` and sets `git config core.hooksPath` to it. Run it inside a git repo, for example after `git init` or in a fresh clone.
 
+## run and measure
+
+```sh
+cagr run -- bun run verify
+cagr measure -- bun run verify
+```
+
+`run` waits in the foreground when a medium or heavy command needs tokens or memory pressure is elevated. It returns the command's exit code or 75 for a load-tainted result after retry. `measure` runs once and records a successful run's peak. Both use admission defaults when there is no repo config. See [machine admission](admission.md).
+
 ## doctor
 
 ```
 cagr doctor [--github]
 ```
 
-Checks the config and code rules load (and lists the `.cagr/*.toml` fragments that joined the config), the generated files match, `core.hooksPath` is set and the hooks are executable, `cagr` and every command's program can be found, the review setup, and the median time of each hook against its budget. The Guards section lists every built-in guard id with its configured policy or an off note. Disabled guards do not fail the check. Prints `ok` or `FAIL` per line. Exits 1 if any line fails.
+Checks the config and code rules load (and lists the `.cagr/*.toml` fragments that joined the config), the generated files match, `core.hooksPath` is set and the hooks are executable, `cagr` and every command's program can be found, the review setup, and the median time of each hook against its budget. The Admission section reports pool size, holders, the queue, pressure and measured costs. The Guards section lists every built-in guard id with its configured policy or an off note. Disabled guards do not fail the check. Prints `ok` or `FAIL` per line. Exits 1 if any line fails.
 
 - `--github`: also check the protected branch's settings on GitHub through `gh`. See [CI](ci.md#check-branch-protection).
 

@@ -27,6 +27,8 @@ async function fixture({
 		"cagr.toml",
 		`[agents]
 enabled = []
+[admission]
+enabled = false
 [git]
 commit_message = "conventional"
 ${prePush ? `pre_push = ${JSON.stringify(prePush)}` : ""}

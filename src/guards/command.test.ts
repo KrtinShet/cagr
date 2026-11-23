@@ -285,6 +285,7 @@ describe("redirections", () => {
 test.each([
 	"CAGR_ALLOW_GATE_EDIT",
 	"CAGR_ALLOW_EXTRA_REVIEW",
+	"CAGR_ADMISSION_HELD",
 	"CRM_SKIP_HOOKS",
 ])("refuses assignments to the human-only %s switch", (name) => {
 	for (const operator of ["=", "+="]) {

@@ -19,7 +19,11 @@ async function branch(
 	subject: string,
 ) {
 	const repo = await tempRepo();
-	const config = resolveConfig(raw, repo.root, join(repo.root, "cagr.toml"));
+	const config = resolveConfig(
+		{ admission: { enabled: false }, ...raw },
+		repo.root,
+		join(repo.root, "cagr.toml"),
+	);
 	sync(config);
 	await repo.commit("chore: add cagr", {});
 	await repo.git("checkout", "-q", "-b", "feat/x");
@@ -300,6 +304,46 @@ test("annotations escape what GitHub would read as syntax", () => {
 		"::error title=Checks::line1%0Aline2",
 	]);
 });
+
+test("CI reports load-tainted checks as deferred and emits a warning", () => {
+	const result = {
+		ok: false,
+		tier: "medium",
+		checks: [
+			{
+				name: "Verify",
+				ok: false,
+				deferred: true,
+				output: "load-tainted",
+				annotations: [],
+			},
+		],
+	};
+	expect(ciReport(result)).toBe("DEFERRED Verify\n  load-tainted");
+	expect(annotations(result)).toEqual(["::warning title=Verify::load-tainted"]);
+});
+
+test(
+	"CI defers Verify when the admission runner has an internal error",
+	async () => {
+		const { repo, config } = await branch(
+			{ git: { pre_push: "bun run verify" } },
+			{ "docs/a.md": "updated\n" },
+			"docs: add a",
+		);
+		const result = await ci(config, {
+			cwd: repo.root,
+			base: "main",
+			env: {},
+			executeCheck: async () => {
+				throw new Error("EMFILE: watchdog failed");
+			},
+		});
+		expect(ciReport(result)).toContain("DEFERRED Verify");
+		expect(annotations(result).at(-1)).toContain("EMFILE: watchdog failed");
+	},
+	repoTestTimeout,
+);
 
 test("publish writes the step summary and the tier output", () => {
 	const dir = mkdtempSync(join(tmpdir(), "gw-pub-"));

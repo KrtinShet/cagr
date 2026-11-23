@@ -1,12 +1,13 @@
 import { spawn } from "node:child_process";
 import { appendFileSync, mkdirSync, openSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { runAdmittedShell } from "./admission/run";
 import type { Config } from "./config/schema";
 import { gitContext } from "./git";
 import { commandReasons } from "./guards/command";
 import { render } from "./guards/finding";
 import { branchFinding, commitMessageFinding } from "./guards/names";
-import { run, runShell } from "./run";
+import { run } from "./run";
 
 export const gitHookNames = ["commit-msg", "pre-push"] as const;
 export type GitHookName = (typeof gitHookNames)[number];
@@ -143,9 +144,27 @@ export async function prePush(
 		}
 	}
 	if (messages.length > 0) return { ok: false, messages };
+	let unchecked = false;
 	for (const command of config.git.pre_push) {
-		const result = await runShell(command, config.root, { env: gitEnv });
-		if (!result.ok)
+		const result = await runAdmittedShell(
+			command,
+			config.root,
+			config.admission,
+			{
+				env: gitEnv,
+				priority: "push",
+				timeoutMs: 1_800_000,
+				log: (line) => console.error(line),
+			},
+		).catch((error: unknown) => {
+			unchecked = true;
+			messages.push(
+				`Memory admission could not run \`${command}\`. ${error} Run the check before merging.`,
+			);
+			return null;
+		});
+		if (result?.admission) return { ok: false, messages: [result.output] };
+		if (result && !result.ok)
 			return {
 				ok: false,
 				messages: [
@@ -153,8 +172,8 @@ export async function prePush(
 				],
 			};
 	}
-	if (!config.review.status || pushed.length === 0)
-		return { ok: true, messages: [] };
+	if (unchecked || !config.review.status || pushed.length === 0)
+		return { ok: true, messages };
 	return { ok: true, messages: await sendStatuses(config, cwd, pushed, start) };
 }
 
