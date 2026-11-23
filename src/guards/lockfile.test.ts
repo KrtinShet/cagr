@@ -357,6 +357,8 @@ test.each([
 	"yarn-path './tools/yarn.cjs'",
 	"--yarn-path ./tools/yarn.cjs",
 	'yarn-path "./a.cjs" "./b.cjs"',
+	'yarn-path "./tools/\\u0079arn.cjs"',
+	'yarn-path "./tools\\/yarn.cjs"',
 ])("a .yarnrc line %p the check cannot read is refused", async (line) => {
 	const lockfile = "# yarn lockfile v1\n";
 	const verdict = await editedCheck(
@@ -375,7 +377,30 @@ test.each([
 });
 
 test.each([
+	'pnpmfile="tools\\/hooks.cjs"',
+	"pnpmfile=tools/hooks.cjs ; the hooks",
+	"pnpmfile=tools/hooks.cjs#x",
+])(
+	"a .npmrc pnpmfile value %p the check cannot read is refused",
+	async (line) => {
+		const lockfile = "lockfileVersion: '9.0'\n";
+		const verdict = await editedCheck(
+			"pnpm-lock.yaml",
+			"pnpm",
+			{
+				"package.json": '{ "name": "app" }\n',
+				".npmrc": `${line}\n`,
+				"pnpm-lock.yaml": lockfile,
+			},
+			{ "pnpm-lock.yaml": `${lockfile}# edited\n` },
+		);
+		expect(verdict?.message).toContain("which cagr cannot read as one path");
+	},
+);
+
+test.each([
 	[".npmrc", "global-pnpmfile=tools/g.cjs\n"],
+	[".npmrc", '"global-pnpmfile"=tools/g.cjs\n'],
 	["pnpm-workspace.yaml", "globalPnpmfile: tools/g.cjs\n"],
 ])("a global pnpmfile in %s is refused: %p", async (config, text) => {
 	const lockfile = "lockfileVersion: '9.0'\n";
@@ -638,6 +663,7 @@ test.each([
 test.each([
 	[".npmrc", "pnpmfile=tools/hooks.cjs\n"],
 	[".npmrc", 'pnpmfile = "./tools/hooks.cjs"\n'],
+	[".npmrc", '"pnpmfile"=tools/hooks.cjs\n'],
 	["pnpm-workspace.yaml", "packages: []\npnpmfile: tools/hooks.cjs\n"],
 ])("a pnpmfile named in %s gets the same checks: %p", async (config, text) => {
 	const lockfile = "lockfileVersion: '9.0'\n";

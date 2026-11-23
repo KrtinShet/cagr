@@ -423,7 +423,8 @@ async function copyInputs(
 			/^\s*("?)(?:yarn-path|yarnPath)\1(?:\s*:\s*|\s+)(?:"([^"]*)"|([^\s"'#]+))\s*(?:#.*)?$/.exec(
 				line,
 			);
-		if (!match)
+		// Yarn decodes escapes in a quoted value, so a backslash could name another file than the one read here.
+		if (!match || line.includes("\\"))
 			throw new Refusal(
 				`The committed .yarnrc has a line about yarn-path that cagr cannot read: ${line.trim()}. Write it as yarn-path "./path/to/release.cjs" in a commit, or restore the lockfile and ask the user to run the yarn command.`,
 			);
@@ -567,8 +568,13 @@ async function namedPnpmfiles(
 	const npmrc = posix.join(workspace, ".npmrc");
 	const ini = decode(await fromHead(npmrc)) ?? "";
 	const line = [
-		...ini.matchAll(/^[ \t]*pnpmfile[ \t]*=[ \t]*(.*?)[ \t]*$/gm),
-	].at(-1)?.[1];
+		...ini.matchAll(/^[ \t]*(["']?)pnpmfile\1[ \t]*=[ \t]*(.*?)[ \t]*$/gm),
+	].at(-1)?.[2];
+	// The ini parser pnpm uses decodes escapes and may drop a comment in a value, so the check reads only a plain one.
+	if (line && /[\\;#]/.test(line))
+		throw new Refusal(
+			`The committed ${npmrc} sets pnpmfile to ${line}, which cagr cannot read as one path. Write it with no backslash, ; or # in a commit, or restore the lockfile and ask the user to run the pnpm command.`,
+		);
 	if (line) found.push([npmrc, line.replace(/^(["'])(.*)\1$/, "$2")]);
 	const yaml = posix.join(workspace, workspaceFile);
 	const text = decode(await fromHead(yaml));
@@ -577,7 +583,7 @@ async function namedPnpmfiles(
 		value = text === null ? undefined : Bun.YAML.parse(text);
 	} catch {}
 	const settings = value && typeof value === "object" ? Object.keys(value) : [];
-	const global = /^\s*global[-_]?pnpmfile\s*[=:]/im;
+	const global = /^\s*(["']?)global[-_]?pnpmfile\1\s*[=:]/im;
 	if (global.test(ini) || settings.some((key) => global.test(`${key}:`)))
 		throw new Refusal(
 			`The committed ${global.test(ini) ? npmrc : yaml} sets a global pnpmfile, which pnpm loads from outside the files the check takes from the commit, so cagr does not run it. Restore the lockfile and ask the user to run the pnpm command.`,
