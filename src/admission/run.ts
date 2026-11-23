@@ -49,7 +49,7 @@ const tainted =
 	"load-tainted: the command failed under elevated memory pressure. Rerun when the machine is quieter.";
 const pollMs = 250;
 const admissionWaitMs = 60_000;
-const reservationEnv = "CAGR_ADMISSION_HELD";
+export const reservationEnv = "CAGR_ADMISSION_HELD";
 
 function unsettled(
 	admission: NonNullable<RunResult["admission"]>,
