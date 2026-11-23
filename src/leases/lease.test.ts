@@ -311,7 +311,19 @@ test("the lease stays live during verification and passes admission priority", a
 	await a.migration("0002");
 	await a.configure('sleep 6; test "$CAGR_PRIORITY" = lease');
 	expect((await a.lease("take")).ok).toBe(true);
-	const pushed = await a.push();
+	const pushed = await run(
+		[
+			"git",
+			"-C",
+			a.cwd,
+			"-c",
+			"test.value=contains --dry-run",
+			"push",
+			"origin",
+			"HEAD",
+		],
+		tmpdir(),
+	);
 	expect(pushed.output).toContain("-> builder-a");
 	expect(pushed.ok).toBe(true);
 });
@@ -355,7 +367,7 @@ test("dry-run pushes leave remote lease refs unchanged on success and refusal", 
 	expect((await a.lease("take")).ok).toBe(true);
 	const before = await remote("for-each-ref", "refs/cagr/");
 	const dry = (flag: string) =>
-		run(["git", "push", flag, "origin", "HEAD"], a.cwd);
+		run(["git", "-C", a.cwd, "push", flag, "origin", "HEAD"], tmpdir());
 	expect((await dry("--dry-run")).ok).toBe(true);
 	expect(await remote("for-each-ref", "refs/cagr/")).toBe(before);
 	await a.configure("exit 1");

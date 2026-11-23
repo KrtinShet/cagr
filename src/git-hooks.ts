@@ -4,7 +4,7 @@ import { readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type { Config } from "./config/schema";
 import { gitContext, gitHookEnv } from "./git";
-import { commandReasons } from "./guards/command";
+import { commandReasons, gitOptionsWithValue } from "./guards/command";
 import { render } from "./guards/finding";
 import { branchFinding, commitMessageFinding } from "./guards/names";
 import { PushLeases } from "./leases/push";
@@ -96,28 +96,66 @@ export const startInBackground: StartInBackground = (args, cwd, log) => {
 		.unref();
 };
 
-async function realPush(cwd: string) {
-	// Git gives its hook the destination and refs but omits --dry-run.
-	const pid = process.ppid;
-	let args: string[];
-	if (process.platform === "linux") {
-		args = (
-			await readFile(`/proc/${pid}/cmdline`, "utf8").catch(() => "")
-		).split("\0");
-	} else if (process.platform === "darwin") {
-		const result = await run(
-			["ps", "-ww", "-p", String(pid), "-o", "command="],
-			cwd,
-			{ timeoutMs: 1000 },
-		);
-		args = result.ok ? result.stdout.trim().split(/\s+/) : [];
-	} else return false;
-	// Aliases and wrappers can supply more flags than the parent argv shows.
+async function parentArgs(pid: number): Promise<string[]> {
+	if (process.platform === "linux")
+		return (await readFile(`/proc/${pid}/cmdline`, "utf8")).split("\0");
+	if (process.platform !== "darwin") return [];
+
+	// KERN_PROCARGS2 returns argc, the executable path, padding, then argv.
+	// ps joins arguments with spaces, which can make a config value look like a command.
+	const { dlopen } = await import("bun:ffi");
+	const lib = dlopen("/usr/lib/libSystem.B.dylib", {
+		sysctl: {
+			args: ["ptr", "u32", "ptr", "ptr", "ptr", "u64"],
+			returns: "i32",
+		},
+	});
+	try {
+		const mib = new Int32Array([1, 49, pid]);
+		const size = new BigUint64Array(1);
+		const sysctl = lib.symbols.sysctl;
+		if (sysctl(mib, mib.length, null, size, null, 0n) !== 0) return [];
+		const bytes = Buffer.alloc(Number(size[0]));
+		if (
+			sysctl(mib, mib.length, bytes, size, null, 0n) !== 0 ||
+			Number(size[0]) < 4
+		)
+			return [];
+		const argc = bytes.readInt32LE(0);
+		let offset = bytes.indexOf(0, 4);
+		if (offset < 0) return [];
+		while (bytes[offset] === 0) offset++;
+		const args: string[] = [];
+		for (let index = 0; index < argc; index++) {
+			const end = bytes.indexOf(0, offset);
+			if (end < 0 || end >= Number(size[0])) return [];
+			args.push(bytes.toString("utf8", offset, end));
+			offset = end + 1;
+		}
+		return args;
+	} finally {
+		lib.close();
+	}
+}
+
+async function realPush() {
+	const args = await parentArgs(process.ppid).catch(() => []);
+	if (!/(?:^|\/)git$/.test(args[0] ?? "")) return false;
+	let command = 1;
+	for (let arg = args[command]; arg; arg = args[command]) {
+		if (gitOptionsWithValue.has(arg)) command += 2;
+		else if (
+			/^(?:--(?:git-dir|work-tree|namespace|config-env)=|--no-pager$|--paginate$|-[pP]$)/.test(
+				arg,
+			)
+		)
+			command++;
+		else break;
+	}
 	return (
-		/(?:^|\/)git$/.test(args[0] ?? "") &&
-		args[1] === "push" &&
+		args[command] === "push" &&
 		!args
-			.slice(2)
+			.slice(command + 1)
 			.some(
 				(arg) =>
 					(arg.startsWith("--d") && "--dry-run".startsWith(arg)) ||
@@ -145,7 +183,7 @@ export async function prePush(
 	const messages: string[] = [];
 	const warnings: string[] = [];
 	const leases = new PushLeases(config, cwd, messages, warnings);
-	const writable = !config.lease.length || (await realPush(cwd));
+	const writable = !config.lease.length || (await realPush());
 	const pushed: { branch: string; sha: string }[] = [];
 	for (const ref of refs) {
 		const branch = ref.remoteRef.replace(/^refs\/heads\//, "");
