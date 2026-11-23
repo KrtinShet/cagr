@@ -649,12 +649,22 @@ done`,
 });
 
 test("a second renewal can expire the first lease even with no pre-push commands", async () => {
-	const { builder, origin, remote } = await fixture(3);
+	const { builder, origin, parent, remote } = await fixture(60);
 	const a = await builder("builder-a");
+	const marker = join(parent, "slow-renewal");
+	const clock = join(parent, "clock.ts");
+	await Bun.write(
+		clock,
+		`
+import { existsSync } from "node:fs";
+const now = Date.now;
+Date.now = () => now() + (existsSync(${JSON.stringify(marker)}) ? 60_000 : 0);
+`,
+	);
 	await a.configure(null);
 	await Bun.write(
 		join(a.cwd, ".cagr/z-extra.toml"),
-		'[[lease]]\nname = "slow"\npaths = ["migrations/**"]\nttl_seconds = 20\n',
+		'[[lease]]\nname = "slow"\npaths = ["migrations/**"]\nttl_seconds = 1800\n',
 	);
 	await withCommand(
 		join(origin, "hooks"),
@@ -662,7 +672,7 @@ test("a second renewal can expire the first lease even with no pre-push commands
 		`
 while read -r old new ref; do
   if test "$ref" = refs/cagr/lease/slow && test "$old" != ${"0".repeat(40)} && test "$new" != ${"0".repeat(40)}; then
-    sleep 4
+    touch ${shellQuote(marker)}
   fi
 done`,
 	);
@@ -671,7 +681,9 @@ done`,
 	expect(
 		(await run([process.execPath, cli, "lease", "take", "slow"], a.cwd)).ok,
 	).toBe(true);
-	const push = await a.push();
+	const push = await run(["git", "push", "origin", "HEAD"], a.cwd, {
+		env: { BUN_OPTIONS: `--preload=${shellQuote(clock)}` },
+	});
 	expect(push.ok).toBe(false);
 	expect(push.stderr).toContain(
 		"db-migrations changed or has too little time left",
