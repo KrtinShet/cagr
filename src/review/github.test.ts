@@ -242,6 +242,47 @@ const brokenAgent: ReviewAgent = {
 	},
 };
 
+test("CI at the cap reports unreviewed commits and passes when the last Important finding is answered", async () => {
+	const { repo, config, head } = await prRepo();
+	const later = await repo.commit("feat: more", { "src/b.ts": "more\n" });
+	const state = encodeState(
+		record(
+			[
+				round({ head }),
+				round({ n: 2, head, scope: "diff" }),
+				round({ n: 3, head, scope: "verify" }),
+			],
+			[finding()],
+		),
+	);
+	const pr = { number: 3, repo: "o/r", base: "main", head: later, body: "" };
+	const agent: ReviewAgent = {
+		name: "unexpected",
+		ask: async () => {
+			throw new Error("CI must not run reviewers past the cap");
+		},
+	};
+	for (const resolved of [[], ["f1"]]) {
+		const { gh, posts } = fakeGh({
+			comments: [{ id: 99, body: state, login: "owner" }],
+			threadAuthor: "owner",
+			resolved,
+		});
+		const result = await ciReview(config, repo.root, {
+			gh,
+			local: { pr, login: "owner" },
+			agent,
+		});
+		expect(result.ok).toBe(resolved.length > 0);
+		expect(result.report).toContain(
+			"Reviewed through round 3; 1 later commit was not reviewed.",
+		);
+		expect(
+			posts.some((post) => post.args.some((arg) => arg.endsWith("/reviews"))),
+		).toBe(false);
+	}
+});
+
 async function firstRoundState() {
 	const setup = await prRepo();
 	const first = fakeGh({});

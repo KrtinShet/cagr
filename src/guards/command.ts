@@ -1,4 +1,5 @@
 import type { Config } from "../config/schema";
+import { extraReviewEnv } from "../review/types";
 import {
 	commandsWithRedirections,
 	programName,
@@ -124,6 +125,11 @@ function simpleCommandFinding(
 		return {
 			id: "gate-edit-env",
 			reason: `${config.files.gate_edit_env} is for humans only. Tell the user which gate file you would change and why.`,
+		};
+	if (words.some((word) => word.startsWith(`${extraReviewEnv}=`)))
+		return {
+			id: "gate-edit-env",
+			reason: `${extraReviewEnv} is for humans only. Answer the remaining Important findings, or ask the user to run the extra round.`,
 		};
 	const program = programWords(words);
 	const manager = packageManagerFinding(program, config);

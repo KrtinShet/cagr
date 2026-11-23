@@ -225,6 +225,7 @@ async function checkPullRequest(
 		}
 		if (tasks.review) {
 			let reviewOk = false;
+			let coverage: string | undefined;
 			try {
 				// Checks can change files. Review a fresh checkout of the exact head.
 				await git("worktree", "add", "--detach", reviewTree, pr.head);
@@ -239,15 +240,17 @@ async function checkPullRequest(
 				});
 				log(result.report);
 				reviewOk = result.ok && result.complete;
+				coverage = result.coverage;
 			} catch (error) {
 				log((error as Error).message);
 			}
 			const sent = await post(
 				reviewContext,
 				reviewOk,
-				reviewOk
-					? "Local CI review passed."
-					: "Local CI review failed. See the PR and the watch log.",
+				coverage ??
+					(reviewOk
+						? "Local CI review passed."
+						: "Local CI review failed. See the PR and the watch log."),
 			);
 			ok = ok && reviewOk && sent;
 		}

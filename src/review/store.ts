@@ -3,9 +3,12 @@ import {
 	mkdirSync,
 	readdirSync,
 	readFileSync,
+	renameSync,
+	rmSync,
 	writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
+import { tryLock } from "../lock";
 import { emptyRecord, type ReviewRecord } from "./types";
 
 /** Records live in the shared .git folder, so every worktree of the repo sees the same review. */
@@ -34,7 +37,33 @@ export function loadRecord(file: string, branch: string, base: string) {
 
 export function writeRecord(file: string, record: ReviewRecord) {
 	mkdirSync(dirname(file), { recursive: true });
-	writeFileSync(file, `${JSON.stringify(record, null, "\t")}\n`);
+	const pending = `${file}.${process.pid}.tmp`;
+	try {
+		writeFileSync(pending, `${JSON.stringify(record, null, "\t")}\n`);
+		renameSync(pending, file);
+	} finally {
+		rmSync(pending, { force: true });
+	}
+}
+
+export class ReviewRecordBusy extends Error {}
+
+export async function withReviewLock<T>(
+	file: string | null,
+	action: () => T | Promise<T>,
+): Promise<T> {
+	if (!file) return action();
+	mkdirSync(dirname(file), { recursive: true });
+	const lock = tryLock(`${file}.lock`);
+	if (!lock)
+		throw new ReviewRecordBusy(
+			"A review or answer is already running on this branch. Wait for it to finish, then try again.",
+		);
+	try {
+		return await action();
+	} finally {
+		lock.close();
+	}
 }
 
 export function allRecords(commonDir: string): ReviewRecord[] {

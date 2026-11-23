@@ -2,7 +2,7 @@ import type { Config } from "./config/schema";
 import { findingCommand } from "./findings/command";
 import { protectedEntries } from "./guards/edit";
 import { ecosystemOf } from "./guards/package-manager";
-import { reviewOrder, reviewPreparation } from "./review/gate";
+import { cappedReview, reviewOrder, reviewPreparation } from "./review/gate";
 import { loadRules, type Rule, RuleError } from "./rules/rules";
 
 /** A short brief for the agent at session start, built from the config. */
@@ -86,6 +86,9 @@ export function brief(
 		);
 	if (config.review.enabled) {
 		lines.push(`- ${reviewOrder} Give the review a 15 minute timeout.`);
+		lines.push(
+			`- ${cappedReview(config.review.max_rounds)} Commits after the last round go unreviewed.`,
+		);
 		if (config.review.gate.length > 0 && config.review.pr_sections.length > 0)
 			lines.push(
 				`- The pull request body needs these headings: ${config.review.pr_sections.join(", ")}.`,

@@ -76,16 +76,14 @@ export const blocking = (record: ReviewRecord) =>
 /**
  * The number of the round that started the current review cycle: the last
  * full round that ran. A rebase, a reused branch name or `--full` starts a new
- * cycle, and the round cap counts from there.
+ * cycle for the verifier's context.
  */
 export const cycleStart = (record: ReviewRecord) =>
 	record.rounds.findLast((round) => !round.error && round.scope === "full")
 		?.n ?? 0;
 
-/** Rounds in the current cycle that ran finders. These count toward `[review] max_rounds`. */
-export const discoveryRounds = (record: ReviewRecord) => {
-	const start = cycleStart(record);
-	return record.rounds.filter(
-		(round) => !round.error && round.scope !== "verify" && round.n >= start,
-	).length;
-};
+/** Every completed branch round counts toward `[review] max_rounds`. */
+export const completedRounds = (record: ReviewRecord) =>
+	record.rounds.filter((round) => !round.error).length;
+
+export const extraReviewEnv = "CAGR_ALLOW_EXTRA_REVIEW";

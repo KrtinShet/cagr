@@ -1,6 +1,6 @@
 import type { Config } from "../config/schema";
 import { gitContext } from "../git";
-import { gateResult, openAt, type Reach, reachFrom } from "./gate";
+import { gateAtHead } from "./gate";
 import type { Gh } from "./github";
 import { readRecord, recordPath } from "./store";
 import type { ReviewRecord } from "./types";
@@ -22,31 +22,37 @@ const describe = (text: string) =>
  * The `cagr/review` status for a commit: the review gate's answer, in GitHub's
  * terms. Both the pre-push hook and `cagr review answer` send this.
  */
-export function reviewStatus(
+export async function reviewStatus(
 	record: ReviewRecord | null,
 	sha: string,
 	config: Config,
-	reach?: Reach,
-): CommitStatus {
-	const gate = gateResult(record, sha, config, reach);
+	cwd: string,
+): Promise<CommitStatus> {
+	const gate = await gateAtHead(record, sha, config, cwd);
 	const status = (state: CommitStatus["state"], text: string) => ({
 		context: reviewContext,
 		state,
 		description: describe(text),
 	});
 	if (gate.kind === "allow")
-		return gate.notice
-			? status(
-					"success",
-					"Unreviewed: the reviewer failed and no Important finding is open. Review this commit yourself.",
-				)
-			: status("success", "Passed: no Important finding is open.");
-	const open = record ? (openAt(record, sha, reach)?.length ?? 0) : 0;
-	if (open > 0)
+		return gate.coverage
+			? status("success", gate.coverage)
+			: gate.notice
+				? status(
+						"success",
+						"Unreviewed: the reviewer failed and no Important finding is open. Review this commit yourself.",
+					)
+				: status("success", "Passed: no Important finding is open.");
+	const open = gate.openCount;
+	if (open) {
+		const findings = `${open} Important finding${open === 1 ? "" : "s"} open.`;
 		return status(
 			"failure",
-			`${open} Important finding${open === 1 ? "" : "s"} open. Fix or answer ${open === 1 ? "it" : "them"}, then run cagr review.`,
+			gate.coverage
+				? `${gate.coverage} ${findings}`
+				: `${findings} Fix or answer ${open === 1 ? "it" : "them"}${gate.capped ? "." : ", then run cagr review."}`,
 		);
+	}
 	return status("pending", "Not reviewed at this commit. Run cagr review.");
 }
 
@@ -111,12 +117,7 @@ export async function sendReviewStatus(
 		await postStatus(
 			gh,
 			git.head,
-			reviewStatus(
-				record,
-				git.head,
-				config,
-				await reachFrom(record, git.head, cwd),
-			),
+			await reviewStatus(record, git.head, config, cwd),
 		)
 	).message;
 }
@@ -181,12 +182,7 @@ export async function postStatusAfterPush(
 			await postStatus(
 				gh,
 				options.sha,
-				reviewStatus(
-					record,
-					options.sha,
-					config,
-					await reachFrom(record, options.sha, cwd),
-				),
+				await reviewStatus(record, options.sha, config, cwd),
 			)
 		).message,
 	);

@@ -13,10 +13,13 @@ import {
 } from "./agent";
 import {
 	answerHint,
+	cappedNext,
+	cappedReview,
 	holdsOnError,
 	type Reach,
 	reachFrom,
 	unresolved,
+	unreviewedNotice,
 } from "./gate";
 import {
 	type FinderOutput,
@@ -29,13 +32,14 @@ import {
 	verifierPrompt,
 	verifierSchema,
 } from "./prompt";
-import { loadRecord, recordPath, writeRecord } from "./store";
+import { loadRecord, recordPath, withReviewLock, writeRecord } from "./store";
 import {
 	blocking,
 	type Candidate,
 	categories,
+	completedRounds,
 	cycleStart,
-	discoveryRounds,
+	extraReviewEnv,
 	type ReviewFinding,
 	type ReviewRecord,
 	type Round,
@@ -72,6 +76,9 @@ export type ReviewOutcome = {
 	file: string | null;
 	/** Set when there was nothing to review, with why. */
 	skipped: string | null;
+	/** The branch has spent its review rounds. CI still checks the open findings. */
+	capped?: true;
+	coverage?: string;
 	/** Why open Important findings were not judged again in this run. */
 	held: string[];
 };
@@ -107,32 +114,34 @@ export async function review(
 	config: Config,
 	options: ReviewOptions,
 ): Promise<ReviewOutcome> {
-	const progress = options.progress ?? (() => {});
-	const now = options.now ?? (() => new Date());
 	const git = await gitContext(options.cwd);
 	if (!git.toplevel || !git.commonDir || !git.head)
 		throw new ReviewInputError(
 			"Run `cagr review` inside a git repo with at least one commit.",
 		);
-	const cwd = git.toplevel;
-	const head = git.head;
 	const branch = git.branch ?? "detached";
+	const file =
+		options.record || options.scan !== undefined
+			? null
+			: recordPath(git.commonDir, branch);
+	const target = { cwd: git.toplevel, head: git.head, branch, file };
+	return withReviewLock(file, () => reviewTarget(config, options, target));
+}
+
+async function reviewTarget(
+	config: Config,
+	options: ReviewOptions,
+	{
+		cwd,
+		head,
+		branch,
+		file,
+	}: { cwd: string; head: string; branch: string; file: string | null },
+): Promise<ReviewOutcome> {
+	const progress = options.progress ?? (() => {});
+	const now = options.now ?? (() => new Date());
 	const baseName = options.base ?? config.git.protected_branch ?? "main";
 	const scanning = options.scan !== undefined;
-
-	if (!scanning) {
-		const dirty = await gitOut(
-			["status", "--porcelain", "--untracked-files=no"],
-			cwd,
-		);
-		if (dirty !== "")
-			throw new ReviewInputError(
-				"Commit your changes first. The review covers commits, and the gate checks the commit you open the pull request from.",
-			);
-	}
-
-	const file =
-		options.record || scanning ? null : recordPath(git.commonDir, branch);
 	const record =
 		options.record ??
 		(file
@@ -148,13 +157,30 @@ export async function review(
 		: await reachFrom(record, head, cwd);
 	const openNow = () =>
 		scanning ? blocking(record) : unresolved(record, head, reach);
+	const rounds = completedRounds(record);
+	const maxRounds = config.review.max_rounds;
+	if (
+		!scanning &&
+		rounds >= maxRounds &&
+		!(rounds === maxRounds && process.env[extraReviewEnv] === "1")
+	) {
+		const coverage = await unreviewedNotice(record, head, cwd);
+		const skipped = [cappedReview(maxRounds), cappedNext, coverage]
+			.filter(Boolean)
+			.join("\n\n");
+		return {
+			...skippedOutcome(record, file, openNow(), skipped),
+			capped: true,
+			coverage,
+		};
+	}
 	let held = new Map<string, string>();
 	// After a failed round the gate holds only what `holdsOnError` keeps, so the report and CI say the same.
 	const openAfterError = async () => {
 		if (scanning) return blocking(record);
 		const after = await reachFrom(record, head, cwd);
-		return unresolved(record, head, after).filter((finding) =>
-			holdsOnError(finding, after),
+		return unresolved(record, head, after).filter(
+			(finding) => rounds >= maxRounds || holdsOnError(finding, after),
 		);
 	};
 	const heldLines = () =>
@@ -163,6 +189,14 @@ export async function review(
 			return why ? [why] : [];
 		});
 	if (!scanning) {
+		const dirty = await gitOut(
+			["status", "--porcelain", "--untracked-files=no"],
+			cwd,
+		);
+		if (dirty !== "")
+			throw new ReviewInputError(
+				"Commit your changes first. The review covers commits, and the gate checks the commit you open the pull request from.",
+			);
 		const baseRef = await resolveBase(baseName, cwd);
 		mergeBase = await gitOut(["merge-base", baseRef, head], cwd);
 		held = await heldBack(record, head, mergeBase, config.review.skip, cwd);
@@ -177,7 +211,6 @@ export async function review(
 			head,
 			mergeBase,
 			full: options.full === true,
-			maxRounds: config.review.max_rounds,
 			reach,
 			held,
 			cwd,
@@ -205,7 +238,7 @@ export async function review(
 	const risk = classify(reviewed, config);
 	const effort =
 		options.effort ?? (risk.tier === "high" ? "deep" : config.review.effort);
-	const roundNumber = record.rounds.filter((round) => !round.error).length + 1;
+	const roundNumber = rounds + 1;
 	const exclude = config.review.skip.map((glob) => `:(exclude,glob)${glob}`);
 	let diff = "";
 	let log = "";
@@ -254,10 +287,7 @@ export async function review(
 				(finding) => held.has(finding.id) || judgedAt(record, finding, head),
 			)
 			.map((finding) => finding.id),
-		capped:
-			scope !== "full" &&
-			scope !== "scan" &&
-			discoveryRounds(record) >= config.review.max_rounds,
+		recheckFixes: scope === "diff" && roundNumber >= maxRounds,
 	};
 
 	const round: Round = {
@@ -393,7 +423,6 @@ type PlanInput = {
 	head: string;
 	mergeBase: string;
 	full: boolean;
-	maxRounds: number;
 	reach: Reach;
 	/** Open findings the verifier may not judge at this head, with why. */
 	held: Map<string, string>;
@@ -497,8 +526,6 @@ const answerCommand = (id: string) =>
 
 /**
  * Picks what the next round covers, or returns why there is nothing to do.
- * New commits always get finders on their diff, before and past the round
- * cap: the cap only stops further full rounds.
  */
 async function planRound(
 	record: ReviewRecord,
@@ -564,10 +591,6 @@ async function planRound(
 		}
 		return { from: first.from, scope: "verify", recheckBefore: first.n };
 	}
-	if (discoveryRounds(record) >= input.maxRounds)
-		progress(
-			`Reached the ${input.maxRounds}-round cap, so no further full round runs: finders review the new commits, and the verifier checks earlier findings.`,
-		);
 	return { from: lastOk.head, scope: "diff", recheckBefore: null };
 }
 

@@ -372,7 +372,7 @@ function applyDefaults(
 			guide: (review.guide as string | undefined) ?? defaultGuide(root),
 			effort: (review.effort as Effort | undefined) ?? "standard",
 			security: (review.security as boolean | undefined) ?? true,
-			max_rounds: (review.max_rounds as number | undefined) ?? 2,
+			max_rounds: (review.max_rounds as number | undefined) ?? 3,
 			timeout_seconds: (review.timeout_seconds as number | undefined) ?? 600,
 			skip: (review.skip as string[] | undefined) ?? [],
 			pr_sections: (review.pr_sections as string[] | undefined) ?? [],

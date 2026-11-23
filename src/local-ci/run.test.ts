@@ -3,11 +3,12 @@ import { mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadConfig } from "../config/load";
-import type { Gh } from "../review/github";
+import { encodeState, type Gh } from "../review/github";
 import { run } from "../run";
 import { sync } from "../sync";
 import { repoTestTimeout } from "../test/budgets";
 import { tempRepo } from "../test/repo";
+import { record, round } from "../test/review";
 import { watchPaths } from "./cache";
 import { localCi } from "./run";
 
@@ -84,6 +85,7 @@ function runtime(
 		heads?: { number: number; headRefOid: string; isDraft?: boolean }[];
 		statuses?: Record<string, [context: string, state: string][]>;
 		installFails?: boolean;
+		reviewState?: string;
 	} = {},
 ) {
 	const log: string[] = [];
@@ -124,7 +126,11 @@ function runtime(
 			return settings.permission ?? "write";
 		if (args.includes("user")) return "owner";
 		if (args.includes("graphql")) return "{}";
-		if (args.includes(`repos/o/r/issues/3/comments`)) return "";
+		if (args.includes("repos/o/r/issues/3/comments"))
+			return settings.reviewState
+				? JSON.stringify({ id: 42, login: "owner", body: settings.reviewState })
+				: "";
+		if (args.includes("repos/o/r/issues/comments/42")) return "{}";
 		const sha = args.find((arg) => arg.includes("/commits/"))?.split("/")[4];
 		if (sha) {
 			const rows = settings.statuses?.[sha] ?? [];
@@ -228,6 +234,38 @@ test(
 				/^\d{4}-\d{2}-\d{2}T/,
 			);
 			expect(await f.repo.git("status", "--porcelain")).toBe("");
+		} finally {
+			f.clean();
+		}
+	},
+	repoTestTimeout,
+);
+
+test(
+	"local CI posts the coverage gap on a successful capped review",
+	async () => {
+		const f = await fixture();
+		try {
+			const state = record([
+				round({ head: f.base }),
+				round({ n: 2, head: f.base, scope: "diff" }),
+				round({ n: 3, head: f.base, scope: "verify" }),
+			]);
+			state.base = "target";
+			const r = runtime(f, {
+				reviewState: encodeState(state),
+				statuses: { [f.head]: [["cagr/checks", "success"]] },
+			});
+			expect(await localCi(f.config, f.paths, "watch", r)).toBe(true);
+			expect(r.commands.some((args) => args[0] === "claude")).toBe(false);
+			expect(
+				r.calls.find((args) => args.includes("context=cagr/review")),
+			).toEqual(
+				expect.arrayContaining([
+					"state=success",
+					"description=Reviewed through round 3; 1 later commit was not reviewed.",
+				]),
+			);
 		} finally {
 			f.clean();
 		}

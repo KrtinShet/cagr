@@ -25,7 +25,7 @@ import {
 	snapshotNotice,
 } from "../guards/protected-turn";
 import { insideRoot } from "../paths";
-import { gateResult, reachFrom } from "../review/gate";
+import { gateAtHead } from "../review/gate";
 import { readRecord, recordPath } from "../review/store";
 import { formatLayout, type LayoutRule, layoutFindings } from "../rules/layout";
 import {
@@ -199,12 +199,7 @@ async function reviewGate(
 			};
 	}
 	const record = readRecord(recordPath(git.commonDir, branch));
-	const result = gateResult(
-		record,
-		head,
-		config,
-		await reachFrom(record, head, cwd),
-	);
+	const result = await gateAtHead(record, head, config, cwd);
 	if (result.kind === "deny")
 		return {
 			kind: "deny",

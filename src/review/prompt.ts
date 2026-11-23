@@ -32,8 +32,8 @@ export type ReviewContext = {
 	stale: string[];
 	/** Findings the verifier already judged twice at this head: they are not judged again here. */
 	spent: string[];
-	/** Past the round cap: findings fixed in this cycle are checked again, in case a later commit broke the fix. */
-	capped: boolean;
+	/** On the final diff round, recheck fixes made in this cycle. */
+	recheckFixes: boolean;
 };
 
 const strict = (properties: Record<string, unknown>) => ({
@@ -139,7 +139,7 @@ export function findingsToVerify(context: ReviewContext) {
 				recheckFix ||
 				(finding.severity === "important" && finding.status === "open")
 			);
-		if (context.capped) return recheckFix || finding.status === "open";
+		if (context.recheckFixes) return recheckFix || finding.status === "open";
 		return finding.status === "open";
 	});
 }

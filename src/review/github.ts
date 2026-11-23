@@ -299,6 +299,7 @@ export async function ciReview(
 	return {
 		complete: !outcome.round?.error && posted === "" && saved === "",
 		ok: outcome.round?.error ? outcome.open.length === 0 : outcome.passed,
+		coverage: outcome.coverage,
 		report,
 	};
 }

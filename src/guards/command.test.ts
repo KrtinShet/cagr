@@ -301,3 +301,13 @@ test("uses the configured gate edit switch independently of block_hook_skips", (
 	);
 	expect(check("CAGR_ALLOW_GATE_EDIT=1 bun fix")).toBeNull();
 });
+
+test.each([
+	"CAGR_ALLOW_EXTRA_REVIEW=1 cagr review",
+	"export CAGR_ALLOW_EXTRA_REVIEW=1",
+	"env CAGR_ALLOW_EXTRA_REVIEW=1 bun src/cli.ts review",
+])("refuses the human review switch in %s", (line) => {
+	expect(onFeature(line)).toContain(
+		"CAGR_ALLOW_EXTRA_REVIEW is for humans only",
+	);
+});

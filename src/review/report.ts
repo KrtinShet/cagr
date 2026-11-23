@@ -1,6 +1,8 @@
 import { run } from "../run";
 import {
 	answerHint,
+	cappedFix,
+	cappedNext,
 	cappedReview,
 	findingLine,
 	reviewPreparation,
@@ -10,7 +12,6 @@ import type { ReviewOutcome } from "./review";
 import {
 	type AnswerKind,
 	blocking,
-	discoveryRounds,
 	type ReviewFinding,
 	type ReviewRecord,
 } from "./types";
@@ -32,6 +33,10 @@ export function reviewReport(
 ): string {
 	if (outcome.skipped) {
 		const open = outcome.open;
+		if (outcome.capped)
+			return open.length > 0
+				? `${outcome.skipped}\n\nOpen Important findings:\n${open.map(block).join("\n")}\n\n${cappedFix}`
+				: outcome.skipped;
 		return open.length > 0
 			? `${outcome.skipped}\n\nStill open:\n${open.map(block).join("\n")}\n\nFix them, commit, and run \`cagr review\` again. ${answerHint(open[0]?.id ?? "f1")}`
 			: outcome.skipped;
@@ -45,7 +50,7 @@ export function reviewReport(
 		return `The reviewer could not run: ${round.error}\n\n${gate} Fix the reviewer and run \`cagr review\` again.\n\n${reviewPreparation}`;
 	}
 	const sections: string[] = [
-		`${round?.scope === "verify" ? "Verifier-only check" : `Round ${round?.n ?? 1}`}${round ? ` (${round.scope}, ${round.effort}, ${round.tier} risk, ${round.reviewer})` : ""}: ${round?.summary ?? ""}`,
+		`Round ${round?.n ?? 1}${round ? ` (${round.scope}, ${round.effort}, ${round.tier} risk, ${round.reviewer})` : ""}: ${round?.summary ?? ""}`,
 	];
 	if (outcome.fixed.length > 0)
 		sections.push(
@@ -68,22 +73,17 @@ export function reviewReport(
 			`Still open from earlier rounds:\n${older.map(block).join("\n")}`,
 		);
 	if (outcome.held.length > 0) sections.push(outcome.held.join("\n"));
+	const capped = round && round.scope !== "scan" && round.n >= maxRounds;
+	if (capped) sections.push(cappedReview(maxRounds));
 	if (open.length === 0)
 		sections.push(
 			"Passed. No Important finding is open. Push the reviewed commits, then open or mark the pull request ready.",
 		);
-	else {
-		const steps = `Next: fix each Important finding, commit, and run \`cagr review\` again. It reviews only the new commits. ${answerHint(open[0]?.id ?? "f1")}`;
-		sections.push(steps);
-		if (discoveryRounds(outcome.record) >= maxRounds)
-			sections.push(cappedReview);
-	}
-	if (
-		round?.scope === "verify" &&
-		open.length === 0 &&
-		discoveryRounds(outcome.record) >= maxRounds
-	)
-		sections.push(cappedReview);
+	else if (capped) sections.push(cappedNext, cappedFix);
+	else
+		sections.push(
+			`Next: fix or answer the Important findings. Commit fixes and run \`cagr review\` again to check the new commits. ${answerHint(open[0]?.id ?? "f1")}`,
+		);
 	sections.push(reviewPreparation);
 	return sections.join("\n\n");
 }

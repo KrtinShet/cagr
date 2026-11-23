@@ -1,14 +1,20 @@
 import type { Config } from "../config/schema";
 import { run } from "../run";
 import {
-	discoveryRounds,
+	completedRounds,
 	type ReviewFinding,
 	type ReviewRecord,
 } from "./types";
 
 export type GateResult =
-	| { kind: "allow"; notice?: string }
-	| { kind: "deny"; reason: string };
+	| { kind: "allow"; notice?: string; coverage?: string }
+	| {
+			kind: "deny";
+			reason: string;
+			openCount?: number;
+			coverage?: string;
+			capped?: true;
+	  };
 
 export const runReview =
 	"Run `cagr review`. It starts a reviewer agent in a fresh context and takes a few minutes, so give the command a 15 minute timeout.";
@@ -23,10 +29,16 @@ export const reviewPreparation = [
 	.join("\n");
 
 export const reviewOrder =
-	"Commit, run `cagr review`, fix or answer every Important finding, then re-check any new commits. Push once the review passes.";
+	"Commit, run `cagr review`, fix or answer Important findings, and re-check while rounds remain. Push once, after every Important finding is verified fixed or answered.";
 
-export const cappedReview =
-	"The round cap has been reached, so no further full round runs. For new commits, `cagr review` runs finders on their diff and the verifier on earlier findings.";
+export const cappedReview = (maxRounds: number) =>
+	`Review is capped at ${maxRounds} round${maxRounds === 1 ? "" : "s"} for this branch.`;
+
+export const cappedNext =
+	'Fix only findings that break the intended case, answer the rest with `cagr review answer <id> --wrong|--intentional|--minor "<why>"`, then push.';
+
+export const cappedFix =
+	"A fix still needs verification. Ask a human to run the extra round if it is available.";
 
 export const answerHint = (id: string) =>
 	`If a finding is wrong or intentional, answer it instead: \`cagr review answer ${id} --wrong "<why>"\` (or --intentional, or --minor). A person reads every answer.`;
@@ -171,12 +183,63 @@ export function openAt(
 	return prior ? open.filter((finding) => finding.round <= prior.n) : null;
 }
 
+/** Describes the gap since the last completed round, excluding commits from the base. */
+export async function unreviewedNotice(
+	record: ReviewRecord,
+	head: string,
+	cwd: string,
+): Promise<string | undefined> {
+	if (record.rounds.some((round) => !round.error && round.head === head))
+		return;
+	const last = record.rounds.findLast((round) => !round.error);
+	if (!last) return;
+	const prefix = `Reviewed through round ${last.n};`;
+	const remoteBase = await run(
+		["git", "rev-parse", "--verify", "-q", `origin/${record.base}^{commit}`],
+		cwd,
+	);
+	const count = await run(
+		[
+			"git",
+			"rev-list",
+			"--count",
+			head,
+			"--not",
+			"--ignore-missing",
+			last.head,
+			remoteBase.ok ? remoteBase.stdout.trim() : record.base,
+			"--",
+		],
+		cwd,
+	);
+	const later = count.ok ? Number(count.stdout.trim()) : 0;
+	return later > 0
+		? `${prefix} ${later} later commit${later === 1 ? " was" : "s were"} not reviewed.`
+		: `${prefix} this commit was not reviewed.`;
+}
+
+export async function gateAtHead(
+	record: ReviewRecord | null,
+	head: string | null,
+	config: Config,
+	cwd: string,
+): Promise<GateResult> {
+	const [reach, coverage] = await Promise.all([
+		reachFrom(record, head, cwd),
+		record && head && completedRounds(record) >= config.review.max_rounds
+			? unreviewedNotice(record, head, cwd)
+			: undefined,
+	]);
+	return gateResult(record, head, config, reach, coverage);
+}
+
 /** Whether the commit `head` may become a pull request. */
 export function gateResult(
 	record: ReviewRecord | null,
 	head: string | null,
 	config: Config,
 	reach?: Reach,
+	coverage?: string,
 ): GateResult {
 	const last = record?.rounds.at(-1);
 	if (!record || !last)
@@ -184,19 +247,38 @@ export function gateResult(
 			kind: "deny",
 			reason: `This branch has not been reviewed. ${reviewOrder} Give the review a 15 minute timeout, then run this command again.`,
 		};
-	const open = openAt(record, head ?? last.head, reach);
-	if (open === null) {
-		const next =
-			discoveryRounds(record) >= config.review.max_rounds
-				? cappedReview
-				: "Run `cagr review` to check the new commits.";
-		return {
-			kind: "deny",
-			reason: `This commit differs from the last review (${last.head.slice(0, 7)}). ${next} Fix or answer every Important finding, then push and run this command again.`,
-		};
-	}
+	const target = head ?? last.head;
 	const list = (findings: ReviewFinding[]) =>
 		findings.map((finding) => `- ${findingLine(finding)}`).join("\n");
+	if (completedRounds(record) >= config.review.max_rounds) {
+		const remaining = unresolved(record, target, reach);
+		if (remaining.length === 0)
+			return coverage
+				? { kind: "allow", notice: coverage, coverage }
+				: { kind: "allow" };
+		return {
+			kind: "deny",
+			openCount: remaining.length,
+			capped: true,
+			coverage,
+			reason: [
+				cappedReview(config.review.max_rounds),
+				coverage,
+				`Open Important findings:\n${list(remaining)}`,
+				cappedNext,
+				cappedFix,
+			]
+				.filter(Boolean)
+				.join("\n\n"),
+		};
+	}
+	const open = openAt(record, target, reach);
+	if (open === null) {
+		return {
+			kind: "deny",
+			reason: `This commit differs from the last review (${last.head.slice(0, 7)}). Run \`cagr review\` to check the new commits. Fix or answer every Important finding, then push and run this command again.`,
+		};
+	}
 	if (last.error && (head === null || last.head === head)) {
 		// Fail open only on what the failed round would have checked: findings already known still hold.
 		const held = open.filter((finding) => holdsOnError(finding, reach));
@@ -207,16 +289,14 @@ export function gateResult(
 				}
 			: {
 					kind: "deny",
+					openCount: held.length,
 					reason: `The last review could not run (${last.error}), and earlier rounds left ${held.length} important problem${held.length === 1 ? "" : "s"} open:\n${list(held)}\n\nFix the findings, commit, and re-check with \`cagr review\` before pushing. ${answerHint(held[0]?.id ?? "f1")}`,
 				};
 	}
 	if (open.length === 0) return { kind: "allow" };
-	const capped =
-		discoveryRounds(record) >= config.review.max_rounds
-			? `\n\n${cappedReview}`
-			: "";
 	return {
 		kind: "deny",
-		reason: `The review found ${open.length} important problem${open.length === 1 ? "" : "s"} still open:\n${list(open)}\n\nFix the findings, commit, and re-check with \`cagr review\` before pushing. ${answerHint(open[0]?.id ?? "f1")}${capped}`,
+		openCount: open.length,
+		reason: `The review found ${open.length} important problem${open.length === 1 ? "" : "s"} still open:\n${list(open)}\n\nFix the findings, commit, and re-check with \`cagr review\` before pushing. ${answerHint(open[0]?.id ?? "f1")}`,
 	};
 }
