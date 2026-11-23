@@ -166,6 +166,39 @@ export const configSchema: Node = obj({
 		},
 		{ description: "Git rules." },
 	),
+	admission: obj({
+		enabled: bool({
+			description: "Enforce memory admission. Defaults to true.",
+		}),
+		light: strings(
+			"Command prefixes that need no admission. Overrides medium and heavy.",
+		),
+		medium: strings(
+			"Medium command prefixes. Replaces the built-in medium list.",
+		),
+		heavy: strings("Heavy command prefixes. Replaces the built-in heavy list."),
+		pool_tokens: num({
+			min: 1,
+			description: "Optional cap on usable memory tokens for this repo.",
+		}),
+		linux_some_avg10: num({
+			min: 0,
+			description: "Hold above this Linux PSI some avg10. Defaults to 10.",
+		}),
+		linux_full_avg10: num({
+			min: 0,
+			description: "Hold above this Linux PSI full avg10. Defaults to 1.",
+		}),
+		mac_pressure_level: num({
+			min: 1,
+			description: "Hold at or above this macOS pressure level. Defaults to 2.",
+		}),
+		mac_swap_growth_mib: num({
+			min: 0,
+			description:
+				"Hold above this swap growth per sample in MiB. Defaults to 0.",
+		}),
+	}),
 	stack: arr(
 		obj(
 			{
@@ -462,6 +495,17 @@ export type Config = {
 		hooks_path: string;
 		worktree_only: boolean;
 		worktree_dir: string;
+	};
+	admission: {
+		enabled: boolean;
+		light: string[];
+		medium: string[];
+		heavy: string[];
+		pool_tokens: number | null;
+		linux_some_avg10: number;
+		linux_full_avg10: number;
+		mac_pressure_level: number;
+		mac_swap_growth_mib: number;
 	};
 	stack: Stack[];
 	lease: Lease[];

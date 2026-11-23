@@ -5,18 +5,76 @@ export type RunResult = {
 	stdout: string;
 	stderr?: string;
 	exitCode?: number | null;
+	signal?: NodeJS.Signals | number;
+	startError?: true;
 	ms: number;
 	timedOut: boolean;
+	admission?: "deferred" | "load-tainted";
 };
 
 export type RunOptions = {
 	timeoutMs?: number;
 	processGroup?: boolean;
+	waitForGroup?: boolean;
+	closePipesAfterExit?: boolean;
+	cleanupHandoff?: { deadline: number; keepWatching: () => void };
+	log?: (line: string) => void;
 	env?: Record<string, string | undefined>;
 	stdin?: string;
+	inherit?: boolean;
+	onSpawn?: (pid: number) => void;
 };
 
 const quiet = { NO_COLOR: "1", FORCE_COLOR: "0" };
+const groupGraceMs = 10_000;
+const killGraceMs = 250;
+const pipeGraceMs = 1000;
+export const cleanupLimitMs = 120_000;
+
+function within<T>(promise: Promise<T>, ms: number) {
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	return Promise.race([
+		promise,
+		new Promise<null>((resolve) => {
+			timer = setTimeout(() => resolve(null), Math.max(0, ms));
+		}),
+	]).finally(() => clearTimeout(timer));
+}
+
+function signalGroup(pid: number, signal: NodeJS.Signals | 0) {
+	try {
+		process.kill(-pid, signal);
+		return true;
+	} catch (error) {
+		const code = (error as NodeJS.ErrnoException).code;
+		if (code === "ESRCH") return false;
+		if (code !== "EPERM") throw error;
+		// macOS can return EPERM for an orphaned group whose members are all zombies.
+		const snapshot = Bun.spawnSync(["/bin/ps", "-axo", "pgid=,stat="], {
+			timeout: 500,
+			stderr: "ignore",
+		});
+		return (
+			!snapshot.success ||
+			snapshot.stdout
+				.toString()
+				.split("\n")
+				.some((line) => {
+					const [group, state] = line.trim().split(/\s+/);
+					return Number(group) === pid && !state?.startsWith("Z");
+				})
+		);
+	}
+}
+
+async function waitForGroupExit(pid: number, deadline: number) {
+	while (signalGroup(pid, 0)) {
+		const remaining = deadline - performance.now();
+		if (remaining <= 0) return false;
+		await Bun.sleep(Math.min(50, remaining));
+	}
+	return true;
+}
 
 function capture(stream: ReadableStream<Uint8Array>) {
 	const reader = stream.getReader();
@@ -42,53 +100,123 @@ export async function run(
 	options: RunOptions = {},
 ): Promise<RunResult> {
 	const started = performance.now();
+	const { timeoutMs } = options;
+	const processGroup =
+		process.platform !== "win32" &&
+		(options.processGroup ?? timeoutMs !== undefined);
+	let child: Bun.Subprocess<
+		"ignore" | "inherit" | Uint8Array,
+		"pipe" | "inherit",
+		"pipe" | "inherit"
+	>;
 	try {
-		const { timeoutMs } = options;
-		const processGroup =
-			process.platform !== "win32" &&
-			(options.processGroup || timeoutMs !== undefined);
-		const child = Bun.spawn(argv, {
+		child = Bun.spawn(argv, {
 			cwd,
 			stdin:
 				options.stdin === undefined
-					? "ignore"
+					? options.inherit
+						? "inherit"
+						: "ignore"
 					: new TextEncoder().encode(options.stdin),
-			stdout: "pipe",
-			stderr: "pipe",
-			env: { ...process.env, ...quiet, ...options.env },
+			stdout: options.inherit ? "inherit" : "pipe",
+			stderr: options.inherit ? "inherit" : "pipe",
+			env: {
+				...process.env,
+				...(options.inherit ? {} : quiet),
+				...options.env,
+			},
 			detached: processGroup,
 		});
-		const out = capture(child.stdout);
-		const err = capture(child.stderr);
-		const completed = Promise.all([out.done, err.done, child.exited]).then(
-			([, , code]) => code,
+	} catch (error) {
+		const code = (error as NodeJS.ErrnoException).code;
+		return {
+			ok: false,
+			output: `Could not start \`${argv.join(" ")}\`: ${(error as Error).message}`,
+			stdout: "",
+			stderr: "",
+			exitCode:
+				code === "ENOENT"
+					? 127
+					: code === "EACCES" ||
+							code === "EPERM" ||
+							code === "ENOEXEC" ||
+							code === "EISDIR"
+						? 126
+						: null,
+			startError: true,
+			ms: Math.round(performance.now() - started),
+			timedOut: false,
+		};
+	}
+	const drain = processGroup && options.waitForGroup;
+	const finishOnExit = drain || options.closePipesAfterExit;
+	const log = options.log ?? console.error;
+	const kill = async () => {
+		if (
+			(!processGroup || !signalGroup(child.pid, "SIGKILL")) &&
+			child.exitCode === null
+		)
+			child.kill("SIGKILL");
+		const deadline = performance.now() + killGraceMs;
+		await within(child.exited, killGraceMs);
+		if (!drain || (await waitForGroupExit(child.pid, deadline))) return;
+		const limit = performance.now() + cleanupLimitMs;
+		const handoff = options.cleanupHandoff;
+		log(
+			`cagr: process group ${child.pid} is still alive after SIGKILL. Holding its admission tokens while it drains.`,
 		);
-		let timer: ReturnType<typeof setTimeout> | undefined;
+		if (
+			await waitForGroupExit(
+				child.pid,
+				Math.min(limit, handoff?.deadline ?? limit),
+			)
+		)
+			return;
+		if (handoff && handoff.deadline < limit) handoff.keepWatching();
+		else
+			log(
+				`cagr: WARNING: process group ${child.pid} is still alive after the cleanup deadline. Releasing its admission tokens. Inspect and stop the remaining processes.`,
+			);
+	};
+	try {
+		options.onSpawn?.(child.pid);
+		const out = child.stdout ? capture(child.stdout) : undefined;
+		const err = child.stderr ? capture(child.stderr) : undefined;
+		const streams = Promise.all([out?.done, err?.done]);
+		const completed = finishOnExit
+			? child.exited
+			: Promise.all([streams, child.exited]).then(([, code]) => code);
 		const exitCode =
 			timeoutMs === undefined
 				? await completed
-				: await Promise.race([
-						completed,
-						new Promise<null>((resolve) => {
-							timer = setTimeout(
-								() => resolve(null),
-								Math.max(0, timeoutMs - (performance.now() - started)),
-							);
-						}),
-					]).finally(() => clearTimeout(timer));
+				: await within(completed, started + timeoutMs - performance.now());
 		const timedOut = exitCode === null;
 		if (timedOut) {
-			try {
-				if (processGroup) process.kill(-child.pid, "SIGKILL");
-				else child.kill("SIGKILL");
-			} catch {
-				if (child.exitCode === null) child.kill("SIGKILL");
-			}
-			// A process outside the group can still hold an inherited pipe.
-			void Promise.allSettled([out.cancel(), err.cancel()]);
+			await kill();
+		} else if (finishOnExit) {
+			// Descendants can inherit the pipes even after the main process exits.
+			await within(
+				streams,
+				Math.min(
+					pipeGraceMs,
+					started + (timeoutMs ?? Infinity) - performance.now(),
+				),
+			);
 		}
-		const stdout = out.text();
-		const stderr = err.text();
+		if (timedOut || finishOnExit)
+			void Promise.allSettled([out?.cancel(), err?.cancel()]);
+		if (!timedOut && drain) {
+			const empty = await waitForGroupExit(
+				child.pid,
+				Math.min(
+					performance.now() + groupGraceMs,
+					started + (timeoutMs ?? Infinity),
+				),
+			);
+			if (!empty) await kill();
+		}
+		const stdout = out?.text() ?? "";
+		const stderr = err?.text() ?? "";
 		const ms = Math.round(performance.now() - started);
 		const output = timedOut
 			? `${stdout}${stderr}\nStopped after ${timeoutMs} ms. Make the check faster or narrow it with {files}.`
@@ -99,19 +227,13 @@ export async function run(
 			stdout,
 			stderr,
 			exitCode,
+			...(child.signalCode ? { signal: child.signalCode } : {}),
 			ms,
 			timedOut,
 		};
 	} catch (error) {
-		return {
-			ok: false,
-			output: `Could not start \`${argv.join(" ")}\`: ${(error as Error).message}`,
-			stdout: "",
-			stderr: "",
-			exitCode: null,
-			ms: Math.round(performance.now() - started),
-			timedOut: false,
-		};
+		await kill();
+		throw error;
 	}
 }
 

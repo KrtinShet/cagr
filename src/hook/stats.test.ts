@@ -67,7 +67,7 @@ test("records outcomes, isolates repeats by session, target and id, and skips pl
 		config.root,
 		() => config,
 	);
-	expect(await call("bun test")).toBe("");
+	expect(await call("bun test src/run.test.ts")).toBe("");
 	for (const session of ["one", "one", "two"])
 		expect(await call("npm install secret", session)).toContain('"deny"');
 	await call("npm install different", "one");
@@ -108,6 +108,7 @@ test("redacts arguments, assignments, shell expansion and unknown second words",
 
 test("edit commands block and the third failing stop escapes with rule attribution", async () => {
 	const config = repo({
+		admission: { enabled: false },
 		stack: [
 			{
 				language: "typescript",

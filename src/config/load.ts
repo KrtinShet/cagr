@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { defaultHeavy, defaultMedium } from "../admission/classify";
 import { resolveChangeRules } from "../changes/rules";
 import {
 	builtinResolver,
@@ -264,6 +265,7 @@ function applyDefaults(
 	const agents = (raw.agents ?? {}) as RawConfig;
 	const git = (raw.git ?? {}) as RawConfig;
 	const files = (raw.files ?? {}) as RawConfig;
+	const admission = (raw.admission ?? {}) as RawConfig;
 	const commands = (raw.commands ?? {}) as RawConfig;
 	const rules = (raw.rules ?? {}) as RawConfig;
 	const suppressions = (raw.suppressions ?? {}) as RawConfig;
@@ -314,6 +316,20 @@ function applyDefaults(
 			hooks_path: (git.hooks_path as string | undefined) ?? ".githooks",
 			worktree_only: (git.worktree_only as boolean | undefined) ?? false,
 			worktree_dir: (git.worktree_dir as string | undefined) ?? ".worktrees",
+		},
+		admission: {
+			enabled: (admission.enabled as boolean | undefined) ?? true,
+			light: (admission.light as string[] | undefined) ?? [],
+			medium: (admission.medium as string[] | undefined) ?? defaultMedium,
+			heavy: (admission.heavy as string[] | undefined) ?? defaultHeavy,
+			pool_tokens: (admission.pool_tokens as number | undefined) ?? null,
+			linux_some_avg10:
+				(admission.linux_some_avg10 as number | undefined) ?? 10,
+			linux_full_avg10: (admission.linux_full_avg10 as number | undefined) ?? 1,
+			mac_pressure_level:
+				(admission.mac_pressure_level as number | undefined) ?? 2,
+			mac_swap_growth_mib:
+				(admission.mac_swap_growth_mib as number | undefined) ?? 0,
 		},
 		stack: ((raw.stack as RawConfig[] | undefined) ?? []).map((stack) => {
 			const language = stack.language as string;

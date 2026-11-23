@@ -203,6 +203,62 @@
 			},
 			"description": "Git rules."
 		},
+		"admission": {
+			"type": "object",
+			"additionalProperties": false,
+			"properties": {
+				"enabled": {
+					"type": "boolean",
+					"description": "Enforce memory admission. Defaults to true."
+				},
+				"light": {
+					"type": "array",
+					"items": {
+						"type": "string"
+					},
+					"description": "Command prefixes that need no admission. Overrides medium and heavy."
+				},
+				"medium": {
+					"type": "array",
+					"items": {
+						"type": "string"
+					},
+					"description": "Medium command prefixes. Replaces the built-in medium list."
+				},
+				"heavy": {
+					"type": "array",
+					"items": {
+						"type": "string"
+					},
+					"description": "Heavy command prefixes. Replaces the built-in heavy list."
+				},
+				"pool_tokens": {
+					"type": "integer",
+					"minimum": 1,
+					"description": "Optional cap on usable memory tokens for this repo."
+				},
+				"linux_some_avg10": {
+					"type": "integer",
+					"minimum": 0,
+					"description": "Hold above this Linux PSI some avg10. Defaults to 10."
+				},
+				"linux_full_avg10": {
+					"type": "integer",
+					"minimum": 0,
+					"description": "Hold above this Linux PSI full avg10. Defaults to 1."
+				},
+				"mac_pressure_level": {
+					"type": "integer",
+					"minimum": 1,
+					"description": "Hold at or above this macOS pressure level. Defaults to 2."
+				},
+				"mac_swap_growth_mib": {
+					"type": "integer",
+					"minimum": 0,
+					"description": "Hold above this swap growth per sample in MiB. Defaults to 0."
+				}
+			}
+		},
 		"stack": {
 			"type": "array",
 			"items": {

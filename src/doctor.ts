@@ -1,5 +1,6 @@
 import { accessSync, constants, existsSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";
+import { admissionReport } from "./admission/doctor";
 import { checkChanges } from "./changes/check";
 import { testChanges } from "./changes/rules";
 import type { Config } from "./config/schema";
@@ -153,6 +154,7 @@ export async function doctor(
 		});
 	}
 	sections.push(["Config", configLines]);
+	sections.push(["Admission", await admissionReport(config.admission)]);
 	sections.push([
 		"Guards",
 		configuredGuards(config).map((guard) => ({

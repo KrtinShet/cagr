@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { appendFileSync, mkdirSync, openSync, readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { runAdmittedShell } from "./admission/run";
 import type { Config } from "./config/schema";
 import { gitContext, gitHookEnv } from "./git";
 import { commandReasons, gitOptionsWithValue } from "./guards/command";
@@ -9,7 +10,7 @@ import { render } from "./guards/finding";
 import { branchFinding, commitMessageFinding } from "./guards/names";
 import { PushLeases } from "./leases/push";
 import { leasePush, serialRef, useLeaseCommand } from "./leases/refs";
-import { run, runShell } from "./run";
+import { run } from "./run";
 
 export const gitHookNames = ["commit-msg", "pre-push"] as const;
 export type GitHookName = (typeof gitHookNames)[number];
@@ -227,15 +228,31 @@ export async function prePush(
 			`Serial lease checks were incomplete: ${(error as Error).message}. Run cagr lease list and verify ownership before landing.`,
 		);
 	}
+	let unchecked = false;
 	if (!messages.length)
 		await leases.verify(
 			async () => {
 				for (const command of config.git.pre_push) {
 					if (messages.length) break;
-					const result = await runShell(command, config.root, {
-						env: { ...gitEnv, ...leases.priorityEnv },
+					const result = await runAdmittedShell(
+						command,
+						config.root,
+						config.admission,
+						{
+							env: { ...gitEnv, ...leases.priorityEnv },
+							priority: "push",
+							timeoutMs: 1_800_000,
+							log: (line) => console.error(line),
+						},
+					).catch((error: unknown) => {
+						unchecked = true;
+						warnings.push(
+							`Memory admission could not run \`${command}\`. ${error} Run the check before merging.`,
+						);
+						return null;
 					});
-					if (!result.ok)
+					if (result?.admission) messages.push(result.output);
+					else if (result && !result.ok)
 						messages.push(
 							`\`${command}\` failed, so the push was stopped.\n${result.output.trimEnd()}`,
 						);
@@ -249,6 +266,7 @@ export async function prePush(
 		return { ok: false, messages: [...messages, ...warnings] };
 	}
 	if (
+		!unchecked &&
 		config.review.status &&
 		pushed.length > 0 &&
 		(!config.lease.length || writable)

@@ -1,10 +1,11 @@
 import { resolve } from "node:path";
+import { runAdmitted } from "./admission/run";
 import { checkChanges } from "./changes/check";
 import { testChanges } from "./changes/rules";
 import { checkAll } from "./check-all";
 import { annotations, ci, ciReport, publish } from "./ci";
 import { jsonSchema } from "./config/json-schema";
-import { ConfigError, loadConfig } from "./config/load";
+import { ConfigError, loadConfig, resolveConfig } from "./config/load";
 import { type AgentName, agentNames, type Config } from "./config/schema";
 import { doctor } from "./doctor";
 import {
@@ -45,6 +46,7 @@ import {
 	RuleError,
 	testRules,
 } from "./rules/rules";
+import { run } from "./run";
 import {
 	GitSetupError,
 	installGitHooks,
@@ -63,6 +65,8 @@ Usage: cagr <command>
   update [--check] [--version <v>]  Update the binary. --check exits 1 when an update is available.
   sync [--check]               Rewrite the generated agent and git hook files. --check fails on drift.
   install-git-hooks            Write the git hooks and set core.hooksPath.
+  run -- <cmd...>              Run a command through machine memory admission.
+  measure -- <cmd...>          Measure a command's peak memory and record its token cost.
   lease list                   Show serial leases and waiting branches on origin.
   lease take <name> [--wait]    Take a serial lease or join the line.
   lease renew <name>            Renew your branch's serial lease.
@@ -160,6 +164,57 @@ async function main(argv: string[]): Promise<number> {
 		return 0;
 	}
 	switch (command) {
+		case "run":
+		case "measure": {
+			if (args.length === 1 && ["--help", "-h"].includes(args[0] ?? "")) {
+				console.log(help);
+				return 0;
+			}
+			if (args[0] !== "--" || args.length < 2)
+				throw new UsageError(`Use cagr ${command} -- <cmd...>.`);
+			const cwd = process.cwd();
+			const config =
+				loadConfig(cwd) ?? resolveConfig({}, cwd, resolve(cwd, "cagr.toml"));
+			process.once("SIGINT", () => process.exit(130));
+			process.once("SIGTERM", () => process.exit(143));
+			const argv = args.slice(1);
+			let started = false;
+			let result: Awaited<ReturnType<typeof runAdmitted>>;
+			try {
+				result = await runAdmitted({
+					argv,
+					cwd,
+					config: config.admission,
+					measure: command === "measure",
+					options: {
+						inherit: true,
+						log: console.error,
+						onSpawn: () => {
+							started = true;
+						},
+					},
+				});
+			} catch (error) {
+				if (command === "measure") throw error;
+				if (started) {
+					console.error(
+						`cagr: memory admission failed after the command started. ${error}`,
+					);
+					return 2;
+				}
+				console.error(
+					`cagr: memory admission is unavailable. ${error} Running without admission.`,
+				);
+				result = await run(argv, cwd, { inherit: true });
+			}
+			if (
+				result.admission ||
+				result.startError ||
+				(result.exitCode == null && result.output)
+			)
+				console.error(result.output);
+			return result.admission ? 75 : (result.exitCode ?? 1);
+		}
 		case undefined:
 		case "help":
 		case "--help":

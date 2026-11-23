@@ -310,14 +310,27 @@ function doctor(project: string) {
 		"deny",
 		"blocked command",
 	);
-	hook(
-		project,
-		"claude",
-		"PreToolUse",
-		bash("bun add zod && bun test"),
-		"allow",
-		"bun",
-	);
+	for (const agent of ["claude", "codex"] as const) {
+		const command = "bun add zod && bun test";
+		for (const [script, advice] of [
+			[command, `cagr run -- sh -c '${command}'`],
+			["bun run verify", "cagr run -- bun run verify"],
+		] as const) {
+			const output = hook(
+				project,
+				agent,
+				"PreToolUse",
+				bash(script),
+				"deny",
+				script,
+			);
+			expect(
+				`${agent} advises the admission wrapper`,
+				output.includes(advice),
+				output,
+			);
+		}
+	}
 	hook(
 		project,
 		"claude",

@@ -45,8 +45,8 @@ export async function leaseCommand(config: Config, args: string[]) {
 	const lease = config.lease.find((entry) => entry.name === names[0]);
 	if (!lease)
 		throw new LeaseError(`Unknown lease "${names[0]}". Run cagr lease list.`);
-	if (action === "take")
-		return take(
+	if (action === "take") {
+		const result = await take(
 			git,
 			config,
 			lease,
@@ -54,6 +54,12 @@ export async function leaseCommand(config: Config, args: string[]) {
 			flags.length > 0,
 			console.log,
 		);
+		if (result === 0 && config.admission.enabled)
+			console.log(
+				"Run heavy follow-up commands with `CAGR_PRIORITY=lease cagr run -- <command>` while you hold the lease.",
+			);
+		return result;
+	}
 
 	const snapshot = await git.snapshot();
 	if (prune) {

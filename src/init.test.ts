@@ -227,8 +227,9 @@ test("init and dry-run describe resolved guards and commands, including fragment
 		"npm, npx, pnpm, pnpx, yarn (use bun for JavaScript)",
 	);
 	expect(preview.enforcement).toContain("pushes to main");
+	expect(preview.enforcement).toContain("unwrapped medium and heavy commands");
 	expect(preview.enforcement).toContain(
-		"Will deny: new lint suppressions (eslint-disable, @ts-ignore, # noqa, ...)",
+		"new lint suppressions (eslint-disable, @ts-ignore, # noqa, ...)",
 	);
 	expect(preview.enforcement).toContain("edits to biome.json");
 	expect(preview.enforcement).toContain("edits to eslint.config.*");

@@ -117,6 +117,7 @@ test("two clones contend and the non-holder's migration push is refused", async 
 	expect(taken.stdout).toContain(
 		"Acquired db-migrations for builder-a.\nMerge main and regenerate.",
 	);
+	expect(taken.stdout).toContain("CAGR_PRIORITY=lease cagr run -- <command>");
 	const queued = await b.lease("take");
 	expect(queued.exitCode).toBe(1);
 	expect(queued.stdout).toContain("held by builder-a, builder-b is #1 in line");

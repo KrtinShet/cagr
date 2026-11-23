@@ -40,7 +40,7 @@ const loginEnv = {
 const localRun: typeof run = (argv, cwd, options) =>
 	run(argv, cwd, {
 		...options,
-		processGroup: process.platform !== "win32",
+		processGroup: options?.processGroup ?? process.platform !== "win32",
 		env: { ...options?.env, ...loginEnv },
 	});
 
@@ -172,13 +172,18 @@ async function checkPullRequest(
 	};
 	const git = (...args: string[]) =>
 		checked(["git", `--git-dir=${gitDir}`, ...args], scratch, 300_000);
-	const post = async (context: string, ok: boolean, description: string) => {
+	const post = async (
+		context: string,
+		ok: boolean,
+		description: string,
+		deferred = false,
+	) => {
 		const result = await postStatus(
 			gh,
 			pr.head,
 			{
 				context,
-				state: ok ? "success" : "failure",
+				state: ok ? "success" : deferred ? "pending" : "failure",
 				description,
 			},
 			pr.repo,
@@ -215,6 +220,7 @@ async function checkPullRequest(
 		let ok = true;
 		if (tasks.checks) {
 			let checksOk = false;
+			let deferred = false;
 			try {
 				await git("worktree", "add", "--detach", worktree, pr.head);
 				const config = readConfig(worktree);
@@ -234,11 +240,13 @@ async function checkPullRequest(
 						execute(["git", ...gitAuth, ...args], cwd, options),
 					),
 					renewLeaseFor,
-					runCheck: (command, cwd, options) =>
-						execute(shellArgv(command), cwd, options),
+					executeCheck: execute,
 				});
 				log(ciReport(result));
 				checksOk = result.ok;
+				deferred =
+					!checksOk &&
+					result.checks.every((entry) => entry.ok || entry.deferred);
 			} catch (error) {
 				log((error as Error).message);
 			}
@@ -247,7 +255,10 @@ async function checkPullRequest(
 				checksOk,
 				checksOk
 					? "Local CI checks passed."
-					: "Local CI checks failed. See the watch log or rerun cagr ci --pr.",
+					: deferred
+						? "Local CI checks deferred under load. Rerun when the machine is quieter."
+						: "Local CI checks failed. See the watch log or rerun cagr ci --pr.",
+				deferred,
 			);
 			ok = checksOk && sent;
 		}

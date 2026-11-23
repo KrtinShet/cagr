@@ -938,7 +938,13 @@ test("a folder in place of the lockfile still blocks the other protected files",
 });
 
 test.each([
-	["an integrity hash", (text: string) => text.replace(/sha512-./, "sha512-A")],
+	[
+		"an integrity hash",
+		(text: string) =>
+			text.replace(/sha512-./, (match) =>
+				match.endsWith("A") ? "sha512-B" : "sha512-A",
+			),
+	],
 	[
 		"a resolved version",
 		(text: string) => text.replace('"pad@1.0.0"', '"pad@1.1.0"'),

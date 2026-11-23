@@ -7,6 +7,7 @@ test("the brief lists what the config enforces, briefly", () => {
 	const text = brief(gerb, []);
 	expect(text.split("\n")).toEqual([
 		"cagr checks this repo. When it blocks something, its message says what to do instead.",
+		"- Medium and heavy commands run through `cagr run --`.",
 		"- Do not add suppression comments. Fix the cause, or tell the user which rule gets in the way and why.",
 		"- Package managers: bun for JavaScript.",
 		'- Git: never push to main, push a branch and open a pull request; branches look like feat/deal-pipeline; commit subjects look like "feat(deals): add pipeline board"; no force pushes; no --no-verify.',

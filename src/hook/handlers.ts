@@ -1,5 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
+import { admissionCommand, wrappedCommands } from "../admission/classify";
+import { runAdmittedShell } from "../admission/run";
 import { brief } from "../brief";
 import { checkChanges } from "../changes/check";
 import type { Config } from "../config/schema";
@@ -83,9 +85,20 @@ export async function handle(
 					? await commandBefore(input, config)
 					: await fileBeforeEdit(input, config);
 			if (decision.kind === "allow") {
-				const notice = await rememberProtected(file, input, config).catch(() =>
-					snapshotNotice(file),
-				);
+				const auditedInput = input.command
+					? {
+							...input,
+							command: [
+								input.command,
+								...wrappedCommands(input.command, config),
+							].join("\n"),
+						}
+					: input;
+				const notice = await rememberProtected(
+					file,
+					auditedInput,
+					config,
+				).catch(() => snapshotNotice(file));
 				if (startNotice || notice)
 					return {
 						...decision,
@@ -112,8 +125,10 @@ async function commandBefore(
 	config: Config,
 ): Promise<Decision> {
 	if (!input.command) return { kind: "allow" };
+	const wrapped = wrappedCommands(input.command, config);
+	const commands = [input.command, ...wrapped];
 	let context = { branch: null as string | null, inMainCheckout: false };
-	if (needsGitContext(input.command, config)) {
+	if (commands.some((command) => needsGitContext(command, config))) {
 		const git = await gitContext(input.cwd);
 		context = {
 			branch: git.branch,
@@ -123,10 +138,34 @@ async function commandBefore(
 				git.toplevel === git.mainCheckout,
 		};
 	}
-	const early =
-		commandFinding(input.command, config, context) ??
-		agentApprovalFinding(input.command, config);
-	if (early) return { kind: "deny", reason: render(early) };
+	for (const command of commands) {
+		const early =
+			commandFinding(command, config, context) ??
+			agentApprovalFinding(command, config);
+		if (early) return { kind: "deny", reason: render(early) };
+	}
+	if (wrapped.some((command) => isGateCommand(command, config)))
+		return {
+			kind: "deny",
+			reason: render({
+				id: "review-gate",
+				reason:
+					"Run the pull request command directly so cagr can check its branch and body.",
+			}),
+		};
+	const wrapper = admissionCommand(
+		input.command,
+		config,
+		input.commandCwd ?? input.cwd,
+	);
+	if (wrapper)
+		return {
+			kind: "deny",
+			reason: render({
+				id: "admission",
+				reason: `This command needs memory admission. Rerun as ${wrapper}`,
+			}),
+		};
 	if (!isGateCommand(input.command, config)) return { kind: "allow" };
 	const plan = gatePlan(input.command, config, input.cwd);
 	if ("finding" in plan) return { kind: "deny", reason: render(plan.finding) };
@@ -565,14 +604,35 @@ async function turnChecks(state: TurnState, config: Config, deadline: number) {
 			]);
 	}
 	let commandTimedOut = false;
+	const loadNotices = new Set<string>();
 	const checks = [...commands]
 		.filter(
 			([command, paths]) => !command.includes("{files}") || paths.length > 0,
 		)
 		.map(async ([command, paths]): Promise<CheckResult> => {
-			const result = await runShell(withFiles(command, paths), config.root, {
-				timeoutMs: Math.max(1, Math.floor(deadline - performance.now())),
+			const result = await runAdmittedShell(
+				withFiles(command, paths),
+				config.root,
+				config.admission,
+				{
+					deadline,
+					log: (line) => {
+						if (line.startsWith("cagr:")) loadNotices.add(line);
+					},
+				},
+			).catch((error: unknown) => {
+				loadNotices.add(`cagr: turn-end memory admission error. ${error}`);
+				return null;
 			});
+			if (!result || result.admission) {
+				if (result?.admission) loadNotices.add(`Unchecked: ${result.output}`);
+				observe(
+					commandId("on_turn_end", command),
+					"fail-open",
+					commandTarget(command),
+				);
+				return { name: `\`${command}\``, ok: true, output: "" };
+			}
 			timings.push({ event: "turn.end", check: command, ms: result.ms });
 			if (result.timedOut) commandTimedOut = true;
 			if (!result.ok)
@@ -629,6 +689,7 @@ async function turnChecks(state: TurnState, config: Config, deadline: number) {
 	if (layout) results.push(layout);
 	recordTimings(config.root, timings);
 	const uncheckedNotice = [
+		...loadNotices,
 		changeResult?.unchecked ? changeResult.output : "",
 		commandTimedOut || rulesTimedOut
 			? "Unchecked: turn-end checks exceeded the whole-hook deadline. Run the configured checks and cagr rules check before merging."

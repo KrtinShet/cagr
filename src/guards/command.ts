@@ -1,3 +1,4 @@
+import { reservationEnv } from "../admission/run";
 import type { Config } from "../config/schema";
 import {
 	allowLeaseBreak,
@@ -137,6 +138,11 @@ function simpleCommandFinding(
 		return {
 			id: "gate-edit-env",
 			reason: `${extraReviewEnv} is for humans only. Answer the remaining Important findings, or ask the user to run the extra round.`,
+		};
+	if (assigns(reservationEnv))
+		return {
+			id: "gate-edit-env",
+			reason: `${reservationEnv} is for humans only. Remove the assignment and let cagr set it when it admits the command.`,
 		};
 	if (assigns(allowLeaseBreak))
 		return {
