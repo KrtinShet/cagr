@@ -112,11 +112,11 @@ test("a suppression git error fails open and tells the human", async () => {
 });
 
 test.each(["claude", "codex"] as const)(
-	"%s rewrites a suite using the configured cagr command",
+	"%s denies admission without rewriting Bash",
 	async (agent) => {
 		const repo = config({ agents: { command: "bun {root}/src/cli.ts" } });
 		const tool_input = {
-			command: "bun add zod && bun test",
+			command: "cd subdir && bun run verify",
 			description: "Run the tests",
 		};
 		const output = JSON.parse(
@@ -130,11 +130,10 @@ test.each(["claude", "codex"] as const)(
 		);
 		expect(output.hookSpecificOutput).toEqual({
 			hookEventName: "PreToolUse",
-			permissionDecision: "allow",
-			updatedInput: {
-				...tool_input,
-				command: `bun ${repo.root}/src/cli.ts run -- bash -c 'bun add zod && bun test'`,
-			},
+			permissionDecision: "deny",
+			permissionDecisionReason: expect.stringContaining(
+				`Rerun as bun ${repo.root}/src/cli.ts run -- sh -c 'cd subdir && bun run verify'`,
+			),
 		});
 	},
 );

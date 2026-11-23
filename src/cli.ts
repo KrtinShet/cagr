@@ -200,7 +200,11 @@ async function main(argv: string[]): Promise<number> {
 				);
 				result = await run(argv, cwd, { inherit: true });
 			}
-			if (result.admission || (result.exitCode == null && result.output))
+			if (
+				result.admission ||
+				result.startError ||
+				(result.exitCode == null && result.output)
+			)
 				console.error(result.output);
 			return result.admission ? 75 : (result.exitCode ?? 1);
 		}

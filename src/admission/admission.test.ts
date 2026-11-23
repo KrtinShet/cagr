@@ -2,6 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import {
 	closeSync,
 	mkdtempSync,
+	readdirSync,
 	readFileSync,
 	rmSync,
 	writeFileSync,
@@ -244,7 +245,7 @@ test("queue admission respects the turn-end deadline", async () => {
 	expect(output).not.toContain("load: admitted");
 });
 
-test("command.before wraps direct suites and preserves command guards within budget", async () => {
+test("command.before denies unwrapped suites and preserves command guards within budget", async () => {
 	const cwd = fixture();
 	const config = resolveConfig(
 		{
@@ -268,8 +269,8 @@ test("command.before wraps direct suites and preserves command guards within bud
 		);
 	const start = performance.now();
 	expect(await before("bun run verify")).toMatchObject({
-		kind: "allow",
-		updatedCommand: "cagr run -- bun run verify",
+		kind: "deny",
+		reason: expect.stringContaining("Rerun as cagr run -- bun run verify"),
 	});
 	expect(await before("bun test src/run.test.ts --timeout 500")).toEqual({
 		kind: "allow",
@@ -281,8 +282,10 @@ test("command.before wraps direct suites and preserves command guards within bud
 		reason: expect.stringContaining("Keep changes."),
 	});
 	expect(await before("bun run lint && bun run e2e")).toMatchObject({
-		kind: "allow",
-		updatedCommand: "cagr run -- bash -c 'bun run lint && bun run e2e'",
+		kind: "deny",
+		reason: expect.stringContaining(
+			"Rerun as cagr run -- sh -c 'bun run lint && bun run e2e'",
+		),
 	});
 	expect(classifyArgv(["pnpm", "test"], config.admission).kind).toBe("medium");
 });
@@ -585,7 +588,7 @@ exec "$@"
 			} else {
 				const scope = readFileSync(join(cwd, "scope.log"), "utf8");
 				expect(scope).toMatch(
-					/--expand-environment=no[^\n]* -- printf %s \$HOME/,
+					/--expand-environment=no[^\n]* cagr-scope printf %s \$HOME/,
 				);
 			}
 		}
@@ -662,4 +665,146 @@ test("the explicit wrapper does not repeat a started command after watchdog fail
 	expect(output.match(/^command starts /gm)).toHaveLength(1);
 	expect(output).not.toContain("Running without admission");
 	expect(code).toBe(2);
+});
+
+test("an unrelated session cannot borrow a live reservation", async () => {
+	const cwd = fixture();
+	const holder = queued(cwd, ["sh", "-c", "read signal"]);
+	await holder.seen("load: admitted");
+	const tickets = join(cwd, ".cache/cagr/slots/tickets");
+	const [name] = readdirSync(tickets);
+	if (!name) throw new Error("Missing admission ticket");
+	const marker = `${name.replace(/\.json$/, "")}:1`;
+	const borrower = spawn(
+		cwd,
+		runner(`
+		const result = await runAdmitted({
+			argv: ["sleep", "0.01"], cwd, config, measure: false,
+			options: {
+				env: { CAGR_ADMISSION_HELD: ${JSON.stringify(marker)} },
+				deadline: performance.now() + 500,
+				pressure: () => ({ elevated: false, description: "normal" }),
+				log: console.error,
+			},
+		});
+		console.error(result.admission ?? result.exitCode);
+	`),
+	);
+	const { output } = await borrower.finished();
+	expect(output).toContain(`tokens held by pid ${holder.child.pid}`);
+	expect(output.trimEnd()).toEndWith("deferred");
+	holder.child.stdin.write("release\n");
+	expect((await holder.finished()).code).toBe(0);
+});
+
+test("tokens stay held after SIGKILL while the process group still exists", async () => {
+	const proc = spawn(
+		fixture(),
+		runner(`
+		const kill = process.kill;
+		let killedAt;
+		let group;
+		process.kill = (target, signal) => {
+			if (target < 0 && signal === "SIGKILL") {
+				killedAt = performance.now();
+				group = target;
+			}
+			if (target === group && signal === 0 && performance.now() - killedAt < 750)
+				return true;
+			return kill(target, signal);
+		};
+		const result = await runAdmitted({
+			argv: ["sleep", "30"], cwd, config, measure: false,
+			options: {
+				timeoutMs: 500,
+				log: console.error,
+				pressure: () => ({ elevated: false, description: "normal" }),
+			},
+		});
+		console.error(JSON.stringify({ timedOut: result.timedOut, drained: performance.now() - killedAt >= 750 }));
+	`),
+	);
+	const { output } = await proc.finished();
+	expect(output).toContain("Holding its admission tokens while it drains");
+	expect(output).toContain('{"timedOut":true,"drained":true}');
+});
+
+test("inherited pre-push finishes when a background process keeps its pipes open", async () => {
+	const proc = spawn(
+		fixture(),
+		runner(`
+		const script = ${JSON.stringify(`
+			import { prePush } from ${JSON.stringify(resolve(import.meta.dir, "../git-hooks.ts"))};
+			import { resolveConfig } from ${JSON.stringify(resolve(import.meta.dir, "../config/load.ts"))};
+			const cwd = process.cwd();
+			const config = resolveConfig({
+				git: { pre_push: ["sleep 3600 & echo check-finished; exit 0"] },
+			}, cwd, "cagr.toml");
+			const result = await prePush("", config, cwd);
+			console.log(JSON.stringify(result));
+			process.exit(result.ok ? 0 : 1);
+		`)};
+		const result = await runAdmitted({
+			argv: ["sh", "-c", 'sleep 0; exec "$@"', "sh", process.execPath, "-e", script],
+			cwd, config, measure: false,
+			options: {
+				timeoutMs: 3250, log: console.error,
+				pressure: () => ({ elevated: false, description: "normal" }),
+			},
+		});
+		console.error(result.stdout);
+		process.exit(result.exitCode ?? 1);
+	`),
+	);
+	const { code, output } = await proc.finished();
+	expect(output).toContain('"ok":true');
+	expect(code).toBe(0);
+});
+
+test("cagr run preserves 126, 127 and signal exit codes", async () => {
+	const cwd = fixture();
+	writeFileSync(join(cwd, "not-executable"), "echo should-not-run\n", {
+		mode: 0o600,
+	});
+	for (const [argv, expected] of [
+		[["./not-executable"], 126],
+		[["./missing"], 127],
+		[["sh", "-c", "kill -TERM $$"], 143],
+	] as const) {
+		const proc = spawn(cwd, [cliPath, "run", "--", ...argv]);
+		const { code, output } = await proc.finished();
+		expect(code, argv.join(" ")).toBe(expected);
+		if (expected !== 143) expect(output).toContain("Could not start");
+	}
+});
+
+test("a group still alive at the cleanup deadline produces an explicit release warning", async () => {
+	const proc = spawn(
+		fixture(),
+		runner(`
+		const kill = process.kill;
+		const now = performance.now.bind(performance);
+		let group;
+		let elapsed = 0;
+		process.kill = (target, signal) => {
+			if (target < 0 && signal === "SIGKILL") {
+				group = target;
+				performance.now = () => now() + (elapsed += 30_000);
+			}
+			if (target === group && signal === 0) return true;
+			return kill(target, signal);
+		};
+		await runAdmitted({
+			argv: ["sleep", "30"], cwd, config, measure: false,
+			options: {
+				timeoutMs: 180,
+				log: console.error,
+				pressure: () => ({ elevated: false, description: "normal" }),
+			},
+		});
+	`),
+	);
+	const { output } = await proc.finished();
+	expect(output).toContain("WARNING:");
+	expect(output).toContain("Releasing its admission tokens");
 });

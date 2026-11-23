@@ -300,12 +300,7 @@ export function wrappedCommands(line: string, config: Config): string[] {
 	return unwrap(line);
 }
 
-export function admissionCommand(
-	line: string,
-	config: Config,
-	cwd: string,
-	originalArgv?: string[],
-) {
+export function admissionCommand(line: string, config: Config, cwd: string) {
 	if (!supportsAdmission || !config.admission.enabled) return null;
 	const commands = wordsOf(line, commandLimit + 1);
 	const configured = agentProgram(config);
@@ -317,14 +312,13 @@ export function admissionCommand(
 				!wrappedArgv(words, configured) && classify(words).kind !== "light",
 		);
 	if (!needsWrapper) return null;
-	const advice = originalArgv
-		? originalArgv.map(shellQuote).join(" ")
-		: commands.length === 1 &&
-				programWords(commands[0] ?? [])
-					.map(shellQuote)
-					.join(" ") === line.trim()
+	const advice =
+		commands.length === 1 &&
+		programWords(commands[0] ?? [])
+			.map(shellQuote)
+			.join(" ") === line.trim()
 			? line.trim()
-			: `bash -c ${shellQuote(line)}`;
+			: `sh -c ${shellQuote(line)}`;
 	const program = configured?.map(shellQuote).join(" ") || "cagr";
 	return `${program} run -- ${advice}`;
 }

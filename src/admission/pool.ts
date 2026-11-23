@@ -72,6 +72,26 @@ export const ticketOrder = (a: Ticket, b: Ticket) =>
 export const describeTicket = (ticket: Ticket) =>
 	`pid ${ticket.pid}, ${ticket.repo} (${ticket.branch}), ${ticket.command}, waiting since ${new Date(ticket.since).toISOString()}`;
 
+function hasAncestor(ancestor: number) {
+	if (process.ppid === ancestor) return true;
+	const snapshot = Bun.spawnSync(["/bin/ps", "-axo", "pid=,ppid="], {
+		timeout: 500,
+		stderr: "ignore",
+	});
+	if (!snapshot.success) return false;
+	const parents = new Map<number, number>();
+	for (const line of snapshot.stdout.toString().trim().split("\n")) {
+		const [pid, parent] = line.trim().split(/\s+/).map(Number);
+		if (pid && parent) parents.set(pid, parent);
+	}
+	let pid = process.ppid;
+	for (let depth = 0; pid > 1 && depth < 64; depth++) {
+		pid = parents.get(pid) ?? 0;
+		if (pid === ancestor) return true;
+	}
+	return false;
+}
+
 export class Pool {
 	readonly directory: string;
 	private readonly tickets: string;
@@ -110,7 +130,12 @@ export class Pool {
 		if (!match) return false;
 		const path = join(this.tickets, `${match[1]}.json`);
 		const ticket = readJson<Ticket | null>(path, null);
-		if (!ticket || ticket.slots.length !== Number(match[2])) return false;
+		if (
+			!ticket ||
+			ticket.slots.length !== Number(match[2]) ||
+			!hasAncestor(ticket.pid)
+		)
+			return false;
 		const fd = tryLock(path);
 		if (fd === null) return true;
 		closeSync(fd);

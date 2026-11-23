@@ -84,15 +84,6 @@ export async function handle(
 					? await commandBefore(input, config)
 					: await fileBeforeEdit(input, config);
 			if (decision.kind === "allow") {
-				if (input.event === "command.before" && input.command) {
-					const updatedCommand = admissionCommand(
-						input.command,
-						config,
-						input.commandCwd ?? input.cwd,
-						input.commandArgv,
-					);
-					if (updatedCommand) decision.updatedCommand = updatedCommand;
-				}
 				const auditedInput = input.command
 					? {
 							...input,
@@ -159,6 +150,19 @@ async function commandBefore(
 				id: "review-gate",
 				reason:
 					"Run the pull request command directly so cagr can check its branch and body.",
+			}),
+		};
+	const wrapper = admissionCommand(
+		input.command,
+		config,
+		input.commandCwd ?? input.cwd,
+	);
+	if (wrapper)
+		return {
+			kind: "deny",
+			reason: render({
+				id: "admission",
+				reason: `This command needs memory admission. Rerun as ${wrapper}`,
 			}),
 		};
 	if (!isGateCommand(input.command, config)) return { kind: "allow" };

@@ -1,8 +1,10 @@
+import { closeSync, openSync } from "node:fs";
 import { totalmem } from "node:os";
-import { isAbsolute, resolve } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 import type { Config } from "../config/schema";
 import { gitContext } from "../git";
 import {
+	cleanupLimitMs,
 	type RunOptions,
 	type RunResult,
 	run,
@@ -11,6 +13,7 @@ import {
 } from "../run";
 import { classifyArgv } from "./classify";
 import {
+	cacheDir,
 	describeTicket,
 	Pool,
 	type Priority,
@@ -32,7 +35,6 @@ export type AdmissionOptions = RunOptions & {
 	priority?: "push";
 	execute?: typeof run;
 	deadline?: number;
-	log?: (line: string) => void;
 	pressure?: () => Pressure;
 };
 
@@ -60,21 +62,44 @@ function unsettled(
 
 // A pipe closes on SIGKILL as well as on a normal exit. A surviving command group
 // must stop when the owner of its memory tokens disappears.
-function watchOwner(pid: number, locks: number[]) {
-	const child = Bun.spawn(
-		[
-			"/bin/sh",
-			"-c",
-			'IFS= read -r done || /bin/kill -KILL -- "-$1" 2>/dev/null',
-			"cagr-watch",
-			String(pid),
-		],
-		{ stdio: ["pipe", "ignore", "ignore", ...locks], detached: true },
-	);
-	return async () => {
-		child.stdin.write("done\n");
+function watchOwner(pid: number, locks: number[], logPath?: string) {
+	const checks = Math.ceil(cleanupLimitMs / pollMs);
+	const logFd = logPath ? openSync(logPath, "a", 0o600) : undefined;
+	const child = (() => {
+		try {
+			return Bun.spawn(
+				[
+					"/bin/sh",
+					"-c",
+					`IFS= read -r done && exit 0
+/bin/kill -KILL -- "-$1" 2>/dev/null
+tries=0
+while /bin/kill -0 -- "-$1" 2>/dev/null; do
+	if [ "$tries" -eq "$2" ]; then
+		printf 'cagr: WARNING: process group %s is still alive after watchdog cleanup. Releasing its admission tokens. Inspect and stop the remaining processes.\\n' "$1" >&2
+		break
+	fi
+	sleep 0.25
+	tries=$((tries + 1))
+done`,
+					"cagr-watch",
+					String(pid),
+					String(checks),
+				],
+				{
+					stdio: ["pipe", "ignore", logFd ?? "inherit", ...locks],
+					detached: true,
+				},
+			);
+		} finally {
+			if (logFd !== undefined) closeSync(logFd);
+		}
+	})();
+	return async (keepWatching: boolean) => {
+		if (keepWatching) child.unref();
+		else child.stdin.write("done\n");
 		await child.stdin.end();
-		await child.exited;
+		if (!keepWatching) await child.exited;
 	};
 }
 
@@ -105,6 +130,10 @@ async function execute(
 				"OOMPolicy=kill",
 				...(heavy && !measure ? ["-p", `MemoryMax=${tokens}G`] : []),
 				"--",
+				"/bin/sh",
+				"-c",
+				'exec "$@"',
+				"cagr-scope",
 				...argv,
 			]
 		: argv;
@@ -124,6 +153,11 @@ async function execute(
 	const timer = setInterval(samplePressure, pollMs);
 	let sample: ReturnType<typeof memorySampler> | undefined;
 	let stopWatch: ReturnType<typeof watchOwner> | undefined;
+	let keepWatching = false;
+	const cleanupLog =
+		locks.length && options.deadline !== undefined
+			? join(cacheDir(), "cleanup.log")
+			: undefined;
 	try {
 		const result = await (options.execute ?? run)(command, cwd, {
 			...options,
@@ -133,9 +167,23 @@ async function execute(
 				: undefined,
 			processGroup: true,
 			waitForGroup: true,
+			...(cleanupLog && options.deadline !== undefined
+				? {
+						cleanupHandoff: {
+							deadline: options.deadline,
+							keepWatching: () => {
+								keepWatching = true;
+								options.log?.(
+									`cagr: the watchdog is retaining the tokens after the hook deadline. Cleanup warnings go to ${cleanupLog}.`,
+								);
+							},
+						},
+					}
+				: {}),
 			onSpawn: (pid) => {
 				options.onSpawn?.(pid);
-				if (locks.length || options.inherit) stopWatch = watchOwner(pid, locks);
+				if (locks.length || options.inherit)
+					stopWatch = watchOwner(pid, locks, cleanupLog);
 				if (measure) sample = memorySampler(pid, unit);
 			},
 		});
@@ -145,7 +193,7 @@ async function execute(
 		return { result, elevated, peak: sample?.() };
 	} finally {
 		clearInterval(timer);
-		await stopWatch?.();
+		await stopWatch?.(keepWatching);
 	}
 }
 
@@ -306,7 +354,7 @@ export async function runAdmitted(request: Request): Promise<RunResult> {
 		return (options.execute ?? run)(argv, cwd, {
 			...options,
 			// The outer watchdog covers this group and holds the tokens until it exits.
-			...(inherited ? { processGroup: false } : {}),
+			...(inherited ? { processGroup: false, closePipesAfterExit: true } : {}),
 			timeoutMs: Number.isFinite(limit) ? limit : undefined,
 		});
 	}

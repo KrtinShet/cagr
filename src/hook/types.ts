@@ -13,7 +13,6 @@ export type HookInput = {
 	sessionId: string;
 	cwd: string;
 	command: string | null;
-	commandArgv?: string[];
 	commandCwd?: string;
 	/** Absolute paths. */
 	files: string[];
@@ -24,11 +23,6 @@ export type HookInput = {
  * work after a tool call or a stop. `notice` is for the human.
  */
 export type Decision =
-	| {
-			kind: "allow";
-			context?: string;
-			notice?: string;
-			updatedCommand?: string;
-	  }
+	| { kind: "allow"; context?: string; notice?: string }
 	| { kind: "deny"; reason: string }
 	| { kind: "block"; reason: string; notice?: string };
