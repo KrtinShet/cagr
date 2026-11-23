@@ -143,7 +143,72 @@ describe("finding", () => {
 			await findInFiles(loadRules(config), ["/elsewhere/a.ts"], config.root),
 		).toEqual([]);
 	});
+
+	test("findings come in file order, then rule order within a file", async () => {
+		const other = noConsole
+			.replace("id: no-console-log", "id: no-console-error")
+			.replaceAll("console.log", "console.error");
+		const { root, config } = await repo({ "a.yml": noConsole, "b.yml": other });
+		await writeFile(join(root, "a.ts"), "console.error(1);\nconsole.log(2);\n");
+		await writeFile(join(root, "b.ts"), "console.log(3);\n");
+		const findings = await findInFiles(
+			loadRules(config),
+			[join(root, "a.ts"), join(root, "b.ts")],
+			root,
+		);
+		expect(findings.map((f) => `${f.path}:${f.line} ${f.rule}`)).toEqual([
+			"a.ts:2 no-console-log",
+			"a.ts:1 no-console-error",
+			"b.ts:1 no-console-log",
+		]);
+	});
 });
+
+test(
+	"checking many files frees each file's tree, and still finds everything",
+	async () => {
+		// A fresh process, so the memory it reports is this check's alone.
+		const dir = await mkdtemp(join(tmpdir(), "gw-rules-"));
+		await mkdir(join(dir, ".cagr/rules"), { recursive: true });
+		await writeFile(join(dir, ".cagr/rules/a.yml"), noConsole);
+		const body = "export const a = [1, 2, 3].map((x) => x * 2);\n".repeat(
+			20_000,
+		);
+		const files: string[] = [];
+		for (let i = 0; i < 24; i++) {
+			const file = join(dir, `f${i}.ts`);
+			await writeFile(file, `console.log(${i});\n${body}`);
+			files.push(file);
+		}
+		const script = join(dir, "run.ts");
+		await writeFile(
+			script,
+			`import { collectAfterBytes, findInFiles, loadRules } from ${JSON.stringify(join(import.meta.dir, "rules.ts"))};
+import { resolveConfig } from ${JSON.stringify(join(import.meta.dir, "../config/load.ts"))};
+const root = ${JSON.stringify(dir)};
+const files = ${JSON.stringify(files)};
+const rules = loadRules(resolveConfig({}, root, "test.toml"));
+await findInFiles(rules, files.slice(0, 1), root);
+const before = process.memoryUsage().rss;
+const findings = await findInFiles(rules, files, root);
+// Read at once: an await here would let napi free the trees and hide a leak.
+const grown = process.memoryUsage().rss - before;
+console.log(JSON.stringify({ findings: findings.length, grown, collectAfterBytes }));
+`,
+		);
+		const result = Bun.spawnSync(["bun", script]);
+		expect(result.stderr.toString()).toBe("");
+		const { findings, grown, collectAfterBytes } = JSON.parse(
+			result.stdout.toString(),
+		);
+		expect(findings).toBe(files.length);
+		// Enough source for several collections.
+		expect(body.length * files.length).toBeGreaterThan(4 * collectAfterBytes);
+		// Holding every tree grows by about 1.9 GB here.
+		expect(grown).toBeLessThan(200_000_000);
+	},
+	{ timeout: 60_000 },
+);
 
 describe("rules test", () => {
 	test("passes when examples behave", async () => {

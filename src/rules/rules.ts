@@ -492,14 +492,9 @@ type Match = {
 /** Where the code being matched lives: the repo root, and the file's repo-relative path when there is one. */
 type At = { root: string; path: string | null };
 
-function matches(
-	napi: Napi,
-	rule: Rule,
-	parser: string,
-	source: string,
-	at: At,
-): Match[] {
-	const tree = napi.parse(parser as never, source).root();
+type Tree = ReturnType<ReturnType<Napi["parse"]>["root"]>;
+
+function matches(rule: Rule, tree: Tree, source: string, at: At): Match[] {
 	const found: Match[] = [];
 	for (const node of tree.findAll(rule.matcher as never)) {
 		let message = rule.message;
@@ -556,17 +551,19 @@ export async function findInFiles(
 	files: string[],
 	root: string,
 ): Promise<RuleFinding[]> {
-	const work: { rule: Rule; path: string; file: string; parser: string }[] = [];
+	const work: { path: string; file: string; checks: Check[] }[] = [];
 	const wanted = new Map<Rule, Set<string>>();
 	for (const file of files) {
 		const path = insideRoot(root, file);
 		if (path === null || !existsSync(file)) continue;
+		const checks: Check[] = [];
 		for (const rule of rules) {
 			const read = ruleParserForFile(rule, file);
 			if (!read || !appliesTo(rule, path)) continue;
-			work.push({ rule, path, file, parser: read.parser });
+			checks.push({ rule, parser: read.parser });
 			wanted.set(rule, (wanted.get(rule) ?? new Set()).add(read.language));
 		}
+		if (checks.length > 0) work.push({ path, file, checks });
 	}
 	if (work.length === 0) return [];
 	// Only the languages of these files, so no other dynamic parser gets loaded.
@@ -574,26 +571,58 @@ export async function findInFiles(
 		[...wanted.values()].flatMap((set) => [...set].flatMap(languageParsers)),
 	);
 	compile(napi, wanted);
-	const sources = new Map<string, string>();
 	const findings: RuleFinding[] = [];
-	for (const { rule, path, file, parser } of work) {
-		if (!works(rule, parser)) continue;
-		let source = sources.get(file);
-		if (source === undefined) {
-			source = readFileSync(file, "utf8");
-			sources.set(file, source);
+	let parsed = 0;
+	for (const { path, file, checks } of work) {
+		const runnable = checks.filter(({ rule, parser }) => works(rule, parser));
+		if (runnable.length === 0) continue;
+		if (parsed >= collectAfterBytes) {
+			await freeTrees();
+			parsed = 0;
 		}
-		for (const match of matches(napi, rule, parser, source, { root, path }))
-			findings.push({
-				rule: rule.id,
-				path,
-				line: match.line,
-				column: match.column,
-				message: match.message,
-				instead: match.instead ?? rule.instead,
-			});
+		const source = readFileSync(file, "utf8");
+		// One tree per parser per file, shared by every rule: a tree per rule
+		// per file made each file's native memory many times over.
+		const trees = new Map<string, Tree>();
+		for (const { rule, parser } of runnable) {
+			let tree = trees.get(parser);
+			if (!tree) {
+				tree = napi.parse(parser as never, source).root();
+				trees.set(parser, tree);
+				parsed += source.length;
+			}
+			for (const match of matches(rule, tree, source, { root, path }))
+				findings.push({
+					rule: rule.id,
+					path,
+					line: match.line,
+					column: match.column,
+					message: match.message,
+					instead: match.instead ?? rule.instead,
+				});
+		}
 	}
 	return findings;
+}
+
+type Check = { rule: Rule; parser: string };
+
+/**
+ * Source parsed between collections. A tree and the nodes rules found in it
+ * take up to 50 times its source in native memory, so this keeps dead trees
+ * to tens of MB. Each collection costs a few milliseconds.
+ */
+export const collectAfterBytes = 500_000;
+
+/**
+ * Frees the native memory of trees nothing refers to. The garbage collector
+ * does not see a tree's native size, so it rarely runs on its own, and napi
+ * frees a collected tree only once the event loop turns. Without both, a check
+ * of every file in a large repo holds every tree it ever parsed.
+ */
+async function freeTrees() {
+	Bun.gc(true);
+	await new Promise((resolve) => setImmediate(resolve));
 }
 
 export function formatFinding(finding: RuleFinding) {
@@ -640,7 +669,10 @@ export async function testRules(
 							: null;
 				const found =
 					parser && skipped === null
-						? matches(napi, rule, parser, code, { root, path })
+						? matches(rule, napi.parse(parser as never, code).root(), code, {
+								root,
+								path,
+							})
 						: [];
 				const unchecked = found.find((match) => match.unchecked);
 				const count = unchecked ? 0 : found.length;
