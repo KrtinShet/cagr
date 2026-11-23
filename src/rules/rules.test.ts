@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { resolveConfig } from "../config/load";
@@ -197,6 +197,8 @@ console.log(JSON.stringify({ findings: findings.length, grown, collectAfterBytes
 `,
 		);
 		const result = Bun.spawnSync(["bun", script]);
+		// The files take about 23 MB.
+		await rm(dir, { recursive: true, force: true });
 		expect(result.stderr.toString()).toBe("");
 		const { findings, grown, collectAfterBytes } = JSON.parse(
 			result.stdout.toString(),
