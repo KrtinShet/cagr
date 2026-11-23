@@ -84,6 +84,7 @@ test("with review off, gh pr create is not gated", async () => {
 test("on a detached HEAD the gate denies and says how to name the branch", async () => {
 	const { repo, head, config, file, create } = await setup();
 	writeRecord(file, record([round({ head })], [], "feat/x"));
+	await repo.git("update-ref", "refs/remotes/origin/feat/x", head);
 	await repo.git("checkout", "-q", "--detach");
 	const decision = await handle(create(), config);
 	expect(decision.kind === "deny" && decision.reason).toContain(
@@ -136,6 +137,7 @@ test("gh pr ready checks the branch it names, and denies a number or another hea
 	await repo.git("checkout", "-q", "-b", "feat/b");
 	await repo.commit("feat: b", { "src/b.ts": "1\n" });
 	await repo.git("checkout", "-q", "feat/x");
+	await repo.git("update-ref", "refs/remotes/origin/feat/x", head);
 	expect(await handle(create("gh pr ready"), config)).toEqual({
 		kind: "allow",
 	});
@@ -161,6 +163,27 @@ test("gh pr ready checks the branch it names, and denies a number or another hea
 			config,
 		),
 	).toEqual({ kind: "allow" });
+});
+
+test("explicit create and ready require the reviewed commit on the remote-tracking branch", async () => {
+	const { repo, head, config, file, create } = await setup();
+	writeRecord(file, record([round({ head })], [], "feat/x"));
+	const remote = "refs/remotes/origin/feat/x";
+	await repo.git("update-ref", remote, "main");
+	const commands = [
+		`gh pr create --head feat/x -t x ${body}`,
+		"gh pr ready",
+		"gh pr ready feat/x",
+	];
+	for (const command of commands) {
+		const denied = await handle(create(command), config);
+		expect(denied.kind === "deny" && denied.reason).toContain(
+			"Push the reviewed commit first",
+		);
+	}
+	await repo.git("update-ref", remote, head);
+	for (const command of commands)
+		expect(await handle(create(command), config)).toEqual({ kind: "allow" });
 });
 
 test("a line that runs anything but git add, push, status, fetch, diff or log before the gate command is denied", async () => {

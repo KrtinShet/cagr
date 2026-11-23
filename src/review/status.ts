@@ -1,12 +1,34 @@
 import type { Config } from "../config/schema";
 import { gitContext } from "../git";
-import { gateResult, openAt, type Reach, reachFrom } from "./gate";
+import { cappedReview, gateAtHead } from "./gate";
 import type { Gh } from "./github";
-import { readRecord, recordPath } from "./store";
-import type { ReviewRecord } from "./types";
+import { readBranchRecord, recordPath } from "./store";
+import { completedRounds, type ReviewRecord } from "./types";
 
 export const reviewContext = "cagr/review";
 export const checksContext = "cagr/checks";
+
+export async function successfulStatuses(gh: Gh, repo: string, sha: string) {
+	const statuses = (
+		await gh([
+			"api",
+			"--paginate",
+			`repos/${repo}/commits/${sha}/statuses?per_page=100`,
+			"--jq",
+			".[] | [(.context | ascii_downcase), .state] | @tsv",
+		])
+	).split(/\r?\n/);
+	const latest = new Map<string, string>();
+	for (const row of statuses) {
+		const [context, state] = row.split("\t");
+		if (context && state && !latest.has(context)) latest.set(context, state);
+	}
+	return new Set(
+		[...latest]
+			.filter(([, state]) => state === "success")
+			.map(([context]) => context),
+	);
+}
 
 export type CommitStatus = {
 	context: string;
@@ -22,31 +44,48 @@ const describe = (text: string) =>
  * The `cagr/review` status for a commit: the review gate's answer, in GitHub's
  * terms. Both the pre-push hook and `cagr review answer` send this.
  */
-export function reviewStatus(
+export async function reviewStatus(
 	record: ReviewRecord | null,
 	sha: string,
 	config: Config,
-	reach?: Reach,
-): CommitStatus {
-	const gate = gateResult(record, sha, config, reach);
+	cwd: string,
+): Promise<CommitStatus> {
+	const gate = await gateAtHead(record, sha, config, cwd);
 	const status = (state: CommitStatus["state"], text: string) => ({
 		context: reviewContext,
 		state,
 		description: describe(text),
 	});
+	const cap =
+		record && completedRounds(record) >= config.review.max_rounds
+			? cappedReview(config.review.max_rounds)
+			: "";
 	if (gate.kind === "allow")
-		return gate.notice
-			? status(
-					"success",
-					"Unreviewed: the reviewer failed and no Important finding is open. Review this commit yourself.",
-				)
-			: status("success", "Passed: no Important finding is open.");
-	const open = record ? (openAt(record, sha, reach)?.length ?? 0) : 0;
-	if (open > 0)
+		return gate.coverage
+			? status("success", gate.coverage)
+			: gate.notice
+				? status(
+						"success",
+						"Unreviewed: the reviewer failed and no Important finding is open. Review this commit yourself.",
+					)
+				: status(
+						"success",
+						cap
+							? `${cap} No Important finding is open.`
+							: "Passed: no Important finding is open.",
+					);
+	const open = gate.openCount;
+	if (open) {
+		const findings = `${open} Important finding${open === 1 ? "" : "s"} open.`;
 		return status(
 			"failure",
-			`${open} Important finding${open === 1 ? "" : "s"} open. Fix or answer ${open === 1 ? "it" : "them"}, then run cagr review.`,
+			gate.coverage
+				? `${gate.coverage} ${findings}`
+				: cap
+					? `${cap} ${findings}`
+					: `${findings} Fix or answer ${open === 1 ? "it" : "them"}, then run cagr review.`,
 		);
+	}
 	return status("pending", "Not reviewed at this commit. Run cagr review.");
 }
 
@@ -106,17 +145,15 @@ export async function sendReviewStatus(
 	if (!config.review.status) return null;
 	const git = await gitContext(cwd);
 	if (!git.commonDir || !git.branch || !git.head) return null;
-	const record = readRecord(recordPath(git.commonDir, git.branch));
+	const record = readBranchRecord(
+		recordPath(git.commonDir, git.branch),
+		git.branch,
+	);
 	return (
 		await postStatus(
 			gh,
 			git.head,
-			reviewStatus(
-				record,
-				git.head,
-				config,
-				await reachFrom(record, git.head, cwd),
-			),
+			await reviewStatus(record, git.head, config, cwd),
 		)
 	).message;
 }
@@ -174,19 +211,17 @@ export async function postStatusAfterPush(
 		);
 	const git = await gitContext(cwd);
 	const record = git.commonDir
-		? readRecord(recordPath(git.commonDir, options.branch))
+		? readBranchRecord(
+				recordPath(git.commonDir, options.branch),
+				options.branch,
+			)
 		: null;
 	lines.push(
 		(
 			await postStatus(
 				gh,
 				options.sha,
-				reviewStatus(
-					record,
-					options.sha,
-					config,
-					await reachFrom(record, options.sha, cwd),
-				),
+				await reviewStatus(record, options.sha, config, cwd),
 			)
 		).message,
 	);

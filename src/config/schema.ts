@@ -306,7 +306,7 @@ export const configSchema: Node = obj({
 			max_rounds: num({
 				min: 1,
 				description:
-					"Review rounds per cycle (default 2). Only round 1 is a full review. After the cap, new commits still get finders on their diff, and the verifier also checks every open finding and every fix made in the cycle.",
+					"Completed review rounds per branch, including verifier rechecks before the cap. After the cap, fix verification uses no round.",
 			}),
 			timeout_seconds: num({
 				min: 30,

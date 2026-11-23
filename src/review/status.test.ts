@@ -29,16 +29,17 @@ function fakeGh(reply: (args: string[]) => string | Error = () => "") {
 const field = (args: string[] | undefined, name: string) =>
 	args?.find((arg) => arg.startsWith(`${name}=`))?.slice(name.length + 1);
 
-test("a passed review is success, open findings are failure with the count", () => {
-	expect(reviewStatus(record([round()]), head, settings)).toEqual({
+test("a passed review is success, open findings are failure with the count", async () => {
+	expect(await reviewStatus(record([round()]), head, settings, ".")).toEqual({
 		context: "cagr/review",
 		state: "success",
 		description: "Passed: no Important finding is open.",
 	});
-	const failed = reviewStatus(
+	const failed = await reviewStatus(
 		record([round()], [finding(), finding({ id: "f2" })]),
 		head,
 		settings,
+		".",
 	);
 	expect(failed.state).toBe("failure");
 	expect(failed.description).toBe(
@@ -46,12 +47,13 @@ test("a passed review is success, open findings are failure with the count", () 
 	);
 });
 
-test("no review, or a review of an older commit, is pending", () => {
-	expect(reviewStatus(null, head, settings).state).toBe("pending");
-	const stale = reviewStatus(
+test("no review, or a review of an older commit, is pending", async () => {
+	expect((await reviewStatus(null, head, settings, ".")).state).toBe("pending");
+	const stale = await reviewStatus(
 		record([round()], [finding()]),
 		"c".repeat(40),
 		settings,
+		".",
 	);
 	expect(stale).toMatchObject({
 		state: "pending",
@@ -59,11 +61,12 @@ test("no review, or a review of an older commit, is pending", () => {
 	});
 });
 
-test("a review that could not run is success that says so", () => {
-	const status = reviewStatus(
+test("a review that could not run is success that says so", async () => {
+	const status = await reviewStatus(
 		record([round({ error: "claude not found" })]),
 		head,
 		settings,
+		".",
 	);
 	expect(status.state).toBe("success");
 	expect(status.description).toContain("Unreviewed: the reviewer failed");
@@ -215,8 +218,9 @@ test("after a push it waits for GitHub to have the commit, then sends both statu
 	expect(lines).toHaveLength(2);
 });
 
-test("post-status is pending without a review of the pushed SHA and failure while a finding is open, including after the cap", async () => {
+test("after the cap the pushed status counts unreviewed commits and fails only on unresolved Important findings", async () => {
 	const repo = await tempRepo();
+	await repo.git("checkout", "-q", "-b", "feat/x");
 	const first = await repo.git("rev-parse", "HEAD");
 	const second = await repo.commit("fix: first review finding", {
 		"src/a.ts": "first fix\n",
@@ -230,9 +234,13 @@ test("post-status is pending without a review of the pushed SHA and failure whil
 			round({ head: first }),
 			round({ n: 2, head: second, from: first, scope: "diff" }),
 		],
-		[finding()],
+		[
+			finding(),
+			finding({ id: "f2", status: "answered" }),
+			finding({ id: "f3", severity: "nit" }),
+		],
 	);
-	const state = async (sha: string) => {
+	const status = async (sha: string) => {
 		const { gh, calls } = fakeGh();
 		writeRecord(file, saved);
 		await postStatusAfterPush(
@@ -241,32 +249,37 @@ test("post-status is pending without a review of the pushed SHA and failure whil
 			{ sha, branch: "feat/x", checks: null, waitSeconds: 0 },
 			gh,
 		);
-		return field(
-			calls.find((args) => args[2] === "POST"),
-			"state",
-		);
+		const post = calls.find((args) => args[2] === "POST");
+		return {
+			state: field(post, "state"),
+			description: field(post, "description"),
+		};
 	};
-	expect(await state(third)).toBe("pending");
-	expect(await state(second)).toBe("failure");
-	saved.rounds.push(
-		round({ n: 3, head: third, from: second, scope: "verify" }),
-	);
-	expect(await state(third)).toBe("failure");
+	expect((await status(third)).state).toBe("pending");
+	expect((await status(second)).state).toBe("failure");
+	saved.rounds.push(round({ n: 3, head: third, from: second, scope: "diff" }));
+	const extra = await repo.commit("feat: unrelated", {
+		"src/b.ts": "unreviewed\n",
+	});
+	const later = await repo.commit("feat: more", { "src/c.ts": "more\n" });
+	const coverage =
+		"Reviewed through round 3 (cap 3); 2 later commits were not reviewed.";
+	expect(await status(later)).toEqual({
+		state: "failure",
+		description: `${coverage} 1 Important finding open.`,
+	});
 	const issue = saved.findings[0];
 	if (!issue) throw new Error("Missing fixture finding");
 	issue.status = "fixed";
 	issue.fixedIn = third;
-	expect(await state(third)).toBe("success");
-	// Fixed on third, which second does not contain: a reset to second still fails.
-	expect(await state(second)).toBe("failure");
-	const extra = await repo.commit("feat: unrelated", {
-		"src/b.ts": "unreviewed\n",
+	expect(await status(later)).toEqual({
+		state: "success",
+		description: coverage,
 	});
-	expect(await state(extra)).toBe("pending");
-	saved.rounds.push(
-		round({ n: 4, head: extra, scope: "verify", error: "timeout" }),
+	expect((await status(second)).state).toBe("failure");
+	expect((await status(extra)).description).toBe(
+		"Reviewed through round 3 (cap 3); 1 later commit was not reviewed.",
 	);
-	expect(await state(extra)).toBe("success");
 });
 
 test("after a push, gh that is not logged in stops the wait and the note says so", async () => {

@@ -1,9 +1,9 @@
-import { Database, SQLiteError } from "bun:sqlite";
 import { createHash } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { gitContext } from "../git";
+import { tryLock } from "../lock";
 
 export class LocalCiError extends Error {}
 
@@ -34,17 +34,7 @@ export function makeCache(path: string) {
 	mkdirSync(path, { recursive: true, mode: 0o700 });
 }
 
-export function lockWatch(cache: string): Database | null {
+export function lockWatch(cache: string) {
 	makeCache(cache);
-	// SQLite's OS lock is released when the holder exits, even after SIGKILL.
-	const lock = new Database(join(cache, "watch.lock"));
-	try {
-		lock.exec("PRAGMA busy_timeout = 0; BEGIN IMMEDIATE");
-		return lock;
-	} catch (error) {
-		lock.close();
-		if (error instanceof SQLiteError && error.code === "SQLITE_BUSY")
-			return null;
-		throw error;
-	}
+	return tryLock(join(cache, "watch.lock"));
 }
