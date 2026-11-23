@@ -8,7 +8,7 @@ import { resolveConfig } from "./config/load";
 import type { RawConfig } from "./config/presets";
 import * as runner from "./run";
 import { sync } from "./sync";
-import { roomyBudgets } from "./test/budgets";
+import { repoTestTimeout, roomyBudgets } from "./test/budgets";
 import { tempRepo } from "./test/repo";
 
 roomyBudgets(collectionBudget);
@@ -39,22 +39,28 @@ const stack = (extra: Record<string, unknown>) => ({
 	],
 });
 
-test("a clean branch passes every check and reports its risk tier", async () => {
-	const { repo, config } = await branch(
-		stack({ on_turn_end: ["test -f {files}"] }),
-		{ "src/a.ts": "export const a = 1;\n" },
-		"feat: add a",
-	);
-	const result = await ci(config, { cwd: repo.root, base: "main", env: {} });
-	expect(ciReport(result)).not.toContain("FAIL");
-	expect(result.ok).toBe(true);
-	expect(result.checks.some(({ name }) => name === "Pull request title")).toBe(
-		false,
-	);
-	expect(result.checks.some(({ name }) => name === "Verify")).toBe(false);
-	expect(result.tier).toBe("medium");
-});
+// Builds a Git branch and runs every committed CI check.
+test(
+	"a clean branch passes every check and reports its risk tier",
+	async () => {
+		const { repo, config } = await branch(
+			stack({ on_turn_end: ["test -f {files}"] }),
+			{ "src/a.ts": "export const a = 1;\n" },
+			"feat: add a",
+		);
+		const result = await ci(config, { cwd: repo.root, base: "main", env: {} });
+		expect(ciReport(result)).not.toContain("FAIL");
+		expect(result.ok).toBe(true);
+		expect(
+			result.checks.some(({ name }) => name === "Pull request title"),
+		).toBe(false);
+		expect(result.checks.some(({ name }) => name === "Verify")).toBe(false);
+		expect(result.tier).toBe("medium");
+	},
+	repoTestTimeout,
+);
 
+// Builds a clean Git branch before running CI for each Verify command.
 test.each([
 	{ command: "test -f src/a.ts", ok: true, verify: { ok: true, output: "" } },
 	{
@@ -63,18 +69,22 @@ test.each([
 		verify: { ok: false, output: "echo verify failed; exit 17\nverify failed" },
 	},
 	{ command: " ", ok: true, verify: undefined },
-])("CI reports Verify for '$command'", async ({ command, ok, verify }) => {
-	const { repo, config } = await branch(
-		{ ...stack({}), git: { pre_push: command } },
-		{ "src/a.ts": "export const a = 1;\n" },
-		"feat: add a",
-	);
-	const result = await ci(config, { cwd: repo.root, base: "main", env: {} });
-	expect(result.ok).toBe(ok);
-	expect(result.checks.find((entry) => entry.name === "Verify")).toEqual(
-		verify && { ...verify, name: "Verify", annotations: [] },
-	);
-});
+])(
+	"CI reports Verify for '$command'",
+	async ({ command, ok, verify }) => {
+		const { repo, config } = await branch(
+			{ ...stack({}), git: { pre_push: command } },
+			{ "src/a.ts": "export const a = 1;\n" },
+			"feat: add a",
+		);
+		const result = await ci(config, { cwd: repo.root, base: "main", env: {} });
+		expect(result.ok).toBe(ok);
+		expect(result.checks.find((entry) => entry.name === "Verify")).toEqual(
+			verify && { ...verify, name: "Verify", annotations: [] },
+		);
+	},
+	repoTestTimeout,
+);
 
 test("Verify reuses the result of an identical turn-end command", async () => {
 	const shared = "test ! -f src/a.ts";
@@ -176,6 +186,7 @@ test("the pull request body is checked against the sections", async () => {
 	expect(body?.output).toContain('lacks "## Risk", "## How to revert"');
 });
 
+// Writes an event with the actual Git head, then runs committed CI for each title.
 test.each([
 	{
 		case: "an invalid title fails",
@@ -204,42 +215,48 @@ test.each([
 		title: "Added stuff",
 		enabled: false,
 	},
-])("pull request title: $case", async ({ title, enabled, problem }) => {
-	const { repo, config } = await branch(
-		{
-			...stack({}),
-			git: { commit_message: enabled ? "conventional" : "off" },
-			review: { pr_sections: [] },
-		},
-		{ "src/a.ts": "1\n" },
-		"feat: add a",
-	);
-	const event = join(mkdtempSync(join(tmpdir(), "gw-ev-")), "event.json");
-	writeFileSync(
-		event,
-		JSON.stringify({
-			pull_request: {
-				head: { sha: await repo.git("rev-parse", "HEAD") },
-				title,
+])(
+	"pull request title: $case",
+	async ({ title, enabled, problem }) => {
+		const { repo, config } = await branch(
+			{
+				...stack({}),
+				git: { commit_message: enabled ? "conventional" : "off" },
+				review: { pr_sections: [] },
 			},
-		}),
-	);
-	const result = await ci(config, {
-		cwd: repo.root,
-		base: "main",
-		env: { GITHUB_EVENT_PATH: event },
-	});
-	const titleCheck = result.checks.find(
-		({ name }) => name === "Pull request title",
-	);
-	const failed = result.checks.filter(({ ok }) => !ok).map(({ name }) => name);
-	expect(result.ok).toBe(!problem);
-	expect(failed).toEqual(problem ? ["Pull request title"] : []);
-	expect(titleCheck?.ok).toBe(enabled ? !problem : undefined);
-	if (problem) expect(titleCheck?.output).toContain(problem);
-	if (problem && title)
-		expect(titleCheck?.output).toContain("gh pr edit --title");
-});
+			{ "src/a.ts": "1\n" },
+			"feat: add a",
+		);
+		const event = join(mkdtempSync(join(tmpdir(), "gw-ev-")), "event.json");
+		writeFileSync(
+			event,
+			JSON.stringify({
+				pull_request: {
+					head: { sha: await repo.git("rev-parse", "HEAD") },
+					title,
+				},
+			}),
+		);
+		const result = await ci(config, {
+			cwd: repo.root,
+			base: "main",
+			env: { GITHUB_EVENT_PATH: event },
+		});
+		const titleCheck = result.checks.find(
+			({ name }) => name === "Pull request title",
+		);
+		const failed = result.checks
+			.filter(({ ok }) => !ok)
+			.map(({ name }) => name);
+		expect(result.ok).toBe(!problem);
+		expect(failed).toEqual(problem ? ["Pull request title"] : []);
+		expect(titleCheck?.ok).toBe(enabled ? !problem : undefined);
+		if (problem) expect(titleCheck?.output).toContain(problem);
+		if (problem && title)
+			expect(titleCheck?.output).toContain("gh pr edit --title");
+	},
+	repoTestTimeout,
+);
 
 test("annotations escape what GitHub would read as syntax", () => {
 	const lines = annotations({
@@ -309,39 +326,49 @@ examples:
 	expect(layout?.annotations.map((a) => a.file)).toEqual(["src/UserCard.ts"]);
 });
 
-test("CI catches committed suppressions relative to base and ignores worktree replacements", async () => {
-	const { repo, config } = await branch(
-		{ extends: ["recommended"], suppressions: { allow: ["generated/**"] } },
-		{ "a.ts": "// @ts-ignore\nx();\n", "generated/a.py": "# noqa\n" },
-		"feat: silence lint",
-	);
-	await repo.write("a.ts", "x();\n");
-	const result = await ci(config, { cwd: repo.root, base: "main", env: {} });
-	const check = result.checks.find(
-		(entry) => entry.name === "Lint suppressions",
-	);
-	expect(check?.ok).toBe(false);
-	expect(check?.annotations).toMatchObject([{ file: "a.ts", line: 1 }]);
-	expect(check?.output).not.toContain("generated/a.py");
-});
+// Runs the committed suppression scan with a different working-tree copy.
+test(
+	"CI catches committed suppressions relative to base and ignores worktree replacements",
+	async () => {
+		const { repo, config } = await branch(
+			{ extends: ["recommended"], suppressions: { allow: ["generated/**"] } },
+			{ "a.ts": "// @ts-ignore\nx();\n", "generated/a.py": "# noqa\n" },
+			"feat: silence lint",
+		);
+		await repo.write("a.ts", "x();\n");
+		const result = await ci(config, { cwd: repo.root, base: "main", env: {} });
+		const check = result.checks.find(
+			(entry) => entry.name === "Lint suppressions",
+		);
+		expect(check?.ok).toBe(false);
+		expect(check?.annotations).toMatchObject([{ file: "a.ts", line: 1 }]);
+		expect(check?.output).not.toContain("generated/a.py");
+	},
+	repoTestTimeout,
+);
 
-test("CI leaves baseline suppressions alone", async () => {
-	const { repo, config } = await branch(
-		{ extends: ["recommended"] },
-		{ "a.py": "# noqa\nx()\n" },
-		"feat: baseline",
-	);
-	await repo.git("branch", "baseline");
-	await repo.commit("feat: add code", { "a.py": "# noqa\nx()\ny()\n" });
-	const result = await ci(config, {
-		cwd: repo.root,
-		base: "baseline",
-		env: {},
-	});
-	expect(
-		result.checks.find((entry) => entry.name === "Lint suppressions")?.ok,
-	).toBe(true);
-});
+// Creates Git commits on both sides of the suppression comparison.
+test(
+	"CI leaves baseline suppressions alone",
+	async () => {
+		const { repo, config } = await branch(
+			{ extends: ["recommended"] },
+			{ "a.py": "# noqa\nx()\n" },
+			"feat: baseline",
+		);
+		await repo.git("branch", "baseline");
+		await repo.commit("feat: add code", { "a.py": "# noqa\nx()\ny()\n" });
+		const result = await ci(config, {
+			cwd: repo.root,
+			base: "baseline",
+			env: {},
+		});
+		expect(
+			result.checks.find((entry) => entry.name === "Lint suppressions")?.ok,
+		).toBe(true);
+	},
+	repoTestTimeout,
+);
 
 test("a suppression git error fails its check and CI still reports the other checks", async () => {
 	const { repo, config } = await branch(

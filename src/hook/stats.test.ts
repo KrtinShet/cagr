@@ -255,18 +255,21 @@ test("aggregation filters days, sorts counts, reports shares, never-fired and re
 
 test("bounded append storage rotates, tolerates broken lines, and keeps the repeat index bounded", () => {
 	const config = repo();
-	const event = { id: "guard", decision: "block" as const, target: "a" };
-	for (let i = 0; i < 65; i++) {
-		const entries = Array.from({ length: 100 }, (_, j) => ({
-			...event,
-			target: `file-${j}.ts`,
-		}));
-		recordStats(config.root, "file.after_edit", "claude", String(i), entries);
-	}
-	expect(statSync(statsFile(config.root)).size).toBeLessThanOrEqual(512000);
-	expect(statSync(`${statsFile(config.root)}.1`).size).toBeLessThanOrEqual(
-		512000,
-	);
+	const path = statsFile(config.root);
+	const index = `${path}.repeat`;
+	const block = { id: "guard", decision: "block" as const, target: "a" };
+	recordStats(config.root, "file.after_edit", "claude", "first", [block]);
+
+	const line = readFileSync(path, "utf8");
+	const fullLog = line.repeat(Math.floor(512_000 / Buffer.byteLength(line)));
+	const fullIndex = Buffer.alloc(20_000, readFileSync(index));
+	writeFileSync(path, fullLog);
+	writeFileSync(index, fullIndex);
+
+	const event = { ...block, target: "a".repeat(200) };
+	recordStats(config.root, "file.after_edit", "claude", "rotate", [event]);
+	expect(readFileSync(`${path}.1`, "utf8")).toBe(fullLog);
+	expect(readFileSync(`${index}.1`)).toEqual(fullIndex);
 	const times: number[] = [];
 	for (let i = 0; i < 30; i++) {
 		const start = performance.now();
@@ -277,14 +280,12 @@ test("bounded append storage rotates, tolerates broken lines, and keeps the repe
 		times.sort((a, b) => a - b);
 		expect(times[27] ?? Infinity).toBeLessThan(5);
 	}
-	expect(readStats(config.root).length).toBeLessThan(6500);
-	expect(statSync(`${statsFile(config.root)}.repeat`).size).toBeLessThanOrEqual(
-		20_000,
-	);
-	expect(
-		statSync(`${statsFile(config.root)}.repeat.1`).size,
-	).toBeLessThanOrEqual(20_000);
-	writeFileSync(statsFile(config.root), "broken\n{}");
+	const entries = readStats(config.root);
+	expect(entries.at(-1)?.target).toBe(event.target);
+	expect(entries.length).toBeLessThanOrEqual(5000);
+	expect(statSync(path).size).toBeLessThanOrEqual(512_000);
+	expect(statSync(index).size).toBeLessThanOrEqual(20_000);
+	writeFileSync(path, "broken\n{}");
 	expect(() => readStats(config.root)).not.toThrow();
 });
 

@@ -14,7 +14,7 @@ import { runHook } from "../hook/run-hook";
 import type { HookInput } from "../hook/types";
 import * as runner from "../run";
 import { runShell, shellQuote } from "../run";
-import { roomyBudgets } from "../test/budgets";
+import { repoTestTimeout, roomyBudgets } from "../test/budgets";
 import { localRegistry } from "../test/registry";
 import { tempRepo } from "../test/repo";
 import { clearTurnState, protectedNoticesDir, stateFile } from "../turn-state";
@@ -824,21 +824,26 @@ test("a lockfile bun cannot rebuild blocks with the fix", async () => {
 	);
 });
 
-test("a committed lockfile passes, a separately staged one does not", async () => {
-	const repo = await lockedRepo("bun");
-	expect(await repo.before("bun add zed")).toBe("");
-	await repo.add("zed");
-	await repo.git("commit", "-qam", "chore: add zed");
-	expect(await repo.stop()).toBe("");
+// Runs several real Bun installs and Git snapshots for the committed and staged cases.
+test(
+	"a committed lockfile passes, a separately staged one does not",
+	async () => {
+		const repo = await lockedRepo("bun");
+		expect(await repo.before("bun add zed")).toBe("");
+		await repo.add("zed");
+		await repo.git("commit", "-qam", "chore: add zed");
+		expect(await repo.stop()).toBe("");
 
-	expect(await repo.before("bun add pad@1.1.0")).toBe("");
-	await repo.add("pad@1.1.0");
-	await repo.git("add", "bun.lock");
-	await repo.add("pad@1.0.0");
-	expect(JSON.parse(await repo.stop()).reason).toContain(
-		"Stage and commit the lockfile the package manager wrote",
-	);
-});
+		expect(await repo.before("bun add pad@1.1.0")).toBe("");
+		await repo.add("pad@1.1.0");
+		await repo.git("add", "bun.lock");
+		await repo.add("pad@1.0.0");
+		expect(JSON.parse(await repo.stop()).reason).toContain(
+			"Stage and commit the lockfile the package manager wrote",
+		);
+	},
+	repoTestTimeout,
+);
 
 test("a lockfile from another package manager blocks", async () => {
 	const repo = await lockedRepo("bun");

@@ -327,6 +327,7 @@ test.each<{
 	repoTestTimeout,
 );
 
+// Both cases create and fetch the Git source before rejecting the PR.
 test.each([
 	{
 		name: "fork",
@@ -348,6 +349,7 @@ test.each([
 			f.clean();
 		}
 	},
+	repoTestTimeout,
 );
 
 // Initializes the repository cache and fetches before detecting the head mismatch.
@@ -430,43 +432,48 @@ test(
 	repoTestTimeout,
 );
 
-test("watch skips a live lock and takes over after the holder dies", async () => {
-	const f = await fixture();
-	const cacheModule = join(import.meta.dir, "cache.ts");
-	const holder = Bun.spawn(
-		[
-			process.execPath,
-			"-e",
-			`
+// Builds two Git repos before starting and replacing a real lock holder.
+test(
+	"watch skips a live lock and takes over after the holder dies",
+	async () => {
+		const f = await fixture();
+		const cacheModule = join(import.meta.dir, "cache.ts");
+		const holder = Bun.spawn(
+			[
+				process.execPath,
+				"-e",
+				`
 		const { lockWatch } = await import(${JSON.stringify(cacheModule)});
 		const lock = lockWatch(${JSON.stringify(f.paths.cache)});
 		if (!lock) process.exit(1);
 		console.log("locked");
 		setInterval(() => {}, 1000);
 	`,
-		],
-		{ stdout: "pipe" },
-	);
-	try {
-		const reader = holder.stdout.getReader();
-		const ready = await reader.read();
-		reader.releaseLock();
-		expect(new TextDecoder().decode(ready.value).trim()).toBe("locked");
-		const r = runtime(f, { heads: [] });
-		expect(await localCi(f.config, f.paths, "watch", r)).toBe(true);
-		expect(r.calls).toEqual([]);
-		expect(await Bun.file(f.paths.lastRun).exists()).toBe(false);
-		holder.kill("SIGKILL");
-		await holder.exited;
-		expect(await localCi(f.config, f.paths, "watch", r)).toBe(true);
-		expect(r.calls.some((args) => args.includes("list"))).toBe(true);
-		expect(await Bun.file(f.paths.lastRun).exists()).toBe(true);
-	} finally {
-		holder.kill();
-		await holder.exited;
-		f.clean();
-	}
-});
+			],
+			{ stdout: "pipe" },
+		);
+		try {
+			const reader = holder.stdout.getReader();
+			const ready = await reader.read();
+			reader.releaseLock();
+			expect(new TextDecoder().decode(ready.value).trim()).toBe("locked");
+			const r = runtime(f, { heads: [] });
+			expect(await localCi(f.config, f.paths, "watch", r)).toBe(true);
+			expect(r.calls).toEqual([]);
+			expect(await Bun.file(f.paths.lastRun).exists()).toBe(false);
+			holder.kill("SIGKILL");
+			await holder.exited;
+			expect(await localCi(f.config, f.paths, "watch", r)).toBe(true);
+			expect(r.calls.some((args) => args.includes("list"))).toBe(true);
+			expect(await Bun.file(f.paths.lastRun).exists()).toBe(true);
+		} finally {
+			holder.kill();
+			await holder.exited;
+			f.clean();
+		}
+	},
+	repoTestTimeout,
+);
 
 // Runs committed CI and review from separate Git worktrees.
 test(

@@ -130,115 +130,134 @@ describe("review", () => {
 		expect(outcome.file).toContain(join(".git", "cagr", "reviews"));
 	});
 
-	test("round 2 reviews only the new commits, marks fixed findings, and passes", async () => {
-		const repo = await branchRepo();
-		const first = fakeAgent({
-			finder: () => ({ summary: "", findings: [candidate()], fixed: [] }),
-			verifier: () => ({
-				candidates: [
-					{ id: "C1", real: true, severity: "important", reason: "" },
-				],
-				previous: [],
-			}),
-		});
-		const round1 = await review(repo.config, {
-			cwd: repo.root,
-			agent: first.agent,
-		});
-		const head1 = round1.round?.head ?? "";
-		await repo.commit(
-			"fix(auth): handle a missing user\n\nReturn undefined for an expired session.",
-			{
-				"src/a.ts": "export const login = (user) => user?.name;\n",
-			},
-		);
-		const second = fakeAgent({
-			finder: () => ({ summary: "0 findings.", findings: [], fixed: ["f1"] }),
-			verifier: () => ({
-				candidates: [],
-				previous: [{ id: "f1", fixed: true, reason: "optional chain" }],
-			}),
-		});
-		const round2 = await review(repo.config, {
-			cwd: repo.root,
-			agent: second.agent,
-		});
-		expect(round2.round?.scope).toBe("diff");
-		expect(round2.round?.from).toBe(head1);
-		const prompt = second.calls[0]?.prompt ?? "";
-		expect(prompt).toContain("only the commits added since the last review");
-		expect(prompt).toContain("Already reported in earlier rounds");
-		expect(prompt).toContain("user?.name");
-		expect(prompt).not.toContain("feat(auth): add login");
-		expect(round2.fixed.map((entry) => entry.id)).toEqual(["f1"]);
-		expect(round2.passed).toBe(true);
-		expect(reviewReport(round2, 3)).toContain("Fixed since the last round");
-	});
+	// Runs two reviews over a branch with a later Git fix.
+	test(
+		"round 2 reviews only the new commits, marks fixed findings, and passes",
+		async () => {
+			const repo = await branchRepo();
+			const first = fakeAgent({
+				finder: () => ({ summary: "", findings: [candidate()], fixed: [] }),
+				verifier: () => ({
+					candidates: [
+						{ id: "C1", real: true, severity: "important", reason: "" },
+					],
+					previous: [],
+				}),
+			});
+			const round1 = await review(repo.config, {
+				cwd: repo.root,
+				agent: first.agent,
+			});
+			const head1 = round1.round?.head ?? "";
+			await repo.commit(
+				"fix(auth): handle a missing user\n\nReturn undefined for an expired session.",
+				{
+					"src/a.ts": "export const login = (user) => user?.name;\n",
+				},
+			);
+			const second = fakeAgent({
+				finder: () => ({ summary: "0 findings.", findings: [], fixed: ["f1"] }),
+				verifier: () => ({
+					candidates: [],
+					previous: [{ id: "f1", fixed: true, reason: "optional chain" }],
+				}),
+			});
+			const round2 = await review(repo.config, {
+				cwd: repo.root,
+				agent: second.agent,
+			});
+			expect(round2.round?.scope).toBe("diff");
+			expect(round2.round?.from).toBe(head1);
+			const prompt = second.calls[0]?.prompt ?? "";
+			expect(prompt).toContain("only the commits added since the last review");
+			expect(prompt).toContain("Already reported in earlier rounds");
+			expect(prompt).toContain("user?.name");
+			expect(prompt).not.toContain("feat(auth): add login");
+			expect(round2.fixed.map((entry) => entry.id)).toEqual(["f1"]);
+			expect(round2.passed).toBe(true);
+			expect(reviewReport(round2, 3)).toContain("Fixed since the last round");
+		},
+		repoTestTimeout,
+	);
 
-	test("past the cap, a commit that fixes a finding still gets finders on its diff, and what they find blocks", async () => {
-		const { repo, options, second } = await cappedWithFinding();
-		const sha = await repo.commit(
-			"fix: handle an expired session\n\nAlso add a command runner.",
-			{
-				"src/a.ts":
-					"export const login = (user) => user?.name;\nexport const run = (cmd) => Bun.spawn(['sh', '-c', cmd]);\n",
-			},
-		);
-		const { agent, calls } = fakeAgent({
-			finder: () => ({
-				findings: [
-					candidate({
-						category: "security",
-						line: 2,
-						title: "Shell injection through run",
-					}),
-				],
-			}),
-			verifier: () => ({ previous: [{ id: "f1", fixed: true }] }),
-		});
-		const progress: string[] = [];
-		const outcome = await review(repo.config, {
-			...options,
-			agent,
-			progress: (line) => progress.push(line),
-		});
-		expect(outcome.round?.scope).toBe("diff");
-		expect(outcome.round?.from).toBe(second.round?.head ?? "");
-		expect(calls.map((call) => call.schema)).toEqual([
-			finderSchema,
-			verifierSchema,
-		]);
-		expect(calls[0]?.prompt).toContain("+export const run");
-		expect(calls[0]?.prompt).not.toContain("feat(auth): add login");
-		expect(progress.join("\n")).toContain("no further full round");
-		expect(outcome.fixed.map((entry) => entry.id)).toEqual(["f1"]);
-		expect(outcome.found.map((entry) => entry.id)).toEqual(["f2"]);
-		expect(outcome.passed).toBe(false);
-		const gate = gateResult(outcome.record, sha, repo.config);
-		expect(gate.kind === "deny" && gate.reason).toContain("f2 src/a.ts:2");
-	});
+	// Reviews several Git commits before exercising finder and verifier behavior.
+	test(
+		"past the cap, a commit that fixes a finding still gets finders on its diff, and what they find blocks",
+		async () => {
+			const { repo, options, second } = await cappedWithFinding();
+			const sha = await repo.commit(
+				"fix: handle an expired session\n\nAlso add a command runner.",
+				{
+					"src/a.ts":
+						"export const login = (user) => user?.name;\nexport const run = (cmd) => Bun.spawn(['sh', '-c', cmd]);\n",
+				},
+			);
+			const { agent, calls } = fakeAgent({
+				finder: () => ({
+					findings: [
+						candidate({
+							category: "security",
+							line: 2,
+							title: "Shell injection through run",
+						}),
+					],
+				}),
+				verifier: () => ({ previous: [{ id: "f1", fixed: true }] }),
+			});
+			const progress: string[] = [];
+			const outcome = await review(repo.config, {
+				...options,
+				agent,
+				progress: (line) => progress.push(line),
+			});
+			expect(outcome.round?.scope).toBe("diff");
+			expect(outcome.round?.from).toBe(second.round?.head ?? "");
+			expect(calls.map((call) => call.schema)).toEqual([
+				finderSchema,
+				verifierSchema,
+			]);
+			expect(calls[0]?.prompt).toContain("+export const run");
+			expect(calls[0]?.prompt).not.toContain("feat(auth): add login");
+			expect(progress.join("\n")).toContain("no further full round");
+			expect(outcome.fixed.map((entry) => entry.id)).toEqual(["f1"]);
+			expect(outcome.found.map((entry) => entry.id)).toEqual(["f2"]);
+			expect(outcome.passed).toBe(false);
+			const gate = gateResult(outcome.record, sha, repo.config);
+			expect(gate.kind === "deny" && gate.reason).toContain("f2 src/a.ts:2");
+		},
+		repoTestTimeout,
+	);
 
-	test("rechecking a later commit can reopen a regressed fix, which then fails the earlier head too", async () => {
-		const repo = await branchRepo();
-		const { agent } = fakeAgent({
-			finder: (_, call) => ({ findings: call === 0 ? [candidate()] : [] }),
-			verifier: (_, call) => ({ previous: [{ id: "f1", fixed: call === 0 }] }),
-		});
-		const options = { cwd: repo.root, agent, effort: "quick" as const };
-		await review(repo.config, options);
-		const fixed = await repo.commit("fix: allow an expired session", {
-			"src/a.ts": "user?.name\n",
-		});
-		expect((await review(repo.config, options)).passed).toBe(true);
-		const reverted = await repo.commit(
-			"revert: restore the old session handling",
-			{ "src/a.ts": "user.name\n" },
-		);
-		const outcome = await review(repo.config, options);
-		expect(outcome.passed).toBe(false);
-		expect(gateResult(outcome.record, reverted, repo.config).kind).toBe("deny");
-		expect(gateResult(outcome.record, fixed, repo.config).kind).toBe("deny");
-	});
+	// Builds successive Git fixes and regressions, then checks the older head.
+	test(
+		"rechecking a later commit can reopen a regressed fix, which then fails the earlier head too",
+		async () => {
+			const repo = await branchRepo();
+			const { agent } = fakeAgent({
+				finder: (_, call) => ({ findings: call === 0 ? [candidate()] : [] }),
+				verifier: (_, call) => ({
+					previous: [{ id: "f1", fixed: call === 0 }],
+				}),
+			});
+			const options = { cwd: repo.root, agent, effort: "quick" as const };
+			await review(repo.config, options);
+			const fixed = await repo.commit("fix: allow an expired session", {
+				"src/a.ts": "user?.name\n",
+			});
+			expect((await review(repo.config, options)).passed).toBe(true);
+			const reverted = await repo.commit(
+				"revert: restore the old session handling",
+				{ "src/a.ts": "user.name\n" },
+			);
+			const outcome = await review(repo.config, options);
+			expect(outcome.passed).toBe(false);
+			expect(gateResult(outcome.record, reverted, repo.config).kind).toBe(
+				"deny",
+			);
+			expect(gateResult(outcome.record, fixed, repo.config).kind).toBe("deny");
+		},
+		repoTestTimeout,
+	);
 
 	/** Two clean rounds reach the default cap of 2. */
 	async function cappedRepo() {
@@ -257,37 +276,42 @@ describe("review", () => {
 		return { repo, options, capHead: second.round?.head ?? "" };
 	}
 
-	test("past the cap, a commit that is not a fix commit still gets finders on the new commits", async () => {
-		const { repo, options, capHead } = await cappedRepo();
-		const sha = await repo.commit("feat(auth): add logout", {
-			"src/logout.ts": "export const logout = (user) => user.end();\n",
-		});
-		const { agent, calls } = fakeAgent({
-			finder: () => ({
-				findings: [
-					candidate({
-						file: "src/logout.ts",
-						line: 1,
-						title: "Logout crashes",
-					}),
-				],
-			}),
-		});
-		const progress: string[] = [];
-		const outcome = await review(repo.config, {
-			...options,
-			agent,
-			progress: (line) => progress.push(line),
-		});
-		expect(outcome.round?.scope).toBe("diff");
-		expect(outcome.round?.from).toBe(capHead);
-		expect(calls.map((call) => call.schema)).toEqual([finderSchema]);
-		expect(calls[0]?.prompt).toContain("+export const logout");
-		expect(calls[0]?.prompt).not.toContain("+export const login");
-		expect(progress.join("\n")).toContain("finders review the new commits");
-		expect(outcome.passed).toBe(false);
-		expect(gateResult(outcome.record, sha, repo.config).kind).toBe("deny");
-	});
+	// Builds review history and checks the real Git diff after the round limit.
+	test(
+		"past the cap, a commit that is not a fix commit still gets finders on the new commits",
+		async () => {
+			const { repo, options, capHead } = await cappedRepo();
+			const sha = await repo.commit("feat(auth): add logout", {
+				"src/logout.ts": "export const logout = (user) => user.end();\n",
+			});
+			const { agent, calls } = fakeAgent({
+				finder: () => ({
+					findings: [
+						candidate({
+							file: "src/logout.ts",
+							line: 1,
+							title: "Logout crashes",
+						}),
+					],
+				}),
+			});
+			const progress: string[] = [];
+			const outcome = await review(repo.config, {
+				...options,
+				agent,
+				progress: (line) => progress.push(line),
+			});
+			expect(outcome.round?.scope).toBe("diff");
+			expect(outcome.round?.from).toBe(capHead);
+			expect(calls.map((call) => call.schema)).toEqual([finderSchema]);
+			expect(calls[0]?.prompt).toContain("+export const logout");
+			expect(calls[0]?.prompt).not.toContain("+export const login");
+			expect(progress.join("\n")).toContain("finders review the new commits");
+			expect(outcome.passed).toBe(false);
+			expect(gateResult(outcome.record, sha, repo.config).kind).toBe("deny");
+		},
+		repoTestTimeout,
+	);
 
 	/** Round 1 reports f1 in src/a.ts, round 2 leaves it open: the cap of 2 is reached. */
 	async function cappedWithFinding() {
@@ -445,100 +469,122 @@ describe("review", () => {
 		repoTestTimeout,
 	);
 
-	test("past the cap, a finder round still verifies open nits", async () => {
-		const repo = await branchRepo();
-		const { agent } = fakeAgent({
-			finder: (_, call) => ({
-				findings: call === 0 ? [candidate({ severity: "nit" })] : [],
-			}),
-		});
-		const options = { cwd: repo.root, effort: "quick" as const };
-		await review(repo.config, { ...options, agent });
-		await repo.commit("feat: more", { "src/c.ts": "c\n" });
-		await review(repo.config, { ...options, agent });
-		await repo.commit("feat: tidy", { "src/a.ts": "user?.name\n" });
-		const next = fakeAgent({
-			finder: () => ({ findings: [] }),
-			verifier: () => ({ previous: [{ id: "f1", fixed: true }] }),
-		});
-		const outcome = await review(repo.config, {
-			...options,
-			agent: next.agent,
-		});
-		expect(outcome.round?.scope).toBe("diff");
-		expect(outcome.fixed.map((entry) => entry.id)).toEqual(["f1"]);
-	});
+	// Creates a later Git commit before running finders and verifying nits.
+	test(
+		"past the cap, a finder round still verifies open nits",
+		async () => {
+			const repo = await branchRepo();
+			const { agent } = fakeAgent({
+				finder: (_, call) => ({
+					findings: call === 0 ? [candidate({ severity: "nit" })] : [],
+				}),
+			});
+			const options = { cwd: repo.root, effort: "quick" as const };
+			await review(repo.config, { ...options, agent });
+			await repo.commit("feat: more", { "src/c.ts": "c\n" });
+			await review(repo.config, { ...options, agent });
+			await repo.commit("feat: tidy", { "src/a.ts": "user?.name\n" });
+			const next = fakeAgent({
+				finder: () => ({ findings: [] }),
+				verifier: () => ({ previous: [{ id: "f1", fixed: true }] }),
+			});
+			const outcome = await review(repo.config, {
+				...options,
+				agent: next.agent,
+			});
+			expect(outcome.round?.scope).toBe("diff");
+			expect(outcome.fixed.map((entry) => entry.id)).toEqual(["f1"]);
+		},
+		repoTestTimeout,
+	);
 
-	test("a rebased branch starts a new cycle with a full round", async () => {
-		const { repo, options } = await cappedRepo();
-		await repo.git(
-			"commit",
-			"-q",
-			"--amend",
-			"-m",
-			"feat(auth): log the login again",
-		);
-		const { agent, calls } = fakeAgent({ finder: () => ({ findings: [] }) });
-		const progress: string[] = [];
-		const outcome = await review(repo.config, {
-			...options,
-			agent,
-			progress: (line) => progress.push(line),
-		});
-		const mergeBase = await repo.git("merge-base", "main", "HEAD");
-		expect(outcome.round?.scope).toBe("full");
-		expect(outcome.round?.from).toBe(mergeBase);
-		expect(calls.map((call) => call.schema)).toEqual([finderSchema]);
-		expect(progress.join("\n")).toContain("not in this branch's history");
-		expect(discoveryRounds(outcome.record)).toBe(1);
-	});
+	// Rebases the Git branch before requesting another full review.
+	test(
+		"a rebased branch starts a new cycle with a full round",
+		async () => {
+			const { repo, options } = await cappedRepo();
+			await repo.git(
+				"commit",
+				"-q",
+				"--amend",
+				"-m",
+				"feat(auth): log the login again",
+			);
+			const { agent, calls } = fakeAgent({ finder: () => ({ findings: [] }) });
+			const progress: string[] = [];
+			const outcome = await review(repo.config, {
+				...options,
+				agent,
+				progress: (line) => progress.push(line),
+			});
+			const mergeBase = await repo.git("merge-base", "main", "HEAD");
+			expect(outcome.round?.scope).toBe("full");
+			expect(outcome.round?.from).toBe(mergeBase);
+			expect(calls.map((call) => call.schema)).toEqual([finderSchema]);
+			expect(progress.join("\n")).toContain("not in this branch's history");
+			expect(discoveryRounds(outcome.record)).toBe(1);
+		},
+		repoTestTimeout,
+	);
 
-	test("after a rebase, the full round checks again a fix judged on the old history", async () => {
-		const repo = await branchRepo();
-		const { agent } = fakeAgent({
-			finder: (_, call) => ({ findings: call === 0 ? [candidate()] : [] }),
-			verifier: () => ({ previous: [{ id: "f1", fixed: true }] }),
-		});
-		const options = { cwd: repo.root, effort: "quick" as const };
-		await review(repo.config, { ...options, agent });
-		await repo.commit("fix: handle the session", {
-			"src/a.ts": "user?.name\n",
-		});
-		expect((await review(repo.config, { ...options, agent })).passed).toBe(
-			true,
-		);
-		await repo.git("commit", "-q", "--amend", "-m", "fix: handle a session");
-		const next = fakeAgent({
-			finder: () => ({ findings: [] }),
-			verifier: () => ({ previous: [{ id: "f1", fixed: true }] }),
-		});
-		const outcome = await review(repo.config, {
-			...options,
-			agent: next.agent,
-		});
-		expect(outcome.round?.scope).toBe("full");
-		expect(next.calls.at(-1)?.schema).toBe(verifierSchema);
-		expect(next.calls.at(-1)?.prompt).toContain("f1 src/a.ts");
-		expect(outcome.record.findings[0]?.fixedIn).toBe(outcome.round?.head ?? "");
-		expect(outcome.passed).toBe(true);
-	});
+	// Tracks a fix across two Git histories and a rebase.
+	test(
+		"after a rebase, the full round checks again a fix judged on the old history",
+		async () => {
+			const repo = await branchRepo();
+			const { agent } = fakeAgent({
+				finder: (_, call) => ({ findings: call === 0 ? [candidate()] : [] }),
+				verifier: () => ({ previous: [{ id: "f1", fixed: true }] }),
+			});
+			const options = { cwd: repo.root, effort: "quick" as const };
+			await review(repo.config, { ...options, agent });
+			await repo.commit("fix: handle the session", {
+				"src/a.ts": "user?.name\n",
+			});
+			expect((await review(repo.config, { ...options, agent })).passed).toBe(
+				true,
+			);
+			await repo.git("commit", "-q", "--amend", "-m", "fix: handle a session");
+			const next = fakeAgent({
+				finder: () => ({ findings: [] }),
+				verifier: () => ({ previous: [{ id: "f1", fixed: true }] }),
+			});
+			const outcome = await review(repo.config, {
+				...options,
+				agent: next.agent,
+			});
+			expect(outcome.round?.scope).toBe("full");
+			expect(next.calls.at(-1)?.schema).toBe(verifierSchema);
+			expect(next.calls.at(-1)?.prompt).toContain("f1 src/a.ts");
+			expect(outcome.record.findings[0]?.fixedIn).toBe(
+				outcome.round?.head ?? "",
+			);
+			expect(outcome.passed).toBe(true);
+		},
+		repoTestTimeout,
+	);
 
-	test("a reused branch name starts a new cycle with a full round", async () => {
-		const { repo, options } = await cappedRepo();
-		await repo.git("checkout", "-q", "main");
-		await repo.git("merge", "-q", "--squash", "feat/login");
-		await repo.git("commit", "-q", "-m", "feat(auth): add login (#1)");
-		await repo.git("branch", "-q", "-D", "feat/login");
-		await repo.git("checkout", "-q", "-b", "feat/login");
-		await repo.commit("feat(auth): add signup", {
-			"src/signup.ts": "export const signup = (user) => user.id;\n",
-		});
-		const { agent, calls } = fakeAgent({ finder: () => ({ findings: [] }) });
-		const outcome = await review(repo.config, { ...options, agent });
-		expect(outcome.round?.scope).toBe("full");
-		expect(calls.map((call) => call.schema)).toEqual([finderSchema]);
-		expect(calls[0]?.prompt).toContain("+export const signup");
-	});
+	// Resets the Git branch and reviews independent history under its old name.
+	test(
+		"a reused branch name starts a new cycle with a full round",
+		async () => {
+			const { repo, options } = await cappedRepo();
+			await repo.git("checkout", "-q", "main");
+			await repo.git("merge", "-q", "--squash", "feat/login");
+			await repo.git("commit", "-q", "-m", "feat(auth): add login (#1)");
+			await repo.git("branch", "-q", "-D", "feat/login");
+			await repo.git("checkout", "-q", "-b", "feat/login");
+			await repo.commit("feat(auth): add signup", {
+				"src/signup.ts": "export const signup = (user) => user.id;\n",
+			});
+			const { agent, calls } = fakeAgent({ finder: () => ({ findings: [] }) });
+			const outcome = await review(repo.config, { ...options, agent });
+			expect(outcome.round?.scope).toBe("full");
+			expect(calls.map((call) => call.schema)).toEqual([finderSchema]);
+			expect(calls[0]?.prompt).toContain("+export const signup");
+		},
+		repoTestTimeout,
+	);
 
 	// Garbage-collects the old commit and reviews both Git histories.
 	test(
@@ -1019,21 +1065,26 @@ describe("verdicts on earlier findings", () => {
 		repoTestTimeout,
 	);
 
-	test("an id named in a commit merged from the base does not ask for a verdict", async () => {
-		const { repo } = await reported();
-		await repo.git("checkout", "-q", "main");
-		await repo.commit("fix(deals): handle an empty list (f1)", {
-			"src/deals.ts": "export const deals = [];\n",
-		});
-		await repo.git("checkout", "-q", "feat/login");
-		await repo.git("merge", "-q", "--no-edit", "main");
-		const { agent } = noVerdictOnF1();
-		const outcome = await review(repo.config, { cwd: repo.root, agent });
-		expect(outcome.record.findings[0]?.verdicts).toBeUndefined();
-		expect(reviewReport(outcome, 2)).toContain(
-			"f1 is still open: no commit since the last check touched src/a.ts.",
-		);
-	});
+	// Merges a real Git base commit before checking the verifier input.
+	test(
+		"an id named in a commit merged from the base does not ask for a verdict",
+		async () => {
+			const { repo } = await reported();
+			await repo.git("checkout", "-q", "main");
+			await repo.commit("fix(deals): handle an empty list (f1)", {
+				"src/deals.ts": "export const deals = [];\n",
+			});
+			await repo.git("checkout", "-q", "feat/login");
+			await repo.git("merge", "-q", "--no-edit", "main");
+			const { agent } = noVerdictOnF1();
+			const outcome = await review(repo.config, { cwd: repo.root, agent });
+			expect(outcome.record.findings[0]?.verdicts).toBeUndefined();
+			expect(reviewReport(outcome, 2)).toContain(
+				"f1 is still open: no commit since the last check touched src/a.ts.",
+			);
+		},
+		repoTestTimeout,
+	);
 
 	// Runs multiple review cycles over successive Git commits.
 	test(

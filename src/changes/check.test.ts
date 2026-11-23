@@ -164,29 +164,34 @@ test("CI distinct change result ignores dirty companion and rejects wrong PR hea
 	);
 });
 
-test("conflicts, shallow history and multiple merge bases are unchecked", async () => {
-	const { repo, config } = await setup();
-	const base = await repo.git("rev-parse", "main");
-	const tree = await repo.git("rev-parse", "HEAD^{tree}");
-	const a = await repo.git("commit-tree", tree, "-p", base, "-m", "a");
-	const b = await repo.git("commit-tree", tree, "-p", base, "-m", "b");
-	const x = await repo.git("commit-tree", tree, "-p", a, "-p", b, "-m", "x");
-	const y = await repo.git("commit-tree", tree, "-p", b, "-p", a, "-m", "y");
-	await repo.git("update-ref", "refs/heads/ambiguous", y);
-	await repo.git("reset", "--hard", x);
-	expect((await checkChanges(config, { base: "ambiguous" })).unchecked).toBe(
-		true,
-	);
-	await repo.write(".git/shallow", `${x}\n`);
-	expect((await checkChanges(config)).output).toContain("shallow");
-	rmSync(join(repo.root, ".git/shallow"));
-	await repo.git("checkout", "main");
-	await repo.commit("fix: target", { "src/a.ts": "target" });
-	await repo.git("checkout", "feat/x");
-	await repo.commit("fix: branch", { "src/a.ts": "branch" });
-	await repo.git("merge", "main").catch(() => {});
-	expect((await checkChanges(config)).output).toContain("unmerged");
-});
+// Builds criss-cross Git history and a real merge conflict.
+test(
+	"conflicts, shallow history and multiple merge bases are unchecked",
+	async () => {
+		const { repo, config } = await setup();
+		const base = await repo.git("rev-parse", "main");
+		const tree = await repo.git("rev-parse", "HEAD^{tree}");
+		const a = await repo.git("commit-tree", tree, "-p", base, "-m", "a");
+		const b = await repo.git("commit-tree", tree, "-p", base, "-m", "b");
+		const x = await repo.git("commit-tree", tree, "-p", a, "-p", b, "-m", "x");
+		const y = await repo.git("commit-tree", tree, "-p", b, "-p", a, "-m", "y");
+		await repo.git("update-ref", "refs/heads/ambiguous", y);
+		await repo.git("reset", "--hard", x);
+		expect((await checkChanges(config, { base: "ambiguous" })).unchecked).toBe(
+			true,
+		);
+		await repo.write(".git/shallow", `${x}\n`);
+		expect((await checkChanges(config)).output).toContain("shallow");
+		rmSync(join(repo.root, ".git/shallow"));
+		await repo.git("checkout", "main");
+		await repo.commit("fix: target", { "src/a.ts": "target" });
+		await repo.git("checkout", "feat/x");
+		await repo.commit("fix: branch", { "src/a.ts": "branch" });
+		await repo.git("merge", "main").catch(() => {});
+		expect((await checkChanges(config)).output).toContain("unmerged");
+	},
+	repoTestTimeout,
+);
 
 test("mode changes and index flags cannot hide working-tree content; real index stays unchanged", async () => {
 	const { repo, config } = await setup();
@@ -400,9 +405,14 @@ test("custom Git clean filters are unchecked without executing their commands", 
 	);
 });
 
-test("unused configured filters do not disable working-tree checks", async () => {
-	const { repo, config } = await setup();
-	await repo.git("config", "filter.unused.clean", "false");
-	await repo.write("src/a.ts", "changed");
-	expect((await checkChanges(config)).unchecked).toBe(false);
-});
+// Configures a Git filter and takes two worktree snapshots to compare coverage.
+test(
+	"unused configured filters do not disable working-tree checks",
+	async () => {
+		const { repo, config } = await setup();
+		await repo.git("config", "filter.unused.clean", "false");
+		await repo.write("src/a.ts", "changed");
+		expect((await checkChanges(config)).unchecked).toBe(false);
+	},
+	repoTestTimeout,
+);
