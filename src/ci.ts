@@ -10,12 +10,11 @@ import { checkSuppressions } from "./guards/lint-suppression";
 import { branchFinding, commitMessageFinding } from "./guards/names";
 import { stackFiles, tidy, withFiles } from "./hook/stack-files";
 import {
-	branchRef,
-	expired,
-	heldLease,
-	renew,
-	touchesLease,
-} from "./leases/lease";
+	checkLeases,
+	effectiveLeases,
+	leasePolicy,
+	policyProblems,
+} from "./leases/check";
 import { LeaseRefs } from "./leases/refs";
 import { classify, riskReport } from "./risk";
 import { type LayoutRule, layoutFindings } from "./rules/layout";
@@ -386,57 +385,41 @@ export async function ci(
 		}
 		pushScheduledCheck(checks, "Verify", problems, deferred);
 	}
-	if (config.lease.length > 0) {
-		const paths = changeResult.snapshot.changes.map(({ path }) => path);
-		const needed = config.lease.filter((lease) => touchesLease(lease, paths));
-		const problems: string[] = [];
+	try {
+		const reader = options.leaseGit ?? new LeaseRefs(cwd);
+		const basePolicy = await leasePolicy(reader, changeResult.snapshot.target);
 		const githubPr =
 			!options.pr &&
 			(pullRequest ||
 				env.GITHUB_HEAD_REF ||
 				env.GITHUB_EVENT_NAME?.startsWith("pull_request"));
 		const headRepo = pullRequest?.head?.repo?.full_name;
-		const originRepo = env.GITHUB_REPOSITORY?.toLowerCase();
 		const sameRepo =
 			!githubPr ||
-			(originRepo &&
-				typeof headRepo === "string" &&
-				headRepo.toLowerCase() === originRepo);
-		if (needed.length && !sameRepo) {
-			problems.push(
-				"Leased paths require a PR branch in origin. Publish the branch in the same repository and rerun cagr ci with the PR event.",
-			);
-		} else if (needed.length) {
-			try {
-				const reader = options.leaseGit ?? new LeaseRefs(cwd);
-				const snapshot = await reader.snapshot();
-				for (const lease of needed) {
-					let held = await heldLease(reader, snapshot, lease);
-					if (
-						branch &&
-						held?.record.branch === branch &&
-						!expired(lease, held.record)
-					) {
-						if (options.renewLeaseFor === branch)
-							held = await renew(
-								reader,
-								lease,
-								held,
-								snapshot.refs.has(branchRef(branch)),
-							);
-						if (held) continue;
-					}
-					problems.push(
-						`Changes to ${lease.name} need a live lease on the PR branch. Run \`cagr lease take ${lease.name}\`, merge the protected branch, regenerate, and push.`,
-					);
-				}
-			} catch (error) {
-				problems.push(
-					`Could not verify leases: ${(error as Error).message}. Restore access to origin, run cagr lease list, and rerun cagr ci.`,
-				);
-			}
-		}
-		checks.push(check("Leases", problems));
+			(!!env.GITHUB_REPOSITORY &&
+				headRepo?.toLowerCase() === env.GITHUB_REPOSITORY.toLowerCase());
+		const problems = await checkLeases(
+			reader,
+			effectiveLeases(basePolicy, config.lease),
+			changeResult.snapshot.changes.map(({ path }) => path),
+			branch,
+			{
+				sameRepo,
+				renew: !!branch && options.renewLeaseFor === branch,
+			},
+		);
+		const policy =
+			env.CAGR_ALLOW_GATE_EDIT === "1"
+				? []
+				: policyProblems(basePolicy, config.lease);
+		if (problems || policy.length)
+			checks.push(check("Leases", [...policy, ...(problems ?? [])]));
+	} catch (error) {
+		checks.push(
+			check("Leases", [
+				`Could not verify leases: ${(error as Error).message}. Restore access to origin, run cagr lease list, and rerun cagr ci.`,
+			]),
+		);
 	}
 	if (await out(["git", "status", "--porcelain", "-z"], cwd))
 		checks.push(

@@ -105,7 +105,7 @@ export async function collect(
 	let target: string;
 	try {
 		target = (
-			await git("rev-parse", "--verify", `origin/${name}^{commit}`)
+			await git("rev-parse", "--verify", `refs/remotes/origin/${name}^{commit}`)
 		).trim();
 	} catch {
 		target = (await git("rev-parse", "--verify", `${name}^{commit}`)).trim();

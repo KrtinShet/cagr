@@ -5,6 +5,8 @@ import { defaultCiInstall, loadConfig } from "../config/load";
 import type { Config } from "../config/schema";
 import { gitContext } from "../git";
 import { stackDir, stackInstall } from "../github-files";
+import { checkLeases, effectiveLeases, leasePolicy } from "../leases/check";
+import { changedPaths } from "../leases/lease";
 import { LeaseRefs } from "../leases/refs";
 import { claudeAgent } from "../review/agent";
 import {
@@ -16,9 +18,10 @@ import {
 } from "../review/github";
 import {
 	checksContext,
+	latestStatuses,
+	leasesContext,
 	postStatus,
 	reviewContext,
-	successfulStatuses,
 } from "../review/status";
 import { run, shellArgv } from "../run";
 import { LocalCiError, lockWatch, makeCache, type WatchPaths } from "./cache";
@@ -118,10 +121,11 @@ async function pendingTasks(
 	headBranch: string,
 	reviewedHere: boolean,
 ) {
-	const passed = await successfulStatuses(gh, repo, sha);
-	const statusPassed = reviewedHere || passed.has(reviewContext);
+	const statuses = await latestStatuses(gh, repo, sha);
+	const statusPassed =
+		reviewedHere || statuses.get(reviewContext) === "success";
 	return {
-		checks: !passed.has(checksContext),
+		checks: statuses.get(checksContext) !== "success",
 		review:
 			!statusPassed ||
 			(await hasOpenCiFinding(gh, {
@@ -131,6 +135,7 @@ async function pendingTasks(
 				headBranch,
 			}).catch(() => true)),
 		statusPassed,
+		leaseState: statuses.get(leasesContext),
 	};
 }
 
@@ -152,8 +157,14 @@ async function checkPullRequest(
 	details: PrDetails,
 	cache: string,
 	runtime: Runtime,
-	tasks: { checks: boolean; review: boolean; statusPassed: boolean },
+	tasks: {
+		checks: boolean;
+		review: boolean;
+		statusPassed: boolean;
+		leaseState?: string;
+	},
 	sourceRoot: string,
+	watch: boolean,
 	renewLeaseFor?: string,
 ) {
 	const { gh, run: execute, log } = runtime;
@@ -199,6 +210,26 @@ async function checkPullRequest(
 			);
 		return config;
 	};
+	const reader = (cwd: string) =>
+		new LeaseRefs(cwd, ([, ...args], dir, options) =>
+			execute(["git", ...gitAuth, ...args], dir, options),
+		);
+	const leaseStatus = async (problems: string[] | null) => {
+		if (!problems && !tasks.leaseState) return true;
+		const ok = !problems?.length;
+		for (const problem of problems ?? []) log(problem);
+		const state = ok ? "success" : "failure";
+		const sent =
+			tasks.leaseState === state ||
+			(await post(
+				leasesContext,
+				ok,
+				ok
+					? "Landing leases are current."
+					: "Landing lease check failed. Take the lease, merge the base, regenerate, and push.",
+			));
+		return ok && sent;
+	};
 	try {
 		await checked(["git", "init", "--bare", "--template=", gitDir], scratch);
 		await git("config", "core.hooksPath", "/dev/null");
@@ -218,6 +249,32 @@ async function checkPullRequest(
 			return false;
 		}
 		let ok = true;
+		if (watch) {
+			let problems: string[] | null;
+			try {
+				const leases = reader(gitDir);
+				const base = `refs/remotes/origin/${pr.base}`;
+				const definitions = effectiveLeases(
+					await leasePolicy(leases, base),
+					await leasePolicy(leases, pr.head),
+				);
+				problems = definitions.length
+					? await checkLeases(
+							leases,
+							definitions,
+							await changedPaths(
+								leases,
+								await git("merge-base", base, pr.head),
+								pr.head,
+							),
+							details.headRefName,
+						)
+					: null;
+			} catch (error) {
+				problems = [`Could not verify leases: ${(error as Error).message}`];
+			}
+			ok = await leaseStatus(problems);
+		}
 		if (tasks.checks) {
 			let checksOk = false;
 			let deferred = false;
@@ -235,10 +292,12 @@ async function checkPullRequest(
 						body: pr.body,
 						title: details.title,
 					},
-					env: {},
-					leaseGit: new LeaseRefs(worktree, ([, ...args], cwd, options) =>
-						execute(["git", ...gitAuth, ...args], cwd, options),
-					),
+					env: {
+						CAGR_ALLOW_GATE_EDIT: watch
+							? undefined
+							: process.env.CAGR_ALLOW_GATE_EDIT,
+					},
+					leaseGit: reader(worktree),
 					renewLeaseFor,
 					executeCheck: execute,
 				});
@@ -260,7 +319,7 @@ async function checkPullRequest(
 						: "Local CI checks failed. See the watch log or rerun cagr ci --pr.",
 				deferred,
 			);
-			ok = checksOk && sent;
+			ok = ok && checksOk && sent;
 		}
 		if (tasks.review) {
 			let reviewOk = false;
@@ -294,6 +353,12 @@ async function checkPullRequest(
 			ok = ok && reviewOk && sent;
 		}
 		return ok;
+	} catch (error) {
+		if (watch && tasks.leaseState === "success")
+			await leaseStatus([
+				`Could not verify leases: ${(error as Error).message}`,
+			]);
+		throw error;
 	} finally {
 		// The worktrees and their private Git metadata are all under scratch.
 		rmSync(scratch, { recursive: true, force: true });
@@ -353,7 +418,12 @@ export async function localCi(
 		for (const { number, isDraft, headRefOid, headRefName } of prs) {
 			if (mode === "watch" && isDraft) continue;
 			try {
-				let tasks = { checks: true, review: true, statusPassed: false };
+				let tasks: Awaited<ReturnType<typeof pendingTasks>> = {
+					checks: true,
+					review: true,
+					statusPassed: false,
+					leaseState: undefined,
+				};
 				if (mode === "watch" && /^[a-f0-9]{40}$/.test(headRefOid)) {
 					tasks = await pendingTasks(
 						gh,
@@ -364,7 +434,6 @@ export async function localCi(
 						reviewedHeads.has(headRefOid),
 					);
 					if (checkedHeads.has(headRefOid)) tasks.checks = false;
-					if (!tasks.checks && !tasks.review) continue;
 				}
 				const details = JSON.parse(
 					await gh([
@@ -403,7 +472,6 @@ export async function localCi(
 						reviewedHeads.has(head),
 					);
 					if (checkedHeads.has(head)) tasks.checks = false;
-					if (!tasks.checks && !tasks.review) continue;
 				}
 				const reason = await refusal(gh, repo, details);
 				if (reason) {
@@ -427,6 +495,7 @@ export async function localCi(
 					runtime,
 					tasks,
 					config.root,
+					mode === "watch",
 					renewLeaseFor,
 				);
 				if (!passed) ok = false;

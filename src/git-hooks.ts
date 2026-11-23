@@ -225,8 +225,8 @@ export async function prePush(
 	try {
 		await leases.inspect(refs, remoteUrl);
 	} catch (error) {
-		warnings.push(
-			`Serial lease checks were incomplete: ${(error as Error).message}. Run cagr lease list and verify ownership before landing.`,
+		messages.push(
+			`Could not check serial leases: ${(error as Error).message}. Restore access to origin, run cagr lease list, and retry the push.`,
 		);
 	}
 	let unchecked = false;

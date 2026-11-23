@@ -17,6 +17,7 @@ import {
 	gateTarget,
 	githubReasons,
 	isGateCommand,
+	isPrMerge,
 	prBodyFinding,
 	usesRemoteHead,
 } from "../guards/github";
@@ -27,6 +28,7 @@ import {
 	rememberProtected,
 	snapshotNotice,
 } from "../guards/protected-turn";
+import { mergeLeaseFinding } from "../leases/merge";
 import { serialNotice } from "../leases/notice";
 import { insideRoot } from "../paths";
 import { gateAtHead } from "../review/gate";
@@ -143,6 +145,15 @@ async function commandBefore(
 			commandFinding(command, config, context) ??
 			agentApprovalFinding(command, config);
 		if (early) return { kind: "deny", reason: render(early) };
+	}
+	const merge = commands.find(isPrMerge);
+	if (merge) {
+		const plan = gatePlan(input.command, config, input.commandCwd ?? input.cwd);
+		if ("finding" in plan)
+			return { kind: "deny", reason: render(plan.finding) };
+		const reason = await mergeLeaseFinding(input.command, plan.dir, config);
+		if (reason)
+			return { kind: "deny", reason: render({ id: "serial-lease", reason }) };
 	}
 	if (wrapped.some((command) => isGateCommand(command, config)))
 		return {

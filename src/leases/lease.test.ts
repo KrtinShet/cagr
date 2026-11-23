@@ -2,6 +2,8 @@ import { afterEach, test as bunTest, expect } from "bun:test";
 import { chmod, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { loadConfig } from "../config/load";
+import { handle } from "../hook/handlers";
 import { type RunOptions, run, shellQuote } from "../run";
 import { tempRepo } from "../test/repo";
 import { holder, LeaseRefs } from "./refs";
@@ -30,8 +32,8 @@ async function fixture(ttl = 1800) {
 	const repo = await tempRepo("cagr-lease-seed-");
 	cleanup.push(parent, repo.root);
 	const origin = join(parent, "origin.git");
-	const config = (prePush: string, branchName = "off") =>
-		`[agents]\nenabled = []\ncommand = ${JSON.stringify([process.execPath, cli].map(shellQuote).join(" "))}\n[git]\nprotected_branch = "main"\nbranch_name = "${branchName}"\nblock_force_push = true\npre_push = ${JSON.stringify(prePush)}\n`;
+	const config = (prePush: string | null, branchName = "off") =>
+		`[agents]\nenabled = []\ncommand = ${JSON.stringify([process.execPath, cli].map(shellQuote).join(" "))}\n[git]\nprotected_branch = "main"\nbranch_name = "${branchName}"\nblock_force_push = true\npre_push = ${JSON.stringify(prePush ?? [])}\n`;
 	await repo.commit("chore: set up serial migrations", {
 		"cagr.toml": config("true"),
 		".cagr/serial.toml": `[[lease]]\nname = "${name}"\npaths = ["migrations/**"]\nafter_acquire = "Merge main and regenerate."\nttl_seconds = ${ttl}\n`,
@@ -70,7 +72,7 @@ async function fixture(ttl = 1800) {
 					cwd,
 					options,
 				),
-			configure: (check: string, branchName = "off") =>
+			configure: (check: string | null, branchName = "off") =>
 				Bun.write(join(cwd, "cagr.toml"), config(check, branchName)),
 			migration: async (number: string) => {
 				const file = `migrations/${number}.sql`;
@@ -374,6 +376,88 @@ test("CI rejects an expired published lease and a failed update keeps a live one
 	expect(await remote("rev-parse", leaseRef)).toMatch(/^[a-f0-9]+$/);
 });
 
+test("CI uses the origin base policy after the PR removes or weakens it", async () => {
+	const { builder } = await fixture();
+	const a = await builder("builder-a");
+	const policy = join(a.cwd, ".cagr/serial.toml");
+	await a.migration("0002");
+	await a.git("rm", ".cagr/serial.toml");
+	await a.git("commit", "-qm", "chore: remove lease policy");
+	const ci = (gateEdit = "") =>
+		run([process.execPath, cli, "ci"], a.cwd, {
+			env: { CAGR_ALLOW_GATE_EDIT: gateEdit },
+		});
+	const removed = await ci();
+	expect(removed.stdout).toContain(
+		"The PR removes or weakens lease db-migrations",
+	);
+	expect(removed.stdout).toContain(
+		"Changes to db-migrations need a live lease",
+	);
+	await Bun.write(
+		policy,
+		`[[lease]]\nname = "${name}"\npaths = ["migrations/elsewhere/**"]\nttl_seconds = 3600\n`,
+	);
+	await a.git("add", policy);
+	await a.git("commit", "-qm", "chore: weaken lease policy");
+	expect((await ci()).stdout).toContain(
+		"The PR removes or weakens lease db-migrations",
+	);
+	const authorized = await ci("1");
+	expect(authorized.stdout).not.toContain("The PR removes or weakens");
+	expect(authorized.stdout).toContain(
+		"Changes to db-migrations need a live lease",
+	);
+});
+
+test("the merge hook checks the target branch lease even after a previously green head loses it", async () => {
+	const { builder, setRenewal } = await fixture();
+	const a = await builder("builder-a");
+	const b = await builder("builder-b");
+	await a.migration("0002");
+	expect((await a.lease("take")).ok).toBe(true);
+	expect((await a.push()).ok).toBe(true);
+	const config = loadConfig(b.cwd);
+	expect(config).not.toBeNull();
+	const merge = (target: string) =>
+		handle(
+			{
+				event: "command.before",
+				sessionId: "lease-merge",
+				cwd: b.cwd,
+				command: `gh pr merge ${target} --squash`,
+				files: [],
+			},
+			config,
+		);
+	const refresh = () =>
+		b.git(
+			"fetch",
+			"--prune",
+			"origin",
+			"+refs/heads/*:refs/remotes/origin/*",
+			"+refs/cagr/lease/*:refs/cagr/cache/lease/*",
+		);
+	await refresh();
+	expect(await merge(a.branch)).toEqual({ kind: "allow" });
+	await setRenewal(leaseRef, 0);
+	await refresh();
+	expect(await merge(a.branch)).toMatchObject({
+		kind: "deny",
+		reason: expect.stringContaining("need a live lease on builder-a"),
+	});
+	expect((await b.lease("take")).ok).toBe(true);
+	await refresh();
+	expect(await merge(a.branch)).toMatchObject({
+		kind: "deny",
+		reason: expect.stringContaining("cagr lease take db-migrations"),
+	});
+	expect(await merge("59")).toMatchObject({
+		kind: "deny",
+		reason: expect.stringContaining("cached origin refs"),
+	});
+});
+
 test("dry-run pushes leave remote lease refs unchanged on success and refusal", async () => {
 	const { builder, remote } = await fixture();
 	const a = await builder("builder-a");
@@ -396,6 +480,43 @@ test("a configured push refspec cannot write a serial ref", async () => {
 	const pushed = await run(["git", "push", "origin"], a.cwd);
 	expect(pushed.ok).toBe(false);
 	expect(pushed.stderr).toContain("Use cagr lease");
+});
+
+test("an orphan is checked against an empty tree and does not skip the next ref", async () => {
+	const { builder } = await fixture();
+	const a = await builder("builder-a");
+	await a.migration("0002");
+	await a.git("switch", "--orphan", "orphan");
+	await a.git(
+		"checkout",
+		"main",
+		"--",
+		"migrations",
+		"cagr.toml",
+		".cagr",
+		".githooks",
+	);
+	await a.git("commit", "-qm", "feat: start orphan history");
+	const push = await run(["git", "push", "origin", "orphan", a.branch], a.cwd);
+	expect(push.ok).toBe(false);
+	expect(push.stderr).toContain("on orphan and retry the push");
+	expect(push.stderr).toContain("on builder-a and retry the push");
+
+	const missing = "a".repeat(40);
+	const sha = await a.git("rev-parse", a.branch);
+	const zero = "0".repeat(40);
+	const inspect = await run(
+		[process.execPath, cli, "git", "pre-push", "origin"],
+		a.cwd,
+		{
+			stdin: `refs/heads/orphan ${missing} refs/heads/orphan ${zero}\nrefs/heads/${a.branch} ${sha} refs/heads/${a.branch} ${zero}\n`,
+		},
+	);
+	expect(inspect.ok).toBe(false);
+	expect(inspect.output).toContain(
+		"Could not check leases for refs/heads/orphan",
+	);
+	expect(inspect.output).toContain("on builder-a and retry the push");
 });
 
 test("a main-only migration brought in by a merge needs no lease", async () => {
@@ -467,7 +588,7 @@ test("take skips and logs malformed records, and a human can prune tickets direc
 			published: false,
 		}),
 	);
-	await setRecord(broken, JSON.stringify(holder("builder-b\u001b[2J")));
+	await setRecord(broken, JSON.stringify(holder("builder..b")));
 	const listed = await a.lease("list");
 	expect(listed.stdout).toContain("malformed lease");
 	expect(listed.stdout).not.toContain("\u001b");
@@ -477,12 +598,17 @@ test("take skips and logs malformed records, and a human can prune tickets direc
 		`Pruned malformed serial record at ${broken}`,
 	);
 	expect(await remote("for-each-ref", waitPrefix)).toBe("");
-	await setRecord(broken, "still not a ticket");
+	await setRecord(broken, JSON.stringify(holder("builder b")));
+	const unreadable = `${waitPrefix}124-invalid-json`;
+	await setRecord(unreadable, "still not a ticket");
 	const taken = await a.lease("take");
 	expect(taken.stdout).toContain(
 		`Pruned malformed serial record at ${leaseRef}`,
 	);
 	expect(taken.stdout).toContain(`Pruned malformed serial record at ${broken}`);
+	expect(taken.stdout).toContain(
+		`Pruned malformed serial record at ${unreadable}`,
+	);
 	expect(taken.stdout).toContain("Acquired db-migrations for builder-a");
 	expect(await remote("for-each-ref", waitPrefix)).toBe("");
 });
@@ -515,6 +641,37 @@ done`,
 	expect(result.ok).toBe(false);
 	expect(result.stderr).toContain("too little time left");
 	expect(await remote("rev-parse", leaseRef)).not.toBe(before);
+	expect(await remote("branch", "--list", a.branch)).toBe("");
+});
+
+test("a second renewal can expire the first lease even with no pre-push commands", async () => {
+	const { builder, origin, remote } = await fixture(3);
+	const a = await builder("builder-a");
+	await a.configure(null);
+	await Bun.write(
+		join(a.cwd, ".cagr/z-extra.toml"),
+		'[[lease]]\nname = "slow"\npaths = ["migrations/**"]\nttl_seconds = 20\n',
+	);
+	await withCommand(
+		join(origin, "hooks"),
+		"pre-receive",
+		`
+while read -r old new ref; do
+  if test "$ref" = refs/cagr/lease/slow && test "$old" != ${"0".repeat(40)} && test "$new" != ${"0".repeat(40)}; then
+    sleep 4
+  fi
+done`,
+	);
+	await a.migration("0002");
+	expect((await a.lease("take")).ok).toBe(true);
+	expect(
+		(await run([process.execPath, cli, "lease", "take", "slow"], a.cwd)).ok,
+	).toBe(true);
+	const push = await a.push();
+	expect(push.ok).toBe(false);
+	expect(push.stderr).toContain(
+		"db-migrations changed or has too little time left",
+	);
 	expect(await remote("branch", "--list", a.branch)).toBe("");
 });
 

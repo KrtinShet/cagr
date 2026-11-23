@@ -204,6 +204,28 @@ function validate(raw: RawConfig, source: string) {
 		);
 }
 
+export function parseLeasePolicy(text: string, source: string) {
+	const raw = Bun.TOML.parse(text) as RawConfig;
+	validate(raw, source);
+	return leases(raw);
+}
+
+function leases(raw: RawConfig) {
+	const lease = ((raw.lease as Lease[] | undefined) ?? []).map((entry) => ({
+		...entry,
+		ttl_seconds: entry.ttl_seconds ?? 1800,
+	}));
+	const names = new Set<string>();
+	for (const entry of lease) {
+		if (names.has(entry.name))
+			throw new ConfigError(
+				`Lease "${entry.name}" is declared twice. Keep one [[lease]] per name.`,
+			);
+		names.add(entry.name);
+	}
+	return lease;
+}
+
 function withPresets(
 	raw: RawConfig,
 	source: string,
@@ -275,23 +297,11 @@ function applyDefaults(
 	const commitTypes =
 		(git.commit_types as string[] | undefined) ?? defaultCommitTypes;
 	const prePush = git.pre_push;
-	const lease = ((raw.lease as Lease[] | undefined) ?? []).map((entry) => ({
-		...entry,
-		ttl_seconds: entry.ttl_seconds ?? 1800,
-	}));
-	const names = new Set<string>();
-	for (const entry of lease) {
-		if (names.has(entry.name))
-			throw new ConfigError(
-				`Lease "${entry.name}" is declared twice. Keep one [[lease]] per name.`,
-			);
-		names.add(entry.name);
-	}
 	return {
 		root,
 		source,
 		sources,
-		lease,
+		lease: leases(raw),
 		extends: (raw.extends as string[] | undefined) ?? [],
 		agents: {
 			enabled: (agents.enabled as AgentName[] | undefined) ?? [

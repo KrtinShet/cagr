@@ -134,6 +134,12 @@ export class LeaseRefs {
 				return null;
 			}
 			if (!isHolder(value)) return null;
+			const branch = await this.git([
+				"check-ref-format",
+				"--branch",
+				value.branch,
+			]);
+			if (!branch.ok || branch.stdout.trimEnd() !== value.branch) return null;
 			record = value;
 			this.#records.set(sha, record);
 		}
@@ -232,4 +238,9 @@ function isLease(value: Holder): value is LeaseRecord {
 		"published" in value &&
 		typeof value.published === "boolean"
 	);
+}
+
+export function parseLeaseRecord(raw: string): LeaseRecord | null {
+	const value: unknown = JSON.parse(raw);
+	return isHolder(value) && isLease(value) ? value : null;
 }

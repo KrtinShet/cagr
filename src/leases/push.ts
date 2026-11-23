@@ -4,13 +4,19 @@ import {
 	branchRef,
 	changedPaths,
 	expired,
+	hasRenewalMargin,
 	heldLease,
 	protectedChanges,
 	renew,
 	renewalInterval,
 	touchesLease,
 } from "./lease";
-import { type LeaseRecord, LeaseRefs, type Recorded } from "./refs";
+import {
+	type LeaseRecord,
+	LeaseRefs,
+	type LeaseSnapshot,
+	type Recorded,
+} from "./refs";
 
 const zero = /^0+$/;
 
@@ -76,56 +82,70 @@ export class PushLeases {
 		}
 		for (const ref of branches.values()) {
 			if (zero.test(ref.localSha)) continue;
-			const paths = await protectedChanges(
+			try {
+				await this.#inspectRef(ref, snapshot, remoteUrl);
+			} catch (error) {
+				this.messages.push(
+					`Could not check leases for ${ref.remoteRef}: ${(error as Error).message}. Fetch origin, run cagr lease list, and retry the push.`,
+				);
+			}
+		}
+	}
+
+	async #inspectRef(
+		ref: PushedRef,
+		snapshot: LeaseSnapshot,
+		remoteUrl?: string,
+	) {
+		const paths = await protectedChanges(
+			this.#git,
+			this.config,
+			snapshot,
+			ref.localSha,
+		);
+		const originTip = snapshot.refs.get(ref.remoteRef);
+		const publishedPaths = originTip
+			? await protectedChanges(this.#git, this.config, snapshot, originTip)
+			: [];
+		if (!zero.test(ref.remoteSha)) {
+			await this.#git.ensureObject(ref.remoteSha, remoteUrl);
+			const updated = await changedPaths(
 				this.#git,
-				this.config,
-				snapshot,
+				ref.remoteSha,
 				ref.localSha,
 			);
-			const originTip = snapshot.refs.get(ref.remoteRef);
-			const publishedPaths = originTip
-				? await protectedChanges(this.#git, this.config, snapshot, originTip)
-				: [];
-			if (!zero.test(ref.remoteSha)) {
-				await this.#git.ensureObject(ref.remoteSha, remoteUrl);
-				const updated = await changedPaths(
-					this.#git,
-					ref.remoteSha,
-					ref.localSha,
+			if (await this.#git.ancestor(ref.remoteSha, ref.localSha)) {
+				// Also guard branch-only changes that disappear in this update.
+				const pending =
+					ref.remoteSha === originTip
+						? publishedPaths
+						: await protectedChanges(
+								this.#git,
+								this.config,
+								snapshot,
+								ref.remoteSha,
+							);
+				const deleted = new Set(pending);
+				paths.push(...updated.filter((path) => deleted.has(path)));
+			} else paths.push(...updated);
+		}
+		for (const lease of this.config.lease) {
+			if (!touchesLease(lease, paths)) continue;
+			const held = this.#held.find(
+				({ entry, lease: definition }) =>
+					definition === lease &&
+					branchRef(entry.record.branch) === ref.remoteRef,
+			);
+			if (!held || expired(lease, held.entry.record))
+				this.messages.push(
+					`Changes to ${lease.name} need its lease. Run \`cagr lease take ${lease.name}\` on ${ref.remoteRef.slice("refs/heads/".length)} and retry the push.`,
 				);
-				if (await this.#git.ancestor(ref.remoteSha, ref.localSha)) {
-					// Also guard branch-only changes that disappear in this update.
-					const pending =
-						ref.remoteSha === originTip
-							? publishedPaths
-							: await protectedChanges(
-									this.#git,
-									this.config,
-									snapshot,
-									ref.remoteSha,
-								);
-					const deleted = new Set(pending);
-					paths.push(...updated.filter((path) => deleted.has(path)));
-				} else paths.push(...updated);
-			}
-			for (const lease of this.config.lease) {
-				if (!touchesLease(lease, paths)) continue;
-				const held = this.#held.find(
-					({ entry, lease: definition }) =>
-						definition === lease &&
-						branchRef(entry.record.branch) === ref.remoteRef,
-				);
-				if (!held || expired(lease, held.entry.record))
-					this.messages.push(
-						`Changes to ${lease.name} need its lease. Run \`cagr lease take ${lease.name}\` on ${ref.remoteRef.slice("refs/heads/".length)} and retry the push.`,
-					);
-				else {
-					held.required = true;
-					held.head =
-						originTip && touchesLease(lease, publishedPaths)
-							? originTip
-							: ref.localSha;
-				}
+			else {
+				held.required = true;
+				held.head =
+					originTip && touchesLease(lease, publishedPaths)
+						? originTip
+						: ref.localSha;
 			}
 		}
 	}
@@ -168,29 +188,30 @@ export class PushLeases {
 			await check();
 		} else {
 			await this.#renew();
-			if (this.messages.length || !heartbeat) return;
-			const interval = Math.min(
-				...this.#held.map(({ lease }) => renewalInterval(lease)),
-			);
-			let pending: Promise<void> | undefined;
-			const timer = setInterval(() => {
-				if (!pending && !this.messages.length)
-					pending = this.#renew().finally(() => {
-						pending = undefined;
-					});
-			}, interval);
-			try {
-				await check();
-			} finally {
-				clearInterval(timer);
-				await pending;
-			}
-			if (!this.messages.length) await this.#renew();
+			if (heartbeat && !this.messages.length) await this.#heartbeat(check);
 		}
-		if (!this.messages.length) {
-			for (const { lease, entry, required } of this.#held)
-				if (required && expired(lease, entry.record)) this.#lost(lease);
+		for (const { lease, entry } of this.#held)
+			if (!hasRenewalMargin(lease, entry.record)) this.#lost(lease);
+	}
+
+	async #heartbeat(check: () => Promise<void>) {
+		const interval = Math.min(
+			...this.#held.map(({ lease }) => renewalInterval(lease)),
+		);
+		let pending: Promise<void> | undefined;
+		const timer = setInterval(() => {
+			if (!pending && !this.messages.length)
+				pending = this.#renew().finally(() => {
+					pending = undefined;
+				});
+		}, interval);
+		try {
+			await check();
+		} finally {
+			clearInterval(timer);
+			await pending;
 		}
+		if (!this.messages.length) await this.#renew();
 	}
 
 	async releaseUnpublished() {

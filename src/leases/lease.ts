@@ -18,6 +18,9 @@ import {
 export const expired = (lease: Lease, record: { renewed: number }) =>
 	Date.now() - record.renewed >= lease.ttl_seconds * 1000;
 
+export const hasRenewalMargin = (lease: Lease, record: LeaseRecord) =>
+	Date.now() - record.renewed < lease.ttl_seconds * 500;
+
 export const renewalInterval = (lease: Lease) =>
 	Math.min(300_000, (lease.ttl_seconds * 1000) / 3);
 
@@ -32,7 +35,12 @@ export const branchRef = (branch: string) => `refs/heads/${branch}`;
 export const touchesLease = (lease: Lease, paths: string[]) =>
 	paths.some((path) => lease.paths.some((glob) => matchesGlob(glob, path)));
 
-export async function changedPaths(git: LeaseRefs, base: string, head: string) {
+export async function changedPaths(
+	git: LeaseRefs,
+	base: string,
+	head: string,
+	fromMergeBase = false,
+) {
 	return (
 		await git.checked([
 			"diff",
@@ -40,6 +48,7 @@ export async function changedPaths(git: LeaseRefs, base: string, head: string) {
 			"--no-renames",
 			"--relative",
 			"--ignore-submodules=none",
+			...(fromMergeBase ? ["--merge-base"] : []),
 			"-z",
 			base,
 			head,
@@ -66,13 +75,18 @@ export async function protectedChanges(
 			throw new LeaseError(
 				"Set [git] protected_branch to an existing branch on origin and retry.",
 			);
-		return (await git.checked(["ls-tree", "-r", "--name-only", "-z", head]))
-			.split("\0")
-			.filter(Boolean);
+	} else {
+		await git.ensureObject(base);
+		const common = await git.git(["merge-base", base, head]);
+		if (common.ok) return changedPaths(git, common.stdout.trim(), head);
+		if (common.exitCode !== 1)
+			throw new LeaseError(
+				`Could not find a merge base: ${common.output.trim()}`,
+			);
 	}
-	await git.ensureObject(base);
-	const common = await git.checked(["merge-base", base, head]);
-	return changedPaths(git, common, head);
+	return (await git.checked(["ls-tree", "-r", "--name-only", "-z", head]))
+		.split("\0")
+		.filter(Boolean);
 }
 
 export async function heldLease(
@@ -315,8 +329,7 @@ export async function renew(
 		if ((await git.change(held.ref, held.sha, record)) === null) return null;
 		const current = await heldLease(git, await git.snapshot(), lease);
 		if (!current || current.record.id !== record.id) return null;
-		if (Date.now() - current.record.renewed < lease.ttl_seconds * 500)
-			return current;
+		if (hasRenewalMargin(lease, current.record)) return current;
 		held = current;
 	}
 	return null;
