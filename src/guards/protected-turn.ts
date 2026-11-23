@@ -39,7 +39,7 @@ import {
 } from "./lockfile";
 
 type Blob = { mode: string; oid: string };
-type PathOutcome = { problem: string } | { path: string; content: string };
+type StagedLockfile = Blob & { workMatchesIndex?: boolean };
 type IndexEntry = Blob & { stage: string };
 type StatusPath = { workStatus: string; index: IndexEntry[] };
 type FileState = {
@@ -47,13 +47,16 @@ type FileState = {
 	/** Missing means the working copy matches the index. Null means deleted. */
 	work?: string | null;
 };
+type PathOutcome =
+	| { problem: string }
+	| { path: string; index: IndexEntry[]; work: string | null };
 type Snapshot = {
 	root: string;
 	head?: string | null;
 	branch: string | null;
 	entries: ProtectedFile[];
 	files: Record<string, FileState> | null;
-	lockfileIndex?: Record<string, Blob>;
+	lockfileIndex?: Record<string, StagedLockfile>;
 	/** The stacks at the start of the turn, so turn end knows each lockfile's package manager. */
 	stacks?: LockfileStack[];
 };
@@ -78,13 +81,14 @@ function checkoutPolicy(
 const hash = (bytes: string | Uint8Array) =>
 	createHash("sha256").update(bytes).digest("hex");
 
-export function checkoutOf(dir: string): string | null {
-	for (;;) {
+export function checkoutOf(dir: string, deadline = Infinity): string | null {
+	while (performance.now() < deadline) {
 		if (existsSync(join(dir, ".git"))) return dir;
 		const parent = dirname(dir);
 		if (parent === dir) return null;
 		dir = parent;
 	}
+	return null;
 }
 
 function writeOperands(name: string, args: string[]) {
@@ -109,44 +113,64 @@ function writeOperands(name: string, args: string[]) {
 		: [target ?? operands.at(-1) ?? ""];
 }
 
-function writePaths(cwd: string, target: string) {
+function writePaths(cwd: string, target: string, deadline: number) {
 	if (!target || /^[~-]|[$*?]/.test(target)) return [];
 	const path = resolve(cwd, target);
 	let existing = path;
 	while (!existsSync(existing)) {
+		if (performance.now() >= deadline) return [];
 		const parent = dirname(existing);
 		if (parent === existing) return [path];
 		existing = parent;
 	}
+	if (performance.now() >= deadline) return [];
 	const canonical = realpathSync(existing);
 	return canonical === existing ? [path] : [path, canonical];
 }
 
-function checkouts(input: HookInput) {
+const writeTargetLimit = 64;
+
+function checkouts(input: HookInput, deadline: number) {
 	const dirs = input.files.map(dirname);
-	let cwd = input.commandCwd ?? input.cwd;
+	const launchDir = input.commandCwd ?? input.cwd;
+	const writeTargets: { cwd: string; target: string }[] = [];
 	const commands = commandsWithRedirections(
 		withoutHeredocBodies(input.command ?? ""),
 	);
+	const directories = new Map<(typeof commands)[number]["scope"], string>();
 	// Compound shell lines and redirections can also touch the launch directory.
 	if (
 		commands.length !== 1 ||
 		commands.some(({ raw, words }) => raw.length !== words.length)
 	)
-		dirs.push(cwd);
+		dirs.push(launchDir);
 	for (const command of commands) {
+		if (performance.now() >= deadline) break;
+		let scope = command.scope;
+		while (scope && !directories.has(scope)) scope = scope.parent;
+		let cwd = directories.get(scope) ?? launchDir;
 		const words = programWords(command.words);
 		const name = programName(words);
 		const destination = words[1] === "--" ? words[2] : words[1];
-		const writes = [
-			...command.redirections
-				.filter(({ operator }) => /^(?:>|>>|>\||&>|&>>|<>)$/.test(operator))
-				.map(({ target }) => target),
-			...writeOperands(name, words.slice(1)),
-		];
-		for (const target of writes) dirs.push(...writePaths(cwd, target));
+		if (writeTargets.length < writeTargetLimit) {
+			const writes = [
+				...command.redirections
+					.filter(({ operator, target }) =>
+						operator === ">&"
+							? !/^(?:\d+|-)$/.test(target)
+							: /^(?:>|>>|>\||&>|&>>|<>)$/.test(operator),
+					)
+					.map(({ target }) => target),
+				...writeOperands(name, words.slice(1)),
+			];
+			for (const target of writes) {
+				if (writeTargets.length === writeTargetLimit) break;
+				writeTargets.push({ cwd, target });
+			}
+		}
 		if (name === "cd" && destination && !/^[~-]|[$*?]/.test(destination)) {
 			cwd = resolve(cwd, destination);
+			directories.set(command.scope, cwd);
 			dirs.push(cwd);
 		}
 		if (name !== "git") {
@@ -162,14 +186,20 @@ function checkouts(input: HookInput) {
 		}
 		dirs.push(gitDir);
 	}
-	return [
-		...new Set(
-			[...new Set(dirs)]
-				.map(checkoutOf)
-				.filter((root) => root !== null)
-				.map((root) => realpathSync(root)),
-		),
-	];
+	const roots = new Set<string>();
+	for (const dir of new Set(dirs)) {
+		if (performance.now() >= deadline) break;
+		const root = checkoutOf(dir, deadline);
+		if (root) roots.add(root);
+	}
+	for (const { cwd, target } of writeTargets) {
+		if (performance.now() >= deadline) break;
+		for (const path of writePaths(cwd, target, deadline)) {
+			const root = checkoutOf(path, deadline);
+			if (root) roots.add(root);
+		}
+	}
+	return [...new Set([...roots].map((root) => realpathSync(root)))];
 }
 
 async function git(
@@ -292,21 +322,55 @@ async function stagedLockfiles(root: string, deadline: number) {
 		[
 			"-c",
 			"core.fsmonitor=false",
-			"ls-files",
-			"--stage",
+			"diff",
+			"--cached",
+			"--raw",
+			"--no-ext-diff",
+			"--no-renames",
+			"--no-abbrev",
+			"--diff-filter=AMT",
 			"-z",
 			"--",
 			...lockfilePathspecs,
 		],
 		deadline,
 	);
-	const staged: Record<string, Blob> = {};
-	for (const record of output?.split("\0") ?? []) {
-		const match = /^(\S+) (\S+) 0\t([\s\S]+)$/.exec(record);
-		if (match?.[1] && match[2] && match[3])
-			staged[match[3]] = { mode: match[1], oid: match[2] };
+	const staged: Record<string, StagedLockfile> = Object.create(null);
+	const records = output?.split("\0") ?? [];
+	for (let i = 0; i + 1 < records.length; i += 2) {
+		const path = records[i + 1];
+		const [, mode, , oid] = records[i]?.split(" ") ?? [];
+		if (path && mode && oid) staged[path] = { mode, oid };
+	}
+	for (const [path, entry] of Object.entries(staged)) {
+		if (performance.now() >= deadline) break;
+		const info = await lstat(join(root, path)).catch(() => null);
+		if (
+			info?.isFile() &&
+			entry.mode === (info.mode & 0o111 ? "100755" : "100644")
+		)
+			entry.workMatchesIndex = await workMatchesIndex(
+				root,
+				path,
+				entry,
+				deadline,
+			);
 	}
 	return staged;
+}
+
+async function workMatchesIndex(
+	root: string,
+	path: string,
+	entry: Blob,
+	deadline: number,
+) {
+	const oid = await git(
+		root,
+		["hash-object", `--path=${path}`, "--", path],
+		deadline,
+	).catch(() => null);
+	return oid?.trim() === entry.oid;
 }
 
 async function workingCopy(
@@ -378,8 +442,10 @@ export async function rememberProtected(
 			? snapshotBudget.commandMs
 			: snapshotBudget.toolMs);
 	const directory = protectedStateDir(file);
+	const roots = checkouts(input, deadline);
+	if (performance.now() >= deadline) return snapshotNotice(file);
 	const captures = await Promise.allSettled(
-		checkouts(input).map(async (root) => {
+		roots.map(async (root) => {
 			const target = join(directory, hash(root));
 			if (existsSync(target)) return;
 			const startHead = git(
@@ -687,7 +753,8 @@ async function violations(
 			const change = changed.get(path);
 			const index =
 				change?.index ?? (current ? [{ ...current, stage: "0" }] : []);
-			if (skipped.has(path) && !old && !current && !index.length) return null;
+			const unattributed = skipped.has(path);
+			if (unattributed && !old && !current && !index.length) return null;
 			let work: FileState["work"];
 			if (change?.workStatus === "D") work = null;
 			else if (change && change.workStatus !== ".")
@@ -699,6 +766,44 @@ async function violations(
 				JSON.stringify(index) === JSON.stringify(baseline.index)
 			)
 				return null;
+			const checked = isLockfile(path);
+			const entry = index[0];
+			const fullPath = join(root, path);
+			if (
+				checked &&
+				!committed &&
+				!sameBlob(entry, old) &&
+				work === undefined
+			) {
+				if (
+					before?.work &&
+					entry &&
+					indexMatches(before.index, entry) &&
+					indexMatches(index, entry)
+				)
+					return {
+						problem: `- ${fullPath}\n  ${restoration(snapshot, folder, path, before, old, committed)}`,
+					};
+				const staged = snapshot.lockfileIndex?.[path];
+				if (staged && indexMatches(index, staged)) {
+					const info = await lstat(fullPath).catch(() => null);
+					if (
+						info?.isFile() &&
+						(await workMatchesIndex(root, path, staged, deadline))
+					) {
+						const older = startedAt !== undefined && info.ctimeMs < startedAt;
+						if (staged.workMatchesIndex || older)
+							return {
+								path: fullPath,
+								index,
+								work: await workingCopy(fullPath),
+							};
+						return {
+							problem: `- ${fullPath}\n  The working copy changed during this turn and now matches the prior staged copy. Check with the user for the working copy from before the turn.`,
+						};
+					}
+				}
+			}
 			if (
 				upstream &&
 				work === undefined &&
@@ -706,36 +811,12 @@ async function violations(
 				(!committed || sameBlob(branch, current))
 			)
 				return null;
-			const checked = isLockfile(path);
-			const entry = index[0];
-			if (
-				checked &&
-				!snapshot.files &&
-				!committed &&
-				work !== null &&
-				entry?.stage === "0" &&
-				index.length === 1 &&
-				snapshot.lockfileIndex &&
-				Object.hasOwn(snapshot.lockfileIndex, path) &&
-				sameBlob(entry, snapshot.lockfileIndex[path])
-			) {
-				const bytes = await gitBlob(
-					root,
-					entry.oid,
-					Math.floor(deadline - performance.now()),
-				);
-				if (
-					bytes &&
-					(work ?? (await workingCopy(join(root, path)))) ===
-						`${entry.mode} ${hash(bytes)}`
-				)
-					return null;
-			}
-			if (skipped.has(path) && !committed) {
-				const fullPath = join(root, path);
-				const content = work === undefined ? await workingCopy(fullPath) : work;
-				return { path: fullPath, content: content ?? JSON.stringify(index) };
-			}
+			if (unattributed && !committed)
+				return {
+					path: fullPath,
+					index,
+					work: work === undefined ? await workingCopy(fullPath) : work,
+				};
 			// A lockfile is checked as one copy: the working copy, with the index and commit unchanged or matching it.
 			const onlyWorkingCopy =
 				!committed && JSON.stringify(index) === JSON.stringify(baseline.index);
@@ -835,10 +916,10 @@ export async function checkProtected(
 	const problems = outcomes.flatMap((outcome) => outcome.problems);
 	const unattributed = outcomes.flatMap((outcome) => outcome.unattributed);
 	const notices = await Promise.all(
-		unattributed.map(async ({ path, content }) =>
+		unattributed.map(async ({ path, index, work }) =>
 			(await reportOnce(
 				protectedNoticesDir(file),
-				hash(JSON.stringify([path, content])),
+				hash(JSON.stringify([path, index, work])),
 			))
 				? `${path}: changed before this turn or unknown; not restored`
 				: "",
