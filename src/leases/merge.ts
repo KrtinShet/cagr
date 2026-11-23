@@ -9,7 +9,7 @@ import { LeaseError, LeaseRefs, parseLeaseRecord } from "./refs";
 const refresh =
 	"git fetch --prune origin '+refs/heads/*:refs/remotes/origin/*' '+refs/cagr/lease/*:refs/cagr/cache/lease/*'";
 const unchecked = `Could not verify landing leases from cached origin refs. Run \`${refresh}\`, then run \`gh pr merge <head-branch>\` on its own from this repo.`;
-export const mergeBudget = { timeoutMs: 45 };
+export const mergeBudget = { timeoutMs: 2000 };
 
 async function cachedLeases(git: LeaseRefs, base: string, names: string[]) {
 	const source = `${base}:${policyFile}`;
