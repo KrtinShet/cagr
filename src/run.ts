@@ -17,7 +17,9 @@ export type RunOptions = {
 	processGroup?: boolean;
 	waitForGroup?: boolean;
 	closePipesAfterExit?: boolean;
-	cleanupHandoff?: { deadline: number; keepWatching: () => void };
+	cleanupHandoff?: () =>
+		| { deadline: number; keepWatching: () => void }
+		| undefined;
 	log?: (line: string) => void;
 	env?: Record<string, string | undefined>;
 	stdin?: string;
@@ -161,7 +163,7 @@ export async function run(
 		await within(child.exited, killGraceMs);
 		if (!drain || (await waitForGroupExit(child.pid, deadline))) return;
 		const limit = performance.now() + cleanupLimitMs;
-		const handoff = options.cleanupHandoff;
+		const handoff = options.cleanupHandoff?.();
 		log(
 			`cagr: process group ${child.pid} is still alive after SIGKILL. Holding its admission tokens while it drains.`,
 		);

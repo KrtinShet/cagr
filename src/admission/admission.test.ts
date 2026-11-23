@@ -808,3 +808,45 @@ test("a group still alive at the cleanup deadline produces an explicit release w
 	expect(output).toContain("WARNING:");
 	expect(output).toContain("Releasing its admission tokens");
 });
+
+test("a failed watchdog startup cannot hand off a surviving process group", async () => {
+	const proc = spawn(
+		fixture(),
+		runner(`
+		const spawn = Bun.spawn;
+		const kill = process.kill;
+		let group;
+		let killedAt;
+		Bun.spawn = (argv, options) => {
+			if (argv.includes("cagr-watch")) throw new Error("EMFILE: watchdog failed");
+			return spawn(argv, options);
+		};
+		process.kill = (target, signal) => {
+			if (target < 0 && signal === "SIGKILL") {
+				group = target;
+				killedAt = performance.now();
+			}
+			if (target === group && signal === 0 && performance.now() - killedAt < 1250)
+				return true;
+			return kill(target, signal);
+		};
+		try {
+			await runAdmitted({
+				argv: ["sleep", "30"], cwd, config, measure: false,
+				options: {
+					deadline: performance.now() + 750,
+					log: console.error,
+					pressure: () => ({ elevated: false, description: "normal" }),
+				},
+			});
+		} catch (error) {
+			console.error(error.message);
+		}
+		console.error(performance.now() - killedAt >= 1250 ? "group drained" : "released too soon");
+	`),
+	);
+	const { output } = await proc.finished();
+	expect(output).toContain("EMFILE: watchdog failed");
+	expect(output).toContain("group drained");
+	expect(output).not.toContain("watchdog is retaining the tokens");
+});
