@@ -457,7 +457,15 @@ test("take skips and logs malformed records, and a human can prune tickets direc
 	const { builder, remote, setRecord } = await fixture();
 	const a = await builder("builder-a");
 	const broken = `${waitPrefix}123-broken`;
-	await setRecord(leaseRef, "not a lease");
+	await setRecord(
+		leaseRef,
+		JSON.stringify({
+			...holder(a.branch),
+			host: "builder\u001b[2J",
+			head: null,
+			published: false,
+		}),
+	);
 	await setRecord(broken, JSON.stringify(holder("builder-b\u001b[2J")));
 	const listed = await a.lease("list");
 	expect(listed.stdout).toContain("malformed lease");
