@@ -5,8 +5,12 @@ import { join, resolve } from "node:path";
 import { loadConfig } from "../config/load";
 import { handle } from "../hook/handlers";
 import { type RunOptions, run, shellQuote } from "../run";
+import { roomyBudgets } from "../test/budgets";
 import { tempRepo } from "../test/repo";
+import { mergeBudget } from "./merge";
 import { holder, LeaseRefs } from "./refs";
+
+roomyBudgets(mergeBudget);
 
 const cli = resolve(import.meta.dir, "../cli.ts");
 const name = "db-migrations";
