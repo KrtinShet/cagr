@@ -446,6 +446,23 @@ test.each([
 	["a package Bun bundles", "import x from 'undici'", false],
 	["a re-export", "export * from './x'", false],
 	["a member require call", "module.require('semver')", false],
+	[
+		"a require word inside an import binding list",
+		"var from = 0, o = {}\no.export\nclass A extends require {}\nfrom\n'fs'\nObject.getPrototypeOf(A)('./x')",
+		false,
+	],
+	["a template literal load", "require(`./x`)", false],
+	["Function", "Function('return 1')()", false],
+	["globalThis", "globalThis.process", false],
+	["WebAssembly", "WebAssembly.instantiate(bytes)", false],
+	["mainModule", "process.mainModule", false],
+	["execve", "process.execve('/bin/sh')", false],
+	["dlopen", "process.dlopen(m, './x.node')", false],
+	["binding", "process.binding('fs')", false],
+	["an optional computed member of module", "module?.['x']", false],
+	...["vm", "worker_threads", "cluster", "inspector", "repl", "wasi"].map(
+		(name) => [`the ${name} module`, `require('node:${name}')`, false] as const,
+	),
 ])("a pnpmfile with %s loads only built-ins: %p", (_, code, expected) => {
 	expect(builtinsOnly(code)).toBe(expected);
 });

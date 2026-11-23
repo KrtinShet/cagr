@@ -506,7 +506,7 @@ const coreModules = new Set(
  */
 export function builtinsOnly(text: string) {
 	const loads =
-		/\brequire\s*\(\s*(["'])([^"'\n]+)\1\s*\)|\bimport\s*\(\s*(["'])([^"'\n]+)\3\s*\)|\b(?:import|export)\s+(?:[\w$*{},\s]+?\s+from\s+)?(["'])([^"'\n]+)\5/g;
+		/\brequire\s*\(\s*(["'])([^"'\n]+)\1\s*\)|\bimport\s*\(\s*(["'])([^"'\n]+)\3\s*\)|(?:^|[;}\n])\s*(?:import|export)\s+(?:(?:(?!\b(?:require|import|export)\b)[\w$*{},\s])+?\s+from\s+)?(["'])([^"'\n]+)\5/g;
 	for (const match of text.matchAll(loads))
 		if (
 			!coreModules.has(
