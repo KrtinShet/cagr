@@ -43,6 +43,7 @@ import {
 	clearTurnState,
 	readTurnState,
 	recordEdits,
+	startTurn,
 	stateFile,
 	type TurnState,
 	writeTurnState,
@@ -60,6 +61,11 @@ export async function handle(
 ): Promise<Decision> {
 	if (input.event === "turn.end") return turnEnd(input, config);
 	if (!config) return { kind: "allow" };
+	const file = stateFile(input.sessionId);
+	const startNotice =
+		input.event !== "session.start" && config.files.protected.length
+			? await startTurn(file).catch(() => snapshotNotice(file))
+			: undefined;
 	switch (input.event) {
 		case "session.start":
 			return { kind: "allow", context: brief(config) };
@@ -70,20 +76,27 @@ export async function handle(
 					? await commandBefore(input, config)
 					: await fileBeforeEdit(input, config);
 			if (decision.kind === "allow") {
-				const file = stateFile(input.sessionId);
 				const notice = await rememberProtected(file, input, config).catch(() =>
-					snapshotNotice(file, true),
+					snapshotNotice(file),
 				);
-				if (notice)
+				if (startNotice || notice)
 					return {
 						...decision,
-						notice: [decision.notice, notice].filter(Boolean).join("\n"),
+						notice: [decision.notice, startNotice, notice]
+							.filter(Boolean)
+							.join("\n"),
 					};
 			}
 			return decision;
 		}
-		case "file.after_edit":
-			return fileAfterEdit(input, config);
+		case "file.after_edit": {
+			const decision = await fileAfterEdit(input, config);
+			if (startNotice && decision.kind !== "deny")
+				decision.notice = [decision.notice, startNotice]
+					.filter(Boolean)
+					.join("\n");
+			return decision;
+		}
 	}
 }
 
@@ -440,6 +453,8 @@ async function turnEnd(
 	// Lockfile checks run a package manager, so they overlap the stack checks.
 	const protectedCheck = checkProtected(
 		file,
+		input.cwd,
+		config,
 		Math.min(deadline, performance.now() + 5000),
 		deadline,
 	).then(
@@ -447,16 +462,17 @@ async function turnEnd(
 		(error: unknown) => ({ error }),
 	);
 	const state = await readTurnState(file);
-	const { results, uncheckedNotice } =
+	const { results, uncheckedNotice: stackNotice } =
 		config && (needsCheck(state, config.root) || config.changes.rules.length)
 			? await turnChecks(state, config, deadline)
 			: { results: [], uncheckedNotice: "" };
 	const protectedOutcome = await protectedCheck;
 	if ("error" in protectedOutcome) throw protectedOutcome.error;
-	const protectedResult = protectedOutcome.result;
-	if (protectedResult) {
+	const { result, notice } = protectedOutcome.result;
+	const uncheckedNotice = [stackNotice, notice].filter(Boolean).join("\n");
+	if (result) {
 		observe("protected-file", "block");
-		results.unshift(protectedResult);
+		results.unshift(result);
 	}
 	const decision = stopDecision(state, results);
 	if (decision.action === "block") {

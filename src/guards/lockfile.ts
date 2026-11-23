@@ -902,6 +902,8 @@ function same(name: string, a: Uint8Array | null, b: Uint8Array | null) {
  * manifests in a temp copy, so the versions and hashes it keeps come from the
  * starting lockfile and new ones come from its own resolution. Returns null
  * for files this check does not cover.
+ * Turn-end callers must attribute a change to the turn before invoking this
+ * check, since regeneration can turn an older staged change into a finding.
  */
 export async function checkLockfile(options: {
 	root: string;
