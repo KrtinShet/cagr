@@ -408,6 +408,11 @@ test.each([
 		"import { a } from 'node:fs'\nimport 'path'",
 		true,
 	],
+	[
+		"an ES module export",
+		"import { basename } from 'node:path'\nexport default { hooks: {} }",
+		true,
+	],
 	["require.resolve of a core module", "require.resolve('node:fs')", false],
 	["a require word in a comment", "// pnpm does not require this peer", false],
 	["an import key", "const e = { import: './a.mjs' }", false],
@@ -451,6 +456,14 @@ test.each([
 		"var from = 0, o = {}\no.export\nclass A extends require {}\nfrom\n'fs'\nObject.getPrototypeOf(A)('./x')",
 		false,
 	],
+	...["require", "Function"].map(
+		(word) =>
+			[
+				`${word} inside a binding list at a statement start`,
+				`var from = 0, o = {}\no.\nexport\nclass A extends ${word} {}\nfrom\n'fs'\nObject.getPrototypeOf(A)('./x')`,
+				false,
+			] as const,
+	),
 	["a template literal load", "require(`./x`)", false],
 	["Function", "Function('return 1')()", false],
 	["globalThis", "globalThis.process", false],

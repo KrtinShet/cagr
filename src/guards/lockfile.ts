@@ -504,19 +504,33 @@ const coreModules = new Set(
  * literal name, wherever it appears, and the other ways to load or run code
  * are refused. That also refuses those words in comments and object keys.
  */
+/** Words that load or run code other than through a literal core load. */
+const refusedWords =
+	"require|import|eval|Function|constructor|arguments|globalThis|WebAssembly|mainModule|_load|execve|dlopen|binding";
+
+const literalLoads = new RegExp(
+	[
+		`\\brequire\\s*\\(\\s*(["'])([^"'\\n]+)\\1\\s*\\)`,
+		`\\bimport\\s*\\(\\s*(["'])([^"'\\n]+)\\3\\s*\\)`,
+		// A static import or export at a statement start, whose binding list holds no refused word to erase.
+		`(?:^|[;}\\n])\\s*(?:import|export)\\s+(?:(?:(?!\\b(?:${refusedWords}|export)\\b)[\\w$*{},\\s])+?\\s+from\\s+)?(["'])([^"'\\n]+)\\5`,
+	].join("|"),
+	"g",
+);
+
+const refused = new RegExp(
+	`\\b(?:${refusedWords})\\b|\\\\u|\\bmodule\\s*(?:\\?\\.\\s*)?\\[|\\bfrom\\s*["'\`]`,
+);
+
 export function builtinsOnly(text: string) {
-	const loads =
-		/\brequire\s*\(\s*(["'])([^"'\n]+)\1\s*\)|\bimport\s*\(\s*(["'])([^"'\n]+)\3\s*\)|(?:^|[;}\n])\s*(?:import|export)\s+(?:(?:(?!\b(?:require|import|export)\b)[\w$*{},\s])+?\s+from\s+)?(["'])([^"'\n]+)\5/g;
-	for (const match of text.matchAll(loads))
+	for (const match of text.matchAll(literalLoads))
 		if (
 			!coreModules.has(
 				(match[2] ?? match[4] ?? match[6] ?? "").replace(/^node:/, ""),
 			)
 		)
 			return false;
-	return !/\b(?:require|import|eval|Function|constructor|arguments|globalThis|WebAssembly|mainModule|_load|execve|dlopen|binding)\b|\\u|\bmodule\s*(?:\?\.\s*)?\[|\bfrom\s*["'`]/.test(
-		text.replace(loads, " "),
-	);
+	return !refused.test(text.replace(literalLoads, " "));
 }
 
 /**
