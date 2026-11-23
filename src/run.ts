@@ -18,6 +18,24 @@ export type RunOptions = {
 
 const quiet = { NO_COLOR: "1", FORCE_COLOR: "0" };
 
+function capture(stream: ReadableStream<Uint8Array>) {
+	const reader = stream.getReader();
+	const decoder = new TextDecoder();
+	let text = "";
+	return {
+		done: (async () => {
+			for (;;) {
+				const { done, value } = await reader.read();
+				if (done) break;
+				text += decoder.decode(value, { stream: true });
+			}
+			text += decoder.decode();
+		})(),
+		text: () => text,
+		cancel: () => reader.cancel(),
+	};
+}
+
 export async function run(
 	argv: string[],
 	cwd: string,
@@ -25,6 +43,10 @@ export async function run(
 ): Promise<RunResult> {
 	const started = performance.now();
 	try {
+		const { timeoutMs } = options;
+		const processGroup =
+			process.platform !== "win32" &&
+			(options.processGroup || timeoutMs !== undefined);
 		const child = Bun.spawn(argv, {
 			cwd,
 			stdin:
@@ -34,34 +56,42 @@ export async function run(
 			stdout: "pipe",
 			stderr: "pipe",
 			env: { ...process.env, ...quiet, ...options.env },
-			detached: options.processGroup,
-			timeout: options.processGroup ? undefined : options.timeoutMs,
-			killSignal: "SIGKILL",
+			detached: processGroup,
 		});
-		let groupTimedOut = false;
-		const timer =
-			options.processGroup && options.timeoutMs !== undefined
-				? setTimeout(() => {
-						groupTimedOut = true;
-						try {
-							process.kill(-child.pid, "SIGKILL");
-						} catch (error) {
-							if ((error as NodeJS.ErrnoException).code !== "ESRCH")
-								throw error;
-						}
-					}, options.timeoutMs)
-				: undefined;
-		const [stdout, stderr, exitCode] = await Promise.all([
-			new Response(child.stdout).text(),
-			new Response(child.stderr).text(),
-			child.exited,
-		]).finally(() => clearTimeout(timer));
-		const timedOut =
-			groupTimedOut ||
-			(child.signalCode === "SIGKILL" && options.timeoutMs !== undefined);
+		const out = capture(child.stdout);
+		const err = capture(child.stderr);
+		const completed = Promise.all([out.done, err.done, child.exited]).then(
+			([, , code]) => code,
+		);
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		const exitCode =
+			timeoutMs === undefined
+				? await completed
+				: await Promise.race([
+						completed,
+						new Promise<null>((resolve) => {
+							timer = setTimeout(
+								() => resolve(null),
+								Math.max(0, timeoutMs - (performance.now() - started)),
+							);
+						}),
+					]).finally(() => clearTimeout(timer));
+		const timedOut = exitCode === null;
+		if (timedOut) {
+			try {
+				if (processGroup) process.kill(-child.pid, "SIGKILL");
+				else child.kill("SIGKILL");
+			} catch {
+				if (child.exitCode === null) child.kill("SIGKILL");
+			}
+			// A process outside the group can still hold an inherited pipe.
+			void Promise.allSettled([out.cancel(), err.cancel()]);
+		}
+		const stdout = out.text();
+		const stderr = err.text();
 		const ms = Math.round(performance.now() - started);
 		const output = timedOut
-			? `${stdout}${stderr}\nStopped after ${options.timeoutMs} ms. Make the check faster or narrow it with {files}.`
+			? `${stdout}${stderr}\nStopped after ${timeoutMs} ms. Make the check faster or narrow it with {files}.`
 			: `${stdout}${stderr}`;
 		return {
 			ok: exitCode === 0 && !timedOut,

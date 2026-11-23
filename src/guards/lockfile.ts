@@ -82,6 +82,10 @@ const yarnBerry =
 export const isLockfile = (path: string) =>
 	Object.hasOwn(writers, basename(path));
 
+export const lockfilePathspecs = Object.keys(writers).map(
+	(name) => `:(glob)**/${name}`,
+);
+
 /** Null message: the package manager wrote this lockfile. */
 export type LockfileVerdict = { message: string | null };
 

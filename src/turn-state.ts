@@ -36,6 +36,8 @@ export async function recordEdits(file: string, files: string[]) {
 }
 
 export const protectedStateDir = (file: string) => `${file}.protected`;
+export const protectedNoticesDir = (file: string) =>
+	`${file}.protected-notices`;
 
 const turnStartPath = (file: string) =>
 	join(protectedStateDir(file), ".started");

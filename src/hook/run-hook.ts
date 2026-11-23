@@ -1,5 +1,6 @@
 import { ConfigError, loadConfig } from "../config/load";
 import type { AgentName, Config } from "../config/schema";
+import { clearTurnState, stateFile } from "../turn-state";
 import { parseInput, renderDecision } from "./adapters";
 import { handle } from "./handlers";
 import {
@@ -63,10 +64,14 @@ export async function runHook(
 			entries.push({ id, decision: "deny", target, key });
 		}
 	} catch (error) {
-		const message =
+		let message =
 			error instanceof ConfigError
 				? error.message
 				: `${(error as Error).stack ?? error}`;
+		if (event === "turn.end" && session !== "unknown")
+			await clearTurnState(stateFile(session)).catch((error: unknown) => {
+				message += `\nCould not clear turn state: ${error}`;
+			});
 		entries.length = 0;
 		entries.push({ id: "hook-error", decision: "fail-open", target });
 		decision = {

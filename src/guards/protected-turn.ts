@@ -23,7 +23,11 @@ import {
 	withoutHeredocBodies,
 } from "../shell";
 import type { CheckResult } from "../stop-decision";
-import { protectedStateDir, turnStartedAt } from "../turn-state";
+import {
+	protectedNoticesDir,
+	protectedStateDir,
+	turnStartedAt,
+} from "../turn-state";
 import { gitOptionsWithValue } from "./command";
 import { protectedEntries, protectedEntry } from "./edit";
 import {
@@ -31,9 +35,11 @@ import {
 	gitBlob,
 	isLockfile,
 	type LockfileStack,
+	lockfilePathspecs,
 } from "./lockfile";
 
 type Blob = { mode: string; oid: string };
+type PathOutcome = { problem: string } | { path: string; content: string };
 type IndexEntry = Blob & { stage: string };
 type StatusPath = { workStatus: string; index: IndexEntry[] };
 type FileState = {
@@ -47,6 +53,7 @@ type Snapshot = {
 	branch: string | null;
 	entries: ProtectedFile[];
 	files: Record<string, FileState> | null;
+	lockfileIndex?: Record<string, Blob>;
 	/** The stacks at the start of the turn, so turn end knows each lockfile's package manager. */
 	stacks?: LockfileStack[];
 };
@@ -80,6 +87,41 @@ export function checkoutOf(dir: string): string | null {
 	}
 }
 
+function writeOperands(name: string, args: string[]) {
+	const operands = args.filter((arg) => !arg.startsWith("-"));
+	if (name === "tee") return operands;
+	if (
+		name === "sed" &&
+		args.some((arg) => /^(?:-[Enrsuz]*i|--in-place(?:=|$))/.test(arg))
+	)
+		return operands;
+	if (name !== "cp" && name !== "mv") return [];
+	const targetOption = args.findIndex((arg) =>
+		/^(?:-t|--target-directory(?:=|$))/.test(arg),
+	);
+	const option = args[targetOption];
+	const target =
+		option === "-t" || option === "--target-directory"
+			? args[targetOption + 1]
+			: option?.replace(/^(?:-t|--target-directory=)/, "");
+	return name === "mv"
+		? [...operands, target ?? ""]
+		: [target ?? operands.at(-1) ?? ""];
+}
+
+function writePaths(cwd: string, target: string) {
+	if (!target || /^[~-]|[$*?]/.test(target)) return [];
+	const path = resolve(cwd, target);
+	let existing = path;
+	while (!existsSync(existing)) {
+		const parent = dirname(existing);
+		if (parent === existing) return [path];
+		existing = parent;
+	}
+	const canonical = realpathSync(existing);
+	return canonical === existing ? [path] : [path, canonical];
+}
+
 function checkouts(input: HookInput) {
 	const dirs = input.files.map(dirname);
 	let cwd = input.commandCwd ?? input.cwd;
@@ -96,6 +138,13 @@ function checkouts(input: HookInput) {
 		const words = programWords(command.words);
 		const name = programName(words);
 		const destination = words[1] === "--" ? words[2] : words[1];
+		const writes = [
+			...command.redirections
+				.filter(({ operator }) => /^(?:>|>>|>\||&>|&>>|<>)$/.test(operator))
+				.map(({ target }) => target),
+			...writeOperands(name, words.slice(1)),
+		];
+		for (const target of writes) dirs.push(...writePaths(cwd, target));
 		if (name === "cd" && destination && !/^[~-]|[$*?]/.test(destination)) {
 			cwd = resolve(cwd, destination);
 			dirs.push(cwd);
@@ -115,7 +164,7 @@ function checkouts(input: HookInput) {
 	}
 	return [
 		...new Set(
-			dirs
+			[...new Set(dirs)]
 				.map(checkoutOf)
 				.filter((root) => root !== null)
 				.map((root) => realpathSync(root)),
@@ -237,6 +286,29 @@ async function tree(
 	return blobs;
 }
 
+async function stagedLockfiles(root: string, deadline: number) {
+	const output = await git(
+		root,
+		[
+			"-c",
+			"core.fsmonitor=false",
+			"ls-files",
+			"--stage",
+			"-z",
+			"--",
+			...lockfilePathspecs,
+		],
+		deadline,
+	);
+	const staged: Record<string, Blob> = {};
+	for (const record of output?.split("\0") ?? []) {
+		const match = /^(\S+) (\S+) 0\t([\s\S]+)$/.exec(record);
+		if (match?.[1] && match[2] && match[3])
+			staged[match[3]] = { mode: match[1], oid: match[2] };
+	}
+	return staged;
+}
+
 async function workingCopy(
 	path: string,
 	backup?: string,
@@ -310,6 +382,16 @@ export async function rememberProtected(
 		checkouts(input).map(async (root) => {
 			const target = join(directory, hash(root));
 			if (existsSync(target)) return;
+			const startHead = git(
+				root,
+				["rev-parse", "--verify", "--quiet", "HEAD"],
+				deadline,
+				1,
+			).then(
+				(head) => head?.trim() ?? null,
+				() => undefined,
+			);
+			const startIndex = stagedLockfiles(root, deadline).catch(() => undefined);
 			const startStatus = status(root, entries, deadline).catch(() => null);
 			await mkdir(directory, { recursive: true, mode: 0o700 });
 			const temporary = await mkdtemp(join(directory, ".capture-"));
@@ -318,21 +400,11 @@ export async function rememberProtected(
 				const files = previous
 					? await captureFiles(root, temporary, previous.paths, deadline)
 					: null;
-				const head = previous
-					? previous.head
-					: await git(
-							root,
-							["rev-parse", "--verify", "--quiet", "HEAD"],
-							deadline,
-							1,
-						).then(
-							(head) => head?.trim() ?? null,
-							() => undefined,
-						);
 				const snapshot: Snapshot = {
 					...checkoutPolicy(config, root, entries),
-					head,
+					head: previous ? previous.head : await startHead,
 					files,
+					...(files === null ? { lockfileIndex: await startIndex } : {}),
 				};
 				await writeFile(
 					join(temporary, "snapshot.json"),
@@ -565,7 +637,6 @@ async function violations(
 		? []
 		: await unattributedChanges(root, changed, startedAt, deadline);
 	const skipped = new Set(unattributed);
-	const unattributedPaths = unattributed.map((path) => join(root, path));
 	let committedPaths: string[] = [];
 	if (snapshot.head !== undefined && snapshot.head !== head) {
 		const diff =
@@ -594,10 +665,8 @@ async function violations(
 			...changed.keys(),
 			...committedPaths,
 		]),
-	].filter(
-		(path) => path && !skipped.has(path) && protectedEntry(entries, path),
-	);
-	if (!paths.length) return { problems: [], unattributed: unattributedPaths };
+	].filter((path) => path && protectedEntry(entries, path));
+	if (!paths.length) return { problems: [], unattributed: [] };
 	const comparisonHead = snapshot.head === undefined ? head : snapshot.head;
 	const [oldTree, newTree, upstream] = await Promise.all([
 		tree(root, comparisonHead, paths, deadline),
@@ -605,8 +674,8 @@ async function violations(
 		protectedBranch(snapshot, deadline),
 	]);
 	const branchTree = await tree(root, upstream, paths, deadline);
-	const problems = await Promise.all(
-		paths.map(async (path) => {
+	const outcomes = await Promise.all(
+		paths.map(async (path): Promise<PathOutcome | null> => {
 			const old = oldTree.get(path);
 			const current = newTree.get(path);
 			const branch = branchTree.get(path);
@@ -618,6 +687,7 @@ async function violations(
 			const change = changed.get(path);
 			const index =
 				change?.index ?? (current ? [{ ...current, stage: "0" }] : []);
+			if (skipped.has(path) && !old && !current && !index.length) return null;
 			let work: FileState["work"];
 			if (change?.workStatus === "D") work = null;
 			else if (change && change.workStatus !== ".")
@@ -636,16 +706,44 @@ async function violations(
 				(!committed || sameBlob(branch, current))
 			)
 				return null;
+			const checked = isLockfile(path);
+			const entry = index[0];
+			if (
+				checked &&
+				!snapshot.files &&
+				!committed &&
+				work !== null &&
+				entry?.stage === "0" &&
+				index.length === 1 &&
+				snapshot.lockfileIndex &&
+				Object.hasOwn(snapshot.lockfileIndex, path) &&
+				sameBlob(entry, snapshot.lockfileIndex[path])
+			) {
+				const bytes = await gitBlob(
+					root,
+					entry.oid,
+					Math.floor(deadline - performance.now()),
+				);
+				if (
+					bytes &&
+					(work ?? (await workingCopy(join(root, path)))) ===
+						`${entry.mode} ${hash(bytes)}`
+				)
+					return null;
+			}
+			if (skipped.has(path) && !committed) {
+				const fullPath = join(root, path);
+				const content = work === undefined ? await workingCopy(fullPath) : work;
+				return { path: fullPath, content: content ?? JSON.stringify(index) };
+			}
 			// A lockfile is checked as one copy: the working copy, with the index and commit unchanged or matching it.
 			const onlyWorkingCopy =
 				!committed && JSON.stringify(index) === JSON.stringify(baseline.index);
-			const [entry, ...others] = index;
 			const oneCopy =
 				work === undefined &&
 				entry?.stage === "0" &&
-				others.length === 0 &&
+				index.length === 1 &&
 				(!committed || sameBlob(current, entry));
-			const checked = isLockfile(path);
 			const starting =
 				checked && snapshot.head !== undefined && (onlyWorkingCopy || oneCopy)
 					? await startingContent(
@@ -677,13 +775,21 @@ async function violations(
 				note =
 					"cagr checks a lockfile when only its working copy changed, or when the working copy, the index and the last commit hold the same version. Stage and commit the lockfile the package manager wrote, or restore it. ";
 			if (!snapshot.files)
-				return `- ${join(root, path)}\n  ${note}Review changes against ${snapshot.head === undefined ? "the current commit" : (snapshot.head ?? "the empty starting tree")}. Restore only changes made during this turn.`;
-			return `- ${join(root, path)}\n  ${note}${restoration(snapshot, folder, path, baseline, old, committed)}`;
+				return {
+					problem: `- ${join(root, path)}\n  ${note}Review changes against ${snapshot.head === undefined ? "the current commit" : (snapshot.head ?? "the empty starting tree")}. Restore only changes made during this turn.`,
+				};
+			return {
+				problem: `- ${join(root, path)}\n  ${note}${restoration(snapshot, folder, path, baseline, old, committed)}`,
+			};
 		}),
 	);
 	return {
-		problems: problems.filter((problem) => problem !== null),
-		unattributed: unattributedPaths,
+		problems: outcomes.flatMap((outcome) =>
+			outcome && "problem" in outcome ? [outcome.problem] : [],
+		),
+		unattributed: outcomes.flatMap((outcome) =>
+			outcome && "path" in outcome ? [outcome] : [],
+		),
 	};
 }
 
@@ -729,8 +835,11 @@ export async function checkProtected(
 	const problems = outcomes.flatMap((outcome) => outcome.problems);
 	const unattributed = outcomes.flatMap((outcome) => outcome.unattributed);
 	const notices = await Promise.all(
-		unattributed.map(async (path) =>
-			(await reportOnce(directory, `.reported-${hash(path)}`))
+		unattributed.map(async ({ path, content }) =>
+			(await reportOnce(
+				protectedNoticesDir(file),
+				hash(JSON.stringify([path, content])),
+			))
 				? `${path}: changed before this turn or unknown; not restored`
 				: "",
 		),
