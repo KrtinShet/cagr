@@ -437,14 +437,23 @@ async function turnEnd(
 ): Promise<Decision> {
 	const deadline = performance.now() + Math.min(timeouts.onTurnEndMs, 55_000);
 	const file = stateFile(input.sessionId);
-	const [state, protectedResult] = await Promise.all([
-		readTurnState(file),
-		checkProtected(file, Math.min(deadline, performance.now() + 5000)),
-	]);
+	// Lockfile checks run a package manager, so they overlap the stack checks.
+	const protectedCheck = checkProtected(
+		file,
+		Math.min(deadline, performance.now() + 5000),
+		deadline,
+	).then(
+		(result) => ({ result }),
+		(error: unknown) => ({ error }),
+	);
+	const state = await readTurnState(file);
 	const { results, uncheckedNotice } =
 		config && (needsCheck(state, config.root) || config.changes.rules.length)
 			? await turnChecks(state, config, deadline)
 			: { results: [], uncheckedNotice: "" };
+	const protectedOutcome = await protectedCheck;
+	if ("error" in protectedOutcome) throw protectedOutcome.error;
+	const protectedResult = protectedOutcome.result;
 	if (protectedResult) {
 		observe("protected-file", "block");
 		results.unshift(protectedResult);

@@ -108,6 +108,8 @@ The reasons shown for the other protected files:
 - `.env*`: "Env files hold real values. Do not edit them; tell the user which key is missing."
 - Lockfiles: "Lockfiles are written by the package manager. Change dependencies with its add or remove command instead."
 
+At turn end, a change to `bun.lock`, `pnpm-lock.yaml`, `package-lock.json` or `yarn.lock` that the stack's `package_manager` wrote passes, so `pnpm add` or `bun add` works. A hand edit still blocks. See [protected-file](guards.md#lockfiles-written-by-the-package-manager).
+
 ## Top-level keys
 
 | Key       | Type            | Default | Meaning                                                       |

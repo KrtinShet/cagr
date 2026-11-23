@@ -129,6 +129,31 @@ glob = "migrations/**"
 reason = "Migrations are generated. Run `bun run db:migrate --name <change>` instead."
 ```
 
+### Lockfiles written by the package manager
+
+At turn end a change to `bun.lock`, `pnpm-lock.yaml`, `package-lock.json` or `yarn.lock` passes when the package manager wrote it. The manager comes from the `[[stack]] package_manager` that covers the lockfile's path. When several stacks cover it, a stack whose manager writes that lockfile wins, and stacks for other ecosystems, such as uv, are ignored. cagr copies the manifests (every `package.json`, patches, and local packages named by a relative path) from the working copy to a temp folder. Everything that picks the registry, the cache or code the manager runs comes from the commit at the start of the turn: `.npmrc`, `bunfig.toml`, `.yarnrc`, the Yarn release a `yarn-path` names (run alone from a folder outside the copy), `.pnpmfile.cjs`, `.pnpmfile.mjs` and a pnpmfile the committed `.npmrc` or `pnpm-workspace.yaml` names, and every `pnpm-workspace.yaml` key except `packages`, `catalog` and `catalogs`. The manager runs with a home folder of its own, so config under your home folder (`~/.npmrc`, `~/.bunfig.toml`, pnpm's global rc) is not read; only its package caches are linked in. There it gives the manager the lockfile from the start of the turn and runs it in lockfile-only mode:
+
+| Manager | Command |
+| --- | --- |
+| bun | `bun install --lockfile-only --ignore-scripts` |
+| pnpm | `pnpm install --lockfile-only --offline --ignore-scripts`, with the committed pnpmfile |
+| npm | `npm install --package-lock-only --offline --ignore-scripts --prefix <folder>` |
+| Yarn 1 | `yarn install --offline --ignore-scripts --no-default-rc`, which installs into the temp folder |
+
+The change passes when the result matches the lockfile in the checkout. For `bun.lock` and `package-lock.json` cagr compares the parsed data with keys sorted, since `bun add` writes keys in an order `bun install` later sorts, and a key repeated in one object blocks. `pnpm-lock.yaml` and `yarn.lock` must match byte for byte. So `pnpm add -D knip` and `bun remove left-pad` pass, and a hand edit to a version or an integrity hash blocks with restore steps. What it proves and what it does not is in [Limits](limits.md#lockfiles).
+
+It blocks, with the fix, when:
+
+- No stack with `package_manager` covers the lockfile, or the stack uses a different manager.
+- The check cannot run: the manager is missing, it fails, it needs a package that is not in its cache, or it runs out of time. Run `<manager> install` so the cache has every package, then stop again, or ask the user to make the change. If the repo needs a registry or token set only in home config, ask the user to make the change or to commit the registry setting to the repo's config.
+- The index or a commit holds a different version of the lockfile than the working copy. Stage and commit what the manager wrote.
+- The turn changed a pnpmfile, the `packageManager` field, the root `package.json` `pnpm` field, or a `pnpm-workspace.yaml` key other than `packages`, `catalog` and `catalogs`, or wrote a top-level key twice. Those are gate changes: a human makes them.
+- The committed pnpmfile loads a module that is not a Node built-in, a committed pnpmfile setting points outside the repo or sets a global pnpmfile, or the committed `.yarnrc` names a `yarn-path` that is not one file in the repo or has a `yarn-path` line cagr cannot read. The user runs the command.
+
+A blocked gate change says to restore the file if the turn changed it, or to ask the user to commit it if a human did, then stop again.
+
+`bun.lockb`, `uv.lock`, `poetry.lock`, `Pipfile.lock`, `Cargo.lock` and `go.sum` keep the plain protected-file check: any change made during the turn blocks.
+
 Write the `reason` as what to do instead. Entries add to the preset's, so you cannot remove `.env*` or the lockfiles by leaving them out. `cagr check <files...>` also runs this check, so you can test a glob.
 
 Set `gate = true` on an entry to let a human open it for a session. The recommended preset marks cagr config, hooks, GitHub workflows, CODEOWNERS and lint configs this way. See [Limits](limits.md) for which shell writes cagr can see.
