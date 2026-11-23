@@ -566,27 +566,31 @@ async function namedPnpmfiles(
 ) {
 	const found: [string, string][] = [];
 	const npmrc = posix.join(workspace, ".npmrc");
-	const ini = decode(await fromHead(npmrc)) ?? "";
-	// The ini parser decodes escapes in a quoted key too, so a key with a backslash could be pnpmfile under another spelling.
-	const escaped = ini
-		.split(/\r?\n/)
-		.find(
-			(entry) =>
-				!/^\s*[;#]/.test(entry) && /\\/.test(entry.split("=")[0] ?? ""),
-		);
-	if (escaped)
+	// Lines and keys as the ini parser pnpm uses splits them. It decodes quotes and escapes in a key and cuts it at ; or #, so only a plain key is read.
+	const entries = (decode(await fromHead(npmrc)) ?? "")
+		.split(/[\r\n]+/)
+		.filter((entry) => !/^\s*(?:[;#]|$)/.test(entry))
+		.map((entry) => {
+			const at = entry.indexOf("=");
+			return at === -1
+				? [entry.trim(), ""]
+				: [entry.slice(0, at).trim(), entry.slice(at + 1).trim()];
+		});
+	const odd = entries.find(([key = ""]) => /[\\'"`;#]/.test(key));
+	if (odd)
 		throw new Refusal(
-			`The committed ${npmrc} has a key with a backslash, which cagr cannot read: ${escaped.trim()}. Write the key without escapes in a commit, or restore the lockfile and ask the user to run the pnpm command.`,
+			`The committed ${npmrc} has a key cagr cannot read: ${odd[0]}. Write it with no quotes, backslash, ; or # in a commit, or restore the lockfile and ask the user to run the pnpm command.`,
 		);
-	const line = [
-		...ini.matchAll(/^[ \t]*(["']?)pnpmfile\1[ \t]*=[ \t]*(.*?)[ \t]*$/gm),
-	].at(-1)?.[2];
-	// The ini parser pnpm uses decodes escapes and may drop a comment in a value, so the check reads only a plain one.
-	if (line && /[\\;#]/.test(line))
+	const line = entries
+		.filter(([key = ""]) => /^pnpmfile$/i.test(key))
+		.at(-1)?.[1];
+	const unquoted = line?.replace(/^(["'])(.*)\1$/, "$2");
+	// The parser also decodes escapes and nested quotes in a value and may cut it at a comment, so only a plain one is read.
+	if (line && unquoted && /[\\;#'"`]/.test(unquoted))
 		throw new Refusal(
-			`The committed ${npmrc} sets pnpmfile to ${line}, which cagr cannot read as one path. Write it with no backslash, ; or # in a commit, or restore the lockfile and ask the user to run the pnpm command.`,
+			`The committed ${npmrc} sets pnpmfile to ${line}, which cagr cannot read as one path. Write it with no quotes inside, backslash, ; or # in a commit, or restore the lockfile and ask the user to run the pnpm command.`,
 		);
-	if (line) found.push([npmrc, line.replace(/^(["'])(.*)\1$/, "$2")]);
+	if (unquoted) found.push([npmrc, unquoted]);
 	const yaml = posix.join(workspace, workspaceFile);
 	const text = decode(await fromHead(yaml));
 	let value: unknown;
@@ -594,10 +598,11 @@ async function namedPnpmfiles(
 		value = text === null ? undefined : Bun.YAML.parse(text);
 	} catch {}
 	const settings = value && typeof value === "object" ? Object.keys(value) : [];
-	const global = /^\s*(["']?)global[-_]?pnpmfile\1\s*[=:]/im;
-	if (global.test(ini) || settings.some((key) => global.test(`${key}:`)))
+	const global = (key: string) => /^global[-_]?pnpmfile$/i.test(key);
+	const inIni = entries.some(([key = ""]) => global(key));
+	if (inIni || settings.some(global))
 		throw new Refusal(
-			`The committed ${global.test(ini) ? npmrc : yaml} sets a global pnpmfile, which pnpm loads from outside the files the check takes from the commit, so cagr does not run it. Restore the lockfile and ask the user to run the pnpm command.`,
+			`The committed ${inIni ? npmrc : yaml} sets a global pnpmfile, which pnpm loads from outside the files the check takes from the commit, so cagr does not run it. Restore the lockfile and ask the user to run the pnpm command.`,
 		);
 	const setting = (value as { pnpmfile?: unknown } | null)?.pnpmfile;
 	for (const named of [setting].flat())
