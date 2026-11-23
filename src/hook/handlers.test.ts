@@ -2,13 +2,15 @@ import { beforeEach, describe, expect, test } from "bun:test";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { resolveConfig } from "../config/load";
+import { suppressionBudget } from "../guards/lint-suppression";
+import { snapshotBudget } from "../guards/protected-turn";
+import { roomyBudgets } from "../test/budgets";
 import { tempRepo } from "../test/repo";
-import { roomySnapshots } from "../test/snapshot";
 import { readTurnState, stateFile } from "../turn-state";
-import { handle } from "./handlers";
+import { handle, timeouts } from "./handlers";
 import type { HookInput } from "./types";
 
-roomySnapshots();
+roomyBudgets(snapshotBudget, suppressionBudget, timeouts);
 
 let root: string;
 let session: string;

@@ -10,7 +10,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { insideRoot } from "../paths";
-import { type RunResult, run } from "../run";
+import type { RunResult, run } from "../run";
 import { type Finding, newFindings } from "./match";
 
 /** Only complete, file-scoped lint reports can establish inherited findings. */
@@ -91,7 +91,8 @@ export async function compareBiome(
 	before: string,
 	after: string,
 	deadline: number,
-	execute: typeof run = run,
+	execute: typeof run,
+	commandMs: number,
 ) {
 	if (insideRoot(root, file) === null) return null;
 	const configs = ["biome.json", "biome.jsonc"].filter((name) =>
@@ -138,7 +139,7 @@ export async function compareBiome(
 		execute(args, cwd, {
 			timeoutMs: Math.max(
 				1,
-				Math.floor(Math.min(250, deadline - performance.now())),
+				Math.floor(Math.min(commandMs, deadline - performance.now())),
 			),
 		});
 	if (config.vcs?.enabled) {

@@ -53,7 +53,12 @@ import { commandId, commandTarget, observe } from "./stats";
 import { recordTimings } from "./timings";
 import type { Decision, HookInput } from "./types";
 
-export const timeouts = { onEditMs: 10_000, onTurnEndMs: 60_000 };
+export const timeouts = {
+	onEditMs: 10_000,
+	editComparisonMs: 900,
+	onTurnEndMs: 60_000,
+	protectedCheckMs: 5000,
+};
 
 export async function handle(
 	input: HookInput,
@@ -316,7 +321,7 @@ export async function editChecks(
 	config: Config,
 	comparison?: { session: string; context: string[] },
 ): Promise<string[]> {
-	const deadline = performance.now() + 900;
+	const deadline = performance.now() + timeouts.editComparisonMs;
 	const existing = files.filter((file) => existsSync(file));
 	const problems: string[] = (await checkSuppressions(config, existing)).map(
 		(f) => {
@@ -455,7 +460,7 @@ async function turnEnd(
 		file,
 		input.cwd,
 		config,
-		Math.min(deadline, performance.now() + 5000),
+		Math.min(deadline, performance.now() + timeouts.protectedCheckMs),
 		deadline,
 	).then(
 		(result) => ({ result }),

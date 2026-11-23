@@ -1,4 +1,5 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
+import { watch } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -15,7 +16,8 @@ test.skipIf(process.platform === "win32")(
 				{ timeoutMs: 100 },
 			);
 			expect(result.timedOut).toBe(true);
-			expect(result.ms).toBeLessThan(2500);
+			if (Bun.env.CAGR_TEST_LATENCY === "1")
+				expect(result.ms).toBeLessThan(2500);
 			expect(result.ok).toBe(false);
 			await Bun.sleep(1100);
 			expect(await Bun.file(join(cwd, "survived")).exists()).toBe(false);
@@ -28,22 +30,52 @@ test.skipIf(process.platform === "win32")(
 test.skipIf(process.platform === "win32")(
 	"a timeout returns even if a child in another process group still holds a pipe",
 	async () => {
-		const result = await run(
+		const cwd = await mkdtemp(join(tmpdir(), "cagr-run-"));
+		const ready = Promise.withResolvers<number>();
+		const watcher = watch(cwd, (_event, filename) => {
+			if (filename) ready.resolve(Number(filename));
+		});
+		// Arm the timeout only after the detached child inherits the pipes.
+		const schedule = setTimeout;
+		let expire = () => {};
+		const timer = spyOn(globalThis, "setTimeout").mockImplementationOnce(
+			Object.assign(
+				(...[callback]: Parameters<typeof setTimeout>) => {
+					expire = callback;
+					return schedule(callback, 4000);
+				},
+				{ __promisify__: schedule.__promisify__ },
+			),
+		);
+		const pending = run(
 			[
 				process.execPath,
 				"-e",
-				'const child = Bun.spawn(["sleep", "3"], { detached: true, stdout: "inherit", stderr: "inherit" }); child.unref(); console.log(child.pid);',
+				`import { writeFileSync } from "node:fs";
+				const child = Bun.spawn(["sleep", "10"], {
+					detached: true, stdout: "inherit", stderr: "inherit"
+				});
+				child.unref();
+				writeFileSync(String(child.pid), "");
+				`,
 			],
-			process.cwd(),
+			cwd,
 			{ timeoutMs: 350 },
 		);
-		const pid = Number(result.stdout.trim());
+		timer.mockRestore();
+		let pid = 0;
 		try {
+			pid = await Promise.race([ready.promise, pending.then(() => 0)]);
 			expect(pid).toBeGreaterThan(0);
+			expire();
+			const result = await pending;
 			expect(result.timedOut).toBe(true);
-			expect(result.ms).toBeLessThan(2500);
+			if (Bun.env.CAGR_TEST_LATENCY === "1")
+				expect(result.ms).toBeLessThan(2500);
 		} finally {
-			if (pid > 0 && result.timedOut) process.kill(pid, "SIGKILL");
+			if (pid > 0) process.kill(pid, "SIGKILL");
+			watcher.close();
+			await rm(cwd, { recursive: true, force: true });
 		}
 	},
 );

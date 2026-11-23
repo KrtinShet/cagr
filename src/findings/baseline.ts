@@ -17,6 +17,8 @@ import { findingCommand } from "./command";
 import { type Finding, newFindings } from "./match";
 import { parseFindings } from "./parse";
 
+export const comparisonBudget = { totalMs: 750, commandMs: 250 };
+
 const hash = (text: string) => createHash("sha256").update(text).digest("hex");
 export function baselineFile(root: string, session: string, file: string) {
 	return join(
@@ -51,7 +53,7 @@ export async function compareFindings(
 	paths: string[],
 	root: string,
 	session: string,
-	deadline = performance.now() + 750,
+	deadline = performance.now() + comparisonBudget.totalMs,
 	execute: typeof run = run,
 ): Promise<{ old: number; problems: string[] } | null> {
 	const adapter = findingCommand(command);
@@ -75,6 +77,7 @@ export async function compareFindings(
 				currentSource,
 				deadline,
 				execute,
+				comparisonBudget.commandMs,
 			);
 			if (!compared) return null;
 			reported += compared.current;
@@ -95,7 +98,10 @@ export async function compareFindings(
 		const check = (stdin: string) =>
 			execute(argv, root, {
 				stdin,
-				timeoutMs: Math.max(1, Math.min(250, deadline - performance.now())),
+				timeoutMs: Math.max(
+					1,
+					Math.min(comparisonBudget.commandMs, deadline - performance.now()),
+				),
 			});
 		const current = parseFindings(
 			adapter.tool,

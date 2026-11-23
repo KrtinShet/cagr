@@ -3,17 +3,25 @@ import { mkdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { brief } from "../brief";
 import { resolveConfig } from "../config/load";
-import { editChecks, handle } from "../hook/handlers";
+import { editChecks, handle, timeouts } from "../hook/handlers";
 import { collectStats, type Observation } from "../hook/stats";
 import type { HookInput } from "../hook/types";
 import type { RunResult } from "../run";
+import { repoTestTimeout, roomyBudgets } from "../test/budgets";
 import { tempRepo } from "../test/repo";
 import { clearTurnState, stateFile } from "../turn-state";
-import { baselineFile, captureBaseline, compareFindings } from "./baseline";
+import {
+	baselineFile,
+	captureBaseline,
+	compareFindings,
+	comparisonBudget,
+} from "./baseline";
 import { parseBiome } from "./biome";
 import { findingCommand } from "./command";
 import { newFindings } from "./match";
 import { parseFindings } from "./parse";
+
+roomyBudgets(comparisonBudget, timeouts);
 
 const fixture = (name: string) =>
 	readFileSync(join(import.meta.dir, "fixtures", name), "utf8");
@@ -142,81 +150,103 @@ test("first-touch source survives clean stops, missing files, and sessions", asy
 	).toBeNull();
 });
 
-test("hook integration: mode all and CI strict, new mode inherited allow, new and turn-end block", async () => {
-	const { root, write } = await tempRepo();
-	const session = crypto.randomUUID(),
-		file = join(root, "sample.js");
-	const bin = join(root, "bin");
-	mkdirSync(bin);
-	const fixturePath = join(import.meta.dir, "fixtures");
-	await write(
-		"bin/eslint",
-		`#!/usr/bin/env bun\nconst text = process.argv.includes('--stdin') ? await Bun.stdin.text() : await Bun.file('sample.js').text();\nconst name = text.startsWith('// header') ? 'inserted' : text.includes('another') ? 'added' : 'baseline';\nconst fixture = await Bun.file(${JSON.stringify(fixturePath)} + '/eslint-' + name + '.json').text();\nconsole.log(fixture.replaceAll('/fixture/sample.js', process.cwd() + '/sample.js'));\nprocess.exit(1);\n`,
-	);
-	const { chmodSync } = await import("node:fs");
-	chmodSync(join(bin, "eslint"), 0o755);
-	const previous = process.env.PATH;
-	process.env.PATH = `${bin}:${previous}`;
-	try {
-		const config = resolveConfig(
-			{
-				findings: { mode: "new" },
-				stack: [
-					{
-						language: "javascript",
-						on_edit: ["eslint --fix {files}"],
-						on_turn_end: ["eslint {files}"],
-					},
-				],
-			},
-			root,
-			join(root, "cagr.toml"),
+// Creates a Git repo and runs the lint fixture through repeated hook calls.
+test(
+	"hook integration: mode all and CI strict, new mode inherited allow, new and turn-end block",
+	async () => {
+		const { root, write } = await tempRepo();
+		const session = crypto.randomUUID(),
+			file = join(root, "sample.js");
+		const bin = join(root, "bin");
+		mkdirSync(bin);
+		const fixturePath = join(import.meta.dir, "fixtures");
+		await write(
+			"bin/eslint",
+			`#!/usr/bin/env bun\nconst text = process.argv.includes('--stdin') ? await Bun.stdin.text() : await Bun.file('sample.js').text();\nconst name = text.startsWith('// header') ? 'inserted' : text.includes('another') ? 'added' : 'baseline';\nconst fixture = await Bun.file(${JSON.stringify(fixturePath)} + '/eslint-' + name + '.json').text();\nconsole.log(fixture.replaceAll('/fixture/sample.js', process.cwd() + '/sample.js'));\nprocess.exit(1);\n`,
 		);
-		const event = (event: HookInput["event"]): HookInput => ({
-			event,
-			sessionId: session,
-			cwd: root,
-			command: null,
-			files: [file],
-		});
-		await write("sample.js", fixture("eslint-baseline.txt"));
-		expect((await handle(event("file.before_edit"), config)).kind).toBe(
-			"allow",
-		);
-		await write("sample.js", fixture("eslint-inserted.txt"));
-		const observations: Observation[] = [];
-		expect(
-			await collectStats(observations, () =>
-				handle(event("file.after_edit"), config),
-			),
-		).toMatchObject({
-			kind: "allow",
-			context: expect.stringContaining("1 existing findings"),
-		});
-		expect(observations).toMatchObject([
-			{ decision: "old-findings", target: "sample.js" },
-		]);
-		expect((await handle(event("turn.end"), config)).kind).toBe("block");
-		expect(await editChecks([file], config)).toHaveLength(1);
-		config.findings.mode = "all";
-		expect((await handle(event("file.after_edit"), config)).kind).toBe("block");
-		config.findings.mode = "new";
-		await write("sample.js", fixture("eslint-added.txt"));
-		expect((await handle(event("file.after_edit"), config)).kind).toBe("block");
-		const stack = config.stack[0];
-		if (!stack) throw new Error("Missing stack");
-		stack.on_edit = ["bun -e 'process.exit(1)'"];
-		expect((await handle(event("file.after_edit"), config)).kind).toBe("block");
-		rmSync(baselineFile(root, session, file));
-		stack.on_edit = ["eslint {files}"];
-		expect((await handle(event("file.after_edit"), config)).kind).toBe("block");
-		expect(brief(config, [])).toContain(
-			"turn-end checks, CI and code rules still must fully pass",
-		);
-	} finally {
-		process.env.PATH = previous;
-	}
-});
+		const { chmodSync } = await import("node:fs");
+		chmodSync(join(bin, "eslint"), 0o755);
+		const previous = process.env.PATH;
+		process.env.PATH = `${bin}:${previous}`;
+		try {
+			const config = resolveConfig(
+				{
+					findings: { mode: "new" },
+					stack: [
+						{
+							language: "javascript",
+							on_edit: ["eslint --fix {files}"],
+							on_turn_end: ["eslint {files}"],
+						},
+					],
+				},
+				root,
+				join(root, "cagr.toml"),
+			);
+			const event = (event: HookInput["event"]): HookInput => ({
+				event,
+				sessionId: session,
+				cwd: root,
+				command: null,
+				files: [file],
+			});
+			await write("sample.js", fixture("eslint-baseline.txt"));
+			expect((await handle(event("file.before_edit"), config)).kind).toBe(
+				"allow",
+			);
+			await write("sample.js", fixture("eslint-inserted.txt"));
+			const observations: Observation[] = [];
+			expect(
+				await collectStats(observations, () =>
+					handle(event("file.after_edit"), config),
+				),
+			).toMatchObject({
+				kind: "allow",
+				context: expect.stringContaining("1 existing findings"),
+			});
+			expect(observations).toMatchObject([
+				{ decision: "old-findings", target: "sample.js" },
+			]);
+			const comparisonMs = timeouts.editComparisonMs;
+			timeouts.editComparisonMs = 0;
+			try {
+				expect((await handle(event("file.after_edit"), config)).kind).toBe(
+					"block",
+				);
+			} finally {
+				timeouts.editComparisonMs = comparisonMs;
+			}
+			expect((await handle(event("turn.end"), config)).kind).toBe("block");
+			expect(await editChecks([file], config)).toHaveLength(1);
+			config.findings.mode = "all";
+			expect((await handle(event("file.after_edit"), config)).kind).toBe(
+				"block",
+			);
+			config.findings.mode = "new";
+			await write("sample.js", fixture("eslint-added.txt"));
+			expect((await handle(event("file.after_edit"), config)).kind).toBe(
+				"block",
+			);
+			const stack = config.stack[0];
+			if (!stack) throw new Error("Missing stack");
+			stack.on_edit = ["bun -e 'process.exit(1)'"];
+			expect((await handle(event("file.after_edit"), config)).kind).toBe(
+				"block",
+			);
+			rmSync(baselineFile(root, session, file));
+			stack.on_edit = ["eslint {files}"];
+			expect((await handle(event("file.after_edit"), config)).kind).toBe(
+				"block",
+			);
+			expect(brief(config, [])).toContain(
+				"turn-end checks, CI and code rules still must fully pass",
+			);
+		} finally {
+			process.env.PATH = previous;
+		}
+	},
+	repoTestTimeout,
+);
 
 test("findings config is opt-in and validates values", () => {
 	expect(resolveConfig({}, "/tmp/nonexistent", "cagr.toml").findings.mode).toBe(
@@ -315,7 +345,7 @@ test("clean files do not disable other files, but a failure with no findings sta
 				paths,
 				root,
 				session,
-				performance.now() + 750,
+				undefined,
 				execute,
 			),
 		).toEqual({ old: 1, problems: [] });
@@ -325,7 +355,7 @@ test("clean files do not disable other files, but a failure with no findings sta
 			["clean.py"],
 			root,
 			session,
-			performance.now() + 750,
+			undefined,
 			execute,
 		),
 	).toBeNull();

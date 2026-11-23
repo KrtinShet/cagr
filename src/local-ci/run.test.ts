@@ -6,6 +6,7 @@ import { loadConfig } from "../config/load";
 import type { Gh } from "../review/github";
 import { run } from "../run";
 import { sync } from "../sync";
+import { repoTestTimeout } from "../test/budgets";
 import { tempRepo } from "../test/repo";
 import { watchPaths } from "./cache";
 import { localCi } from "./run";
@@ -179,54 +180,62 @@ const result = (ok: boolean, stdout: string) => ({
 	timedOut: false,
 });
 
-test("watch skips both successful statuses and drafts, and runs a new SHA once", async () => {
-	const f = await fixture();
-	try {
-		const complete = "a".repeat(40);
-		const r = runtime(f, {
-			heads: [
-				{ number: 1, headRefOid: complete },
-				{ number: 3, headRefOid: f.head },
-				{ number: 4, headRefOid: f.head },
-				{ number: 5, headRefOid: "c".repeat(40), isDraft: true },
-			],
-			statuses: {
-				[complete]: [
-					["cagr/checks", "success"],
-					["cagr/review", "success"],
-					["cagr/review", "failure"],
+// Clones the PR cache, then fetches and creates both Git worktrees.
+test(
+	"watch skips both successful statuses and drafts, and runs a new SHA once",
+	async () => {
+		const f = await fixture();
+		try {
+			const complete = "a".repeat(40);
+			const r = runtime(f, {
+				heads: [
+					{ number: 1, headRefOid: complete },
+					{ number: 3, headRefOid: f.head },
+					{ number: 4, headRefOid: f.head },
+					{ number: 5, headRefOid: "c".repeat(40), isDraft: true },
 				],
-				[f.head]: [["someone/else", "success"]],
-			},
-		});
-		expect(await localCi(f.config, f.paths, "watch", r)).toBe(true);
-		expect(
-			r.calls
-				.filter((args) => args[1] === "view" && args[0] === "pr")
-				.map((args) => args[2]),
-		).toEqual(["3"]);
-		expect(r.commands).toContainEqual([
-			"sh",
-			"-c",
-			"bun install --frozen-lockfile",
-		]);
-		expect(r.reviewBodies[0]?.commit_id).toBe(f.head);
-		const statuses = r.calls.filter((args) =>
-			args.includes(`repos/o/r/statuses/${f.head}`),
-		);
-		expect(
-			statuses.map((args) => args.find((arg) => arg.startsWith("context="))),
-		).toEqual(["context=cagr/checks", "context=cagr/review"]);
-		expect(statuses.every((args) => args.includes("state=success"))).toBe(true);
-		expect(await Bun.file(f.paths.lastRun).text()).toMatch(
-			/^\d{4}-\d{2}-\d{2}T/,
-		);
-		expect(await f.repo.git("status", "--porcelain")).toBe("");
-	} finally {
-		f.clean();
-	}
-});
+				statuses: {
+					[complete]: [
+						["cagr/checks", "success"],
+						["cagr/review", "success"],
+						["cagr/review", "failure"],
+					],
+					[f.head]: [["someone/else", "success"]],
+				},
+			});
+			expect(await localCi(f.config, f.paths, "watch", r)).toBe(true);
+			expect(
+				r.calls
+					.filter((args) => args[1] === "view" && args[0] === "pr")
+					.map((args) => args[2]),
+			).toEqual(["3"]);
+			expect(r.commands).toContainEqual([
+				"sh",
+				"-c",
+				"bun install --frozen-lockfile",
+			]);
+			expect(r.reviewBodies[0]?.commit_id).toBe(f.head);
+			const statuses = r.calls.filter((args) =>
+				args.includes(`repos/o/r/statuses/${f.head}`),
+			);
+			expect(
+				statuses.map((args) => args.find((arg) => arg.startsWith("context="))),
+			).toEqual(["context=cagr/checks", "context=cagr/review"]);
+			expect(statuses.every((args) => args.includes("state=success"))).toBe(
+				true,
+			);
+			expect(await Bun.file(f.paths.lastRun).text()).toMatch(
+				/^\d{4}-\d{2}-\d{2}T/,
+			);
+			expect(await f.repo.git("status", "--porcelain")).toBe("");
+		} finally {
+			f.clean();
+		}
+	},
+	repoTestTimeout,
+);
 
+// Every case fetches the PR and creates a detached Git worktree.
 test.each<{
 	name: string;
 	statuses: [string, string][];
@@ -285,34 +294,38 @@ test.each<{
 		checks: true,
 		review: false,
 	},
-])("watch $name and only posts the status it ran", async (row) => {
-	const f = await fixture();
-	try {
-		const listedHead = row.listedStatuses ? "a".repeat(40) : f.head;
-		const r = runtime(f, {
-			heads: [{ number: 3, headRefOid: listedHead }],
-			statuses: {
-				[listedHead]: row.listedStatuses ?? [],
-				[f.head]: row.statuses,
-			},
-		});
-		expect(await localCi(f.config, f.paths, "watch", r)).toBe(true);
-		expect(
-			r.commands.some((args) => args[2] === "bun install --frozen-lockfile"),
-		).toBe(row.checks);
-		expect(r.commands.some((args) => args[0] === "claude")).toBe(row.review);
-		const posts = r.calls.filter((args) =>
-			args.includes(`repos/o/r/statuses/${f.head}`),
-		);
-		expect(posts).toHaveLength(1);
-		expect(posts[0]).toContain(
-			row.checks ? "context=cagr/checks" : "context=cagr/review",
-		);
-		expect(posts[0]).toContain("state=success");
-	} finally {
-		f.clean();
-	}
-});
+])(
+	"watch $name and only posts the status it ran",
+	async (row) => {
+		const f = await fixture();
+		try {
+			const listedHead = row.listedStatuses ? "a".repeat(40) : f.head;
+			const r = runtime(f, {
+				heads: [{ number: 3, headRefOid: listedHead }],
+				statuses: {
+					[listedHead]: row.listedStatuses ?? [],
+					[f.head]: row.statuses,
+				},
+			});
+			expect(await localCi(f.config, f.paths, "watch", r)).toBe(true);
+			expect(
+				r.commands.some((args) => args[2] === "bun install --frozen-lockfile"),
+			).toBe(row.checks);
+			expect(r.commands.some((args) => args[0] === "claude")).toBe(row.review);
+			const posts = r.calls.filter((args) =>
+				args.includes(`repos/o/r/statuses/${f.head}`),
+			);
+			expect(posts).toHaveLength(1);
+			expect(posts[0]).toContain(
+				row.checks ? "context=cagr/checks" : "context=cagr/review",
+			);
+			expect(posts[0]).toContain("state=success");
+		} finally {
+			f.clean();
+		}
+	},
+	repoTestTimeout,
+);
 
 test.each([
 	{
@@ -337,70 +350,85 @@ test.each([
 	},
 );
 
-test("a changed PR head is never checked out or given a status for stale metadata", async () => {
-	const f = await fixture();
-	try {
-		const r = runtime(f, { details: { headRefOid: "a".repeat(40) } });
-		expect(await localCi(f.config, f.paths, 3, r)).toBe(false);
-		expect(r.lines.join("\n")).toContain("changed before checkout");
-		expect(r.commands.some((args) => args.includes("worktree"))).toBe(false);
-		expect(r.calls.some((args) => args.includes("POST"))).toBe(false);
-		expect(
-			readdirSync(f.paths.cache).filter((name) => name.startsWith("pr-")),
-		).toEqual([]);
-	} finally {
-		f.clean();
-	}
-});
+// Initializes the repository cache and fetches before detecting the head mismatch.
+test(
+	"a changed PR head is never checked out or given a status for stale metadata",
+	async () => {
+		const f = await fixture();
+		try {
+			const r = runtime(f, { details: { headRefOid: "a".repeat(40) } });
+			expect(await localCi(f.config, f.paths, 3, r)).toBe(false);
+			expect(r.lines.join("\n")).toContain("changed before checkout");
+			expect(r.commands.some((args) => args.includes("worktree"))).toBe(false);
+			expect(r.calls.some((args) => args.includes("POST"))).toBe(false);
+			expect(
+				readdirSync(f.paths.cache).filter((name) => name.startsWith("pr-")),
+			).toEqual([]);
+		} finally {
+			f.clean();
+		}
+	},
+	repoTestTimeout,
+);
 
-test("an install failure posts failed checks, still reviews, and cleans up both worktrees", async () => {
-	const f = await fixture({ install: "custom install" });
-	try {
-		const r = runtime(f, {
-			installFails: true,
-			statuses: {
-				[f.head]: [
-					["cagr/checks", "success"],
-					["cagr/review", "success"],
-				],
-			},
-		});
-		expect(await localCi(f.config, f.paths, 3, r)).toBe(false);
-		expect(
-			r.calls.some((args) => args.some((arg) => arg.includes("/commits/"))),
-		).toBe(false);
-		expect(r.commands).toContainEqual(["sh", "-c", "custom install"]);
-		expect(r.reviewBodies[0]?.commit_id).toBe(f.head);
-		const statuses = r.calls.filter((args) =>
-			args.includes(`repos/o/r/statuses/${f.head}`),
-		);
-		expect(statuses[0]).toContain("context=cagr/checks");
-		expect(statuses[0]).toContain("state=failure");
-		expect(statuses[1]).toContain("context=cagr/review");
-		expect(statuses[1]).toContain("state=success");
-		expect(
-			readdirSync(f.paths.cache).filter((name) => name.startsWith("pr-")),
-		).toEqual([]);
-	} finally {
-		f.clean();
-	}
-});
+// Creates and removes separate Git worktrees for checks and review.
+test(
+	"an install failure posts failed checks, still reviews, and cleans up both worktrees",
+	async () => {
+		const f = await fixture({ install: "custom install" });
+		try {
+			const r = runtime(f, {
+				installFails: true,
+				statuses: {
+					[f.head]: [
+						["cagr/checks", "success"],
+						["cagr/review", "success"],
+					],
+				},
+			});
+			expect(await localCi(f.config, f.paths, 3, r)).toBe(false);
+			expect(
+				r.calls.some((args) => args.some((arg) => arg.includes("/commits/"))),
+			).toBe(false);
+			expect(r.commands).toContainEqual(["sh", "-c", "custom install"]);
+			expect(r.reviewBodies[0]?.commit_id).toBe(f.head);
+			const statuses = r.calls.filter((args) =>
+				args.includes(`repos/o/r/statuses/${f.head}`),
+			);
+			expect(statuses[0]).toContain("context=cagr/checks");
+			expect(statuses[0]).toContain("state=failure");
+			expect(statuses[1]).toContain("context=cagr/review");
+			expect(statuses[1]).toContain("state=success");
+			expect(
+				readdirSync(f.paths.cache).filter((name) => name.startsWith("pr-")),
+			).toEqual([]);
+		} finally {
+			f.clean();
+		}
+	},
+	repoTestTimeout,
+);
 
-test("a failing Verify command sees the PR base and posts failed checks", async () => {
-	const f = await fixture({ prePush: failingVerify });
-	try {
-		const r = runtime(f);
-		expect(await localCi(f.config, f.paths, 3, r)).toBe(false);
-		expect(r.lines.join("\n")).toContain(
-			`FAIL Verify\n  ${failingVerify}\n  ${f.base}`,
-		);
-		expect(
-			r.calls.find((args) => args.includes("context=cagr/checks")),
-		).toContain("state=failure");
-	} finally {
-		f.clean();
-	}
-});
+// Runs committed CI from a fresh Git worktree and resolves its base ref.
+test(
+	"a failing Verify command sees the PR base and posts failed checks",
+	async () => {
+		const f = await fixture({ prePush: failingVerify });
+		try {
+			const r = runtime(f);
+			expect(await localCi(f.config, f.paths, 3, r)).toBe(false);
+			expect(r.lines.join("\n")).toContain(
+				`FAIL Verify\n  ${failingVerify}\n  ${f.base}`,
+			);
+			expect(
+				r.calls.find((args) => args.includes("context=cagr/checks")),
+			).toContain("state=failure");
+		} finally {
+			f.clean();
+		}
+	},
+	repoTestTimeout,
+);
 
 test("watch skips a live lock and takes over after the holder dies", async () => {
 	const f = await fixture();
@@ -440,17 +468,22 @@ test("watch skips a live lock and takes over after the holder dies", async () =>
 	}
 });
 
-test("local PR metadata uses the same title and body rules as Actions", async () => {
-	const f = await fixture();
-	try {
-		const r = runtime(f, { details: { title: "Update README", body: "" } });
-		expect(await localCi(f.config, f.paths, 3, r)).toBe(false);
-		expect(r.lines.join("\n")).toContain("FAIL Pull request title");
-		expect(r.lines.join("\n")).toContain("FAIL Pull request body");
-		expect(
-			r.calls.find((args) => args.includes("context=cagr/checks")),
-		).toContain("state=failure");
-	} finally {
-		f.clean();
-	}
-});
+// Runs committed CI and review from separate Git worktrees.
+test(
+	"local PR metadata uses the same title and body rules as Actions",
+	async () => {
+		const f = await fixture();
+		try {
+			const r = runtime(f, { details: { title: "Update README", body: "" } });
+			expect(await localCi(f.config, f.paths, 3, r)).toBe(false);
+			expect(r.lines.join("\n")).toContain("FAIL Pull request title");
+			expect(r.lines.join("\n")).toContain("FAIL Pull request body");
+			expect(
+				r.calls.find((args) => args.includes("context=cagr/checks")),
+			).toContain("state=failure");
+		} finally {
+			f.clean();
+		}
+	},
+	repoTestTimeout,
+);

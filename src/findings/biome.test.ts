@@ -2,9 +2,12 @@ import { expect, test } from "bun:test";
 import { mkdirSync, readFileSync, symlinkSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { run } from "../run";
+import { repoTestTimeout, roomyBudgets } from "../test/budgets";
 import { tempRepo } from "../test/repo";
-import { captureBaseline, compareFindings } from "./baseline";
+import { captureBaseline, compareFindings, comparisonBudget } from "./baseline";
 import { findingCommand } from "./command";
+
+roomyBudgets(comparisonBudget);
 
 const fixture = (name: string) =>
 	readFileSync(join(import.meta.dir, "fixtures", `biome-${name}.txt`), "utf8");
@@ -55,60 +58,65 @@ test("Biome file comparison uses real config and binary for lint and check", asy
 	}
 });
 
-test("missing, inherited, nested, ignored and unsupported config stays strict", async () => {
-	for (const kind of [
-		"missing",
-		"extends",
-		"nested",
-		"ignored",
-		"vcs",
-		"overrides",
-		"jsonc",
-	]) {
-		const { root, write, session } = await setup();
-		if (kind === "missing") {
-			const { rmSync } = await import("node:fs");
-			rmSync(join(root, "biome.json"));
-		}
-		if (kind === "extends")
-			await write(
-				"biome.json",
-				JSON.stringify({ ...config, extends: ["./base.json"] }),
+// Each config case creates its own Git repo and some invoke Biome or git check-ignore.
+test(
+	"missing, inherited, nested, ignored and unsupported config stays strict",
+	async () => {
+		for (const kind of [
+			"missing",
+			"extends",
+			"nested",
+			"ignored",
+			"vcs",
+			"overrides",
+			"jsonc",
+		]) {
+			const { root, write, session } = await setup();
+			if (kind === "missing") {
+				const { rmSync } = await import("node:fs");
+				rmSync(join(root, "biome.json"));
+			}
+			if (kind === "extends")
+				await write(
+					"biome.json",
+					JSON.stringify({ ...config, extends: ["./base.json"] }),
+				);
+			if (kind === "nested") await write("src/biome.json", "{}");
+			if (kind === "ignored")
+				await write(
+					"biome.json",
+					JSON.stringify({ ...config, files: { includes: ["**", "!src/**"] } }),
+				);
+			if (kind === "overrides")
+				await write("biome.json", JSON.stringify({ ...config, overrides: [] }));
+			if (kind === "vcs") {
+				await write(".gitignore", "src/sample.js\n");
+				await write(
+					"biome.json",
+					JSON.stringify({
+						...config,
+						vcs: { enabled: true, clientKind: "git", useIgnoreFile: true },
+					}),
+				);
+			}
+			if (kind === "jsonc") {
+				const { rmSync } = await import("node:fs");
+				rmSync(join(root, "biome.json"));
+				await write("biome.jsonc", `// comment\n${JSON.stringify(config)}`);
+			}
+			await write("src/sample.js", fixture("inserted"));
+			const compared = await compareFindings(
+				"biome lint {files}",
+				["src/sample.js"],
+				root,
+				session,
 			);
-		if (kind === "nested") await write("src/biome.json", "{}");
-		if (kind === "ignored")
-			await write(
-				"biome.json",
-				JSON.stringify({ ...config, files: { includes: ["**", "!src/**"] } }),
-			);
-		if (kind === "overrides")
-			await write("biome.json", JSON.stringify({ ...config, overrides: [] }));
-		if (kind === "vcs") {
-			await write(".gitignore", "src/sample.js\n");
-			await write(
-				"biome.json",
-				JSON.stringify({
-					...config,
-					vcs: { enabled: true, clientKind: "git", useIgnoreFile: true },
-				}),
-			);
+			if (kind === "jsonc") expect(compared).toEqual({ old: 1, problems: [] });
+			else expect(compared).toBeNull();
 		}
-		if (kind === "jsonc") {
-			const { rmSync } = await import("node:fs");
-			rmSync(join(root, "biome.json"));
-			await write("biome.jsonc", `// comment\n${JSON.stringify(config)}`);
-		}
-		await write("src/sample.js", fixture("inserted"));
-		const compared = await compareFindings(
-			"biome lint {files}",
-			["src/sample.js"],
-			root,
-			session,
-		);
-		if (kind === "jsonc") expect(compared).toEqual({ old: 1, problems: [] });
-		else expect(compared).toBeNull();
-	}
-});
+	},
+	repoTestTimeout,
+);
 
 test("Biome timeouts and truncated or unknown reports stay strict; workspace is removed", async () => {
 	const { root, session } = await setup();
@@ -131,7 +139,7 @@ test("Biome timeouts and truncated or unknown reports stay strict; workspace is 
 				["src/sample.js"],
 				root,
 				session,
-				performance.now() + 750,
+				undefined,
 				execute,
 			),
 		).toBeNull();
@@ -148,7 +156,7 @@ test("Biome timeouts and truncated or unknown reports stay strict; workspace is 
 			["src/sample.js"],
 			root,
 			session,
-			performance.now() + 750,
+			undefined,
 			execute,
 		),
 	).toEqual({ old: 1, problems: [] });

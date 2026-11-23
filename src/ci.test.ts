@@ -2,12 +2,16 @@ import { expect, spyOn, test } from "bun:test";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { collectionBudget } from "./changes/check";
 import { annotations, ci, ciReport, publish } from "./ci";
 import { resolveConfig } from "./config/load";
 import type { RawConfig } from "./config/presets";
 import * as runner from "./run";
 import { sync } from "./sync";
+import { roomyBudgets } from "./test/budgets";
 import { tempRepo } from "./test/repo";
+
+roomyBudgets(collectionBudget);
 
 async function branch(
 	raw: RawConfig,

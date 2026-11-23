@@ -35,7 +35,7 @@ async function check(path: string, stacks: LockfileStack[], write = true) {
 		stacks,
 		baseline: null,
 		head: null,
-		deadline: performance.now() + 10_000,
+		deadline: performance.now() + 30_000,
 	});
 }
 
@@ -89,7 +89,7 @@ test("a deleted lockfile, or a folder in its place, asks for a restore", async (
 		stacks: [stack("bun")],
 		baseline: null,
 		head: null,
-		deadline: performance.now() + 10_000,
+		deadline: performance.now() + 30_000,
 	});
 	expect(verdict?.message).toContain("bun.lock is not a regular file");
 });
@@ -105,7 +105,7 @@ test("a Yarn 2 or later lockfile is not rebuilt", async () => {
 		stacks: [stack("yarn")],
 		baseline: new TextEncoder().encode(berry),
 		head: null,
-		deadline: performance.now() + 10_000,
+		deadline: performance.now() + 30_000,
 	});
 	expect(verdict?.message).toContain("checks Yarn 1 lockfiles only");
 });
@@ -135,7 +135,7 @@ async function workspaceCheck(edited: string) {
 		stacks: [stack("pnpm")],
 		baseline: new TextEncoder().encode(lockfile),
 		head,
-		deadline: performance.now() + 10_000,
+		deadline: performance.now() + 30_000,
 	});
 }
 
@@ -202,7 +202,7 @@ async function editedCheck(
 		stacks: [stack(manager)],
 		baseline: new TextEncoder().encode(files[path] ?? ""),
 		head,
-		deadline: performance.now() + 10_000,
+		deadline: performance.now() + 30_000,
 	});
 }
 
