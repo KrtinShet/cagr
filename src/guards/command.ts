@@ -1,5 +1,10 @@
 import type { Config } from "../config/schema";
-import { allowLeaseBreak, serialRef } from "../leases/refs";
+import {
+	allowLeaseBreak,
+	leasePush,
+	serialRef,
+	useLeaseCommand,
+} from "../leases/refs";
 import {
 	commandsWithRedirections,
 	programName,
@@ -131,6 +136,8 @@ function simpleCommandFinding(
 			id: "lease-break-env",
 			reason: `${allowLeaseBreak} is for humans only. Run cagr lease list to check the holder and wait, or ask a human to intervene.`,
 		};
+	if (words.some((word) => word.startsWith(`${leasePush}=`)))
+		return { id: "lease-ref", reason: useLeaseCommand };
 	const program = programWords(words);
 	const manager = packageManagerFinding(program, config);
 	if (manager) return manager;
@@ -148,11 +155,20 @@ function gitFinding(
 ): Finding | null {
 	const skips = config.git.block_hook_skips;
 	let index = 0;
+	let serialPushConfig = false;
 	while (index < args.length && (args[index] as string).startsWith("-")) {
 		const option = args[index] as string;
 		const value = gitOptionsWithValue.has(option) ? args[index + 1] : undefined;
 		if (skips && /core\.hookspath/i.test(`${option} ${value ?? ""}`))
 			return { id: "hook-skip", reason: commandReasons.hooksPath() };
+		const refspec = (
+			option === "-c"
+				? value
+				: option.startsWith("-c")
+					? option.slice(2)
+					: undefined
+		)?.match(/^remote\..+\.push=(.*)$/i)?.[1];
+		if (refspec && touchesSerialRefs(refspec)) serialPushConfig = true;
 		index += value === undefined ? 1 : 2;
 	}
 	const subcommand = args[index];
@@ -160,14 +176,16 @@ function gitFinding(
 	if (
 		((subcommand === "push" || subcommand === "update-ref") &&
 			rest.some(touchesSerialRefs)) ||
+		(subcommand === "update-ref" &&
+			rest.some((arg) => arg.startsWith("--s") && "--stdin".startsWith(arg))) ||
+		(subcommand === "push" && serialPushConfig) ||
 		(subcommand === "push" &&
 			!config.git.protected_branch &&
 			rest.includes("--mirror"))
 	)
 		return {
 			id: "lease-ref",
-			reason:
-				"Use cagr lease to take, renew or release the lease and keep your place in line.",
+			reason: useLeaseCommand,
 		};
 
 	if (skips) {

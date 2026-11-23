@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { appendFileSync, mkdirSync, openSync, readFileSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type { Config } from "./config/schema";
 import { gitContext, gitHookEnv } from "./git";
@@ -7,7 +8,7 @@ import { commandReasons } from "./guards/command";
 import { render } from "./guards/finding";
 import { branchFinding, commitMessageFinding } from "./guards/names";
 import { PushLeases } from "./leases/push";
-import { serialRef } from "./leases/refs";
+import { leasePush, serialRef, useLeaseCommand } from "./leases/refs";
 import { run, runShell } from "./run";
 
 export const gitHookNames = ["commit-msg", "pre-push"] as const;
@@ -95,6 +96,36 @@ export const startInBackground: StartInBackground = (args, cwd, log) => {
 		.unref();
 };
 
+async function realPush(cwd: string) {
+	// Git gives its hook the destination and refs but omits --dry-run.
+	const pid = process.ppid;
+	let args: string[];
+	if (process.platform === "linux") {
+		args = (
+			await readFile(`/proc/${pid}/cmdline`, "utf8").catch(() => "")
+		).split("\0");
+	} else if (process.platform === "darwin") {
+		const result = await run(
+			["ps", "-ww", "-p", String(pid), "-o", "command="],
+			cwd,
+			{ timeoutMs: 1000 },
+		);
+		args = result.ok ? result.stdout.trim().split(/\s+/) : [];
+	} else return false;
+	// Aliases and wrappers can supply more flags than the parent argv shows.
+	return (
+		/(?:^|\/)git$/.test(args[0] ?? "") &&
+		args[1] === "push" &&
+		!args
+			.slice(2)
+			.some(
+				(arg) =>
+					(arg.startsWith("--d") && "--dry-run".startsWith(arg)) ||
+					/^-[^-]*n/.test(arg),
+			)
+	);
+}
+
 export async function prePush(
 	stdin: string,
 	config: Config,
@@ -103,14 +134,18 @@ export async function prePush(
 	start: StartInBackground = startInBackground,
 	remoteUrl?: string,
 ): Promise<GitHookResult> {
-	if (skipped(config, env)) return { ok: true, messages: [] };
-	const refs = parsePushLines(stdin).filter(
-		({ remoteRef }) => !remoteRef.startsWith(serialRef),
+	const refs = parsePushLines(stdin);
+	const serial = refs.filter(({ remoteRef }) =>
+		remoteRef.startsWith(serialRef),
 	);
-	if (refs.length === 0) return { ok: true, messages: [] };
+	if (serial.length && env[leasePush] !== "1")
+		return { ok: false, messages: [useLeaseCommand] };
+	if (skipped(config, env)) return { ok: true, messages: [] };
+	if (refs.length === serial.length) return { ok: true, messages: [] };
 	const messages: string[] = [];
 	const warnings: string[] = [];
 	const leases = new PushLeases(config, cwd, messages, warnings);
+	const writable = !config.lease.length || (await realPush(cwd));
 	const pushed: { branch: string; sha: string }[] = [];
 	for (const ref of refs) {
 		const branch = ref.remoteRef.replace(/^refs\/heads\//, "");
@@ -155,23 +190,31 @@ export async function prePush(
 		);
 	}
 	if (!messages.length)
-		await leases.verify(async () => {
-			for (const command of config.git.pre_push) {
-				if (messages.length) break;
-				const result = await runShell(command, config.root, {
-					env: { ...gitEnv, ...leases.priorityEnv },
-				});
-				if (!result.ok)
-					messages.push(
-						`\`${command}\` failed, so the push was stopped.\n${result.output.trimEnd()}`,
-					);
-			}
-		}, config.git.pre_push.length > 0);
+		await leases.verify(
+			async () => {
+				for (const command of config.git.pre_push) {
+					if (messages.length) break;
+					const result = await runShell(command, config.root, {
+						env: { ...gitEnv, ...leases.priorityEnv },
+					});
+					if (!result.ok)
+						messages.push(
+							`\`${command}\` failed, so the push was stopped.\n${result.output.trimEnd()}`,
+						);
+				}
+			},
+			config.git.pre_push.length > 0,
+			writable,
+		);
 	if (messages.length > 0) {
-		await leases.release();
+		if (writable) await leases.releaseUnpublished();
 		return { ok: false, messages: [...messages, ...warnings] };
 	}
-	if (config.review.status && pushed.length > 0)
+	if (
+		config.review.status &&
+		pushed.length > 0 &&
+		(!config.lease.length || writable)
+	)
 		warnings.push(...(await sendStatuses(config, cwd, pushed, start)));
 	return { ok: true, messages: warnings };
 }
@@ -192,6 +235,7 @@ async function sendStatuses(
 		if (!git.commonDir) return [];
 		// The pre_push commands ran on the working tree, untracked files included, so they vouch only for a clean HEAD.
 		const clean =
+			config.lease.length === 0 &&
 			config.git.pre_push.length > 0 &&
 			(
 				await run(

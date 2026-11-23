@@ -1,10 +1,10 @@
 import { afterEach, test as bunTest, expect } from "bun:test";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { type RunOptions, run, shellQuote } from "../run";
 import { tempRepo } from "../test/repo";
-import { LeaseRefs } from "./refs";
+import { holder, LeaseRefs } from "./refs";
 
 const cli = resolve(import.meta.dir, "../cli.ts");
 const name = "db-migrations";
@@ -31,12 +31,15 @@ async function fixture(ttl = 1800) {
 	cleanup.push(parent, repo.root);
 	const origin = join(parent, "origin.git");
 	const config = (prePush: string, branchName = "off") =>
-		`[agents]\ncommand = ${JSON.stringify([process.execPath, cli].map(shellQuote).join(" "))}\n[git]\nprotected_branch = "main"\nbranch_name = "${branchName}"\nblock_force_push = true\npre_push = ${JSON.stringify(prePush)}\n`;
+		`[agents]\nenabled = []\ncommand = ${JSON.stringify([process.execPath, cli].map(shellQuote).join(" "))}\n[git]\nprotected_branch = "main"\nbranch_name = "${branchName}"\nblock_force_push = true\npre_push = ${JSON.stringify(prePush)}\n`;
 	await repo.commit("chore: set up serial migrations", {
 		"cagr.toml": config("true"),
 		".cagr/serial.toml": `[[lease]]\nname = "${name}"\npaths = ["migrations/**"]\nafter_acquire = "Merge main and regenerate."\nttl_seconds = ${ttl}\n`,
 		"migrations/0001.sql": "initial\n",
 	});
+	const synced = await run([process.execPath, cli, "sync"], repo.root);
+	if (!synced.ok) throw new Error(synced.output);
+	await repo.commit("chore: commit generated hooks", {});
 	await git(parent, "clone", "-q", "--bare", repo.root, origin);
 	const builder = async (branch: string) => {
 		const cwd = join(parent, branch);
@@ -83,13 +86,16 @@ async function fixture(ttl = 1800) {
 		};
 	};
 	const remote = (...args: string[]) => git(origin, ...args);
-	const setRenewal = async (ref: string, renewed: number) => {
-		const record = JSON.parse(await remote("cat-file", "blob", ref));
+	const setRecord = async (ref: string, data: string) => {
 		const result = await run(["git", "hash-object", "-w", "--stdin"], origin, {
-			stdin: JSON.stringify({ ...record, renewed }),
+			stdin: data,
 		});
 		if (!result.ok) throw new Error(result.output);
 		await remote("update-ref", ref, result.stdout.trim());
+	};
+	const setRenewal = async (ref: string, renewed: number) => {
+		const record = JSON.parse(await remote("cat-file", "blob", ref));
+		await setRecord(ref, JSON.stringify({ ...record, renewed }));
 	};
 	const merge = async (builder: { cwd: string; branch: string }) => {
 		await remote(
@@ -98,7 +104,7 @@ async function fixture(ttl = 1800) {
 			`refs/heads/${builder.branch}`,
 		);
 	};
-	return { builder, remote, setRenewal, merge };
+	return { builder, remote, setRecord, setRenewal, merge, origin, parent };
 }
 
 test("two clones contend and the non-holder's migration push is refused", async () => {
@@ -151,7 +157,6 @@ test("three builders land 0002 through 0004 in ticket order", async () => {
 		const pushed = await lander.push();
 		if (!pushed.ok) throw new Error(pushed.output);
 		await merge(lander);
-		expect((await lander.lease("release")).ok).toBe(true);
 	};
 	await land(a, "0002");
 	expect((await c.lease("take")).exitCode).toBe(1);
@@ -311,11 +316,235 @@ test("the lease stays live during verification and passes admission priority", a
 	expect(pushed.ok).toBe(true);
 });
 
-test("a reverted leased path still needs the lease for the commits being pushed", async () => {
+test("a reverted leased change on an unpublished branch leaves the tree unchanged", async () => {
 	const { builder } = await fixture();
 	const a = await builder("builder-a");
 	await a.migration("0002");
 	await a.git("revert", "--no-edit", "HEAD");
-	const denied = await a.push();
-	expect(denied.stderr).toContain("Changes to db-migrations need its lease");
+	expect((await a.push()).ok).toBe(true);
+});
+
+test("CI rejects an expired published lease and a failed update keeps a live one", async () => {
+	const { builder, remote, setRenewal } = await fixture();
+	const a = await builder("builder-a");
+	await a.migration("0002");
+	expect((await a.lease("take")).ok).toBe(true);
+	expect((await a.push()).ok).toBe(true);
+	const ci = () => run([process.execPath, cli, "ci"], a.cwd);
+	const live = await ci();
+	expect(live.stdout).toContain("PASS Leases");
+	expect(live.ok).toBe(true);
+	await setRenewal(leaseRef, 0);
+	const expired = await ci();
+	expect(expired.ok).toBe(false);
+	expect(expired.stdout).toContain("FAIL Leases");
+	expect(expired.stdout).toContain("cagr lease take db-migrations");
+	expect((await a.lease("take")).ok).toBe(true);
+	await a.configure("exit 1");
+	await a.migration("0003");
+	const failed = await a.push();
+	expect(failed.ok).toBe(false);
+	expect(failed.stderr).toContain("Kept db-migrations");
+	expect(await remote("rev-parse", leaseRef)).toMatch(/^[a-f0-9]+$/);
+});
+
+test("dry-run pushes leave remote lease refs unchanged on success and refusal", async () => {
+	const { builder, remote } = await fixture();
+	const a = await builder("builder-a");
+	await a.migration("0002");
+	expect((await a.lease("take")).ok).toBe(true);
+	const before = await remote("for-each-ref", "refs/cagr/");
+	const dry = (flag: string) =>
+		run(["git", "push", flag, "origin", "HEAD"], a.cwd);
+	expect((await dry("--dry-run")).ok).toBe(true);
+	expect(await remote("for-each-ref", "refs/cagr/")).toBe(before);
+	await a.configure("exit 1");
+	expect((await dry("-n")).ok).toBe(false);
+	expect(await remote("for-each-ref", "refs/cagr/")).toBe(before);
+});
+
+test("a configured push refspec cannot write a serial ref", async () => {
+	const { builder } = await fixture();
+	const a = await builder("builder-a");
+	await a.git("config", "remote.origin.push", `HEAD:${leaseRef}`);
+	const pushed = await run(["git", "push", "origin"], a.cwd);
+	expect(pushed.ok).toBe(false);
+	expect(pushed.stderr).toContain("Use cagr lease");
+});
+
+test("a main-only migration brought in by a merge needs no lease", async () => {
+	const { builder, merge } = await fixture();
+	const a = await builder("builder-a");
+	const b = await builder("builder-b");
+	expect((await b.push()).ok).toBe(true);
+	await b.git("commit", "--allow-empty", "-m", "chore: work on builder b");
+	expect((await a.lease("take")).ok).toBe(true);
+	await a.migration("0002");
+	expect((await a.push()).ok).toBe(true);
+	await merge(a);
+	await b.git("fetch", "origin", "main");
+	await b.git("merge", "--no-edit", "origin/main");
+	expect((await b.push()).ok).toBe(true);
+});
+
+test("a merge that inherits a leased deletion from its side parent needs the lease", async () => {
+	const { builder } = await fixture();
+	const a = await builder("builder-a");
+	const b = await builder("builder-b");
+	await a.migration("0002");
+	expect((await a.lease("take")).ok).toBe(true);
+	expect((await a.push()).ok).toBe(true);
+	expect((await a.lease("release")).ok).toBe(true);
+	await b.git("commit", "--allow-empty", "-qm", "chore: work on builder b");
+	await a.git("fetch", b.cwd, "builder-b");
+	await a.git("merge", "--no-commit", "--no-ff", "FETCH_HEAD");
+	await a.git("rm", "migrations/0002.sql");
+	await a.git("commit", "-qm", "fix: keep the side parent's migration tree");
+	const result = await a.push();
+	expect(result.ok).toBe(false);
+	expect(result.stderr).toContain("Changes to db-migrations need its lease");
+});
+
+test("a forced rewind that removes a leased change needs the lease", async () => {
+	const { builder } = await fixture();
+	const a = await builder("builder-a");
+	await a.migration("0002");
+	expect((await a.lease("take")).ok).toBe(true);
+	expect((await a.push()).ok).toBe(true);
+	expect((await a.lease("release")).ok).toBe(true);
+	const configFile = join(a.cwd, "cagr.toml");
+	await Bun.write(
+		configFile,
+		(await Bun.file(configFile).text()).replace(
+			"block_force_push = true",
+			"block_force_push = false",
+		),
+	);
+	const result = await run(
+		["git", "push", "--force", "origin", "HEAD^:refs/heads/builder-a"],
+		a.cwd,
+	);
+	expect(result.ok).toBe(false);
+	expect(result.stderr).toContain("Changes to db-migrations need its lease");
+});
+
+test("take skips and logs malformed records, and a human can prune tickets directly", async () => {
+	const { builder, remote, setRecord } = await fixture();
+	const a = await builder("builder-a");
+	const broken = `${waitPrefix}123-broken`;
+	await setRecord(leaseRef, "not a lease");
+	await setRecord(broken, "not a ticket");
+	const listed = await a.lease("list");
+	expect(listed.stdout).toContain("malformed lease");
+	expect(listed.stdout).toContain(`Ignored malformed ticket at ${broken}`);
+	const pruned = await a.lease("release", ["--break", "--prune-tickets"]);
+	expect(pruned.stdout).toContain(
+		`Pruned malformed serial record at ${broken}`,
+	);
+	expect(await remote("for-each-ref", waitPrefix)).toBe("");
+	await setRecord(broken, "still not a ticket");
+	const taken = await a.lease("take");
+	expect(taken.stdout).toContain(
+		`Pruned malformed serial record at ${leaseRef}`,
+	);
+	expect(taken.stdout).toContain(`Pruned malformed serial record at ${broken}`);
+	expect(taken.stdout).toContain("Acquired db-migrations for builder-a");
+	expect(await remote("for-each-ref", waitPrefix)).toBe("");
+});
+
+async function withCommand(dir: string, name: string, script: string) {
+	const file = join(dir, name);
+	await Bun.write(file, `#!/bin/sh\nset -eu\n${script}\n`);
+	await chmod(file, 0o755);
+	return { env: { PATH: `${dir}:${process.env.PATH}` } };
+}
+
+test("a renewal CAS that leaves too little time cannot clear pre-push", async () => {
+	const { builder, origin, remote } = await fixture(5);
+	const a = await builder("builder-a");
+	const zero = "0".repeat(40);
+	await withCommand(
+		join(origin, "hooks"),
+		"pre-receive",
+		`
+while read -r old new ref; do
+  if test "$ref" = ${leaseRef} && test "$old" != ${zero} && test "$new" != ${zero}; then
+    sleep 3
+  fi
+done`,
+	);
+	await a.migration("0002");
+	expect((await a.lease("take")).ok).toBe(true);
+	const before = await remote("rev-parse", leaseRef);
+	const result = await a.push();
+	expect(result.ok).toBe(false);
+	expect(result.stderr).toContain("too little time left");
+	expect(await remote("rev-parse", leaseRef)).not.toBe(before);
+	expect(await remote("branch", "--list", a.branch)).toBe("");
+});
+
+test("take relists tied tickets before it claims a free lease", async () => {
+	const { builder, origin, parent, remote, setRecord } = await fixture();
+	const c = await builder("builder-c");
+	const acquired = Date.now();
+	const ticketRef = (branch: string) =>
+		`${waitPrefix}${acquired}-${Buffer.from(branch).toString("base64url")}`;
+	const record = (branch: string) =>
+		JSON.stringify({ ...holder(branch), acquired, renewed: acquired });
+	await setRecord(ticketRef(c.branch), record(c.branch));
+	await setRecord("refs/fixture/new-ticket", record("builder-b"));
+	const realGit = shellQuote(Bun.which("git") as string);
+	const options = await withCommand(
+		parent,
+		"git",
+		`
+if test "$1" = rev-parse && test "${"$"}{2-}" = HEAD; then
+  ${realGit} --git-dir=${shellQuote(origin)} update-ref ${shellQuote(ticketRef("builder-b"))} refs/fixture/new-ticket
+fi
+exec ${realGit} "$@"`,
+	);
+	const queued = await c.lease("take", [], options);
+	expect(queued.exitCode).toBe(1);
+	expect(queued.stdout).toContain("builder-c is #2 in line behind builder-b");
+	expect(await remote("for-each-ref", leaseRef)).toBe("");
+});
+
+test("a squash merge and automatic branch deletion permit the next holder", async () => {
+	const { builder, parent, origin, remote } = await fixture();
+	const a = await builder("builder-a");
+	const b = await builder("builder-b");
+	await a.migration("0002");
+	expect((await a.lease("take")).ok).toBe(true);
+	expect((await a.push()).ok).toBe(true);
+	await b.git("fetch", "origin", a.branch);
+	await b.git("merge", "--squash", "FETCH_HEAD");
+	await b.git("commit", "-qm", "feat: squash migration onto main");
+	await b.git("push", "--no-verify", "origin", "HEAD:refs/heads/main");
+	await remote("update-ref", "-d", "refs/heads/builder-a");
+	await b.git(
+		"remote",
+		"set-url",
+		"origin",
+		"https://github.com/example/leases.git",
+	);
+	await b.git(
+		"config",
+		`url.${origin}.insteadOf`,
+		"https://github.com/example/leases.git",
+	);
+	const merged = {
+		headRefOid: await a.git("rev-parse", "HEAD"),
+		isCrossRepository: false,
+		mergedAt: new Date().toISOString(),
+	};
+	const options = await withCommand(
+		parent,
+		"gh",
+		`
+test "$*" = "pr list --repo github.com/example/leases --head builder-a --base main --state merged --json headRefOid,isCrossRepository,mergedAt"
+echo ${shellQuote(JSON.stringify([merged]))}`,
+	);
+	expect((await b.lease("take", [], options)).stdout).toContain(
+		"Acquired db-migrations for builder-b",
+	);
 });

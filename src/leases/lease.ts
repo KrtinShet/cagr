@@ -1,6 +1,8 @@
 import { appendFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import type { Config, Lease } from "../config/schema";
+import { matchesGlob } from "../paths";
+import { run } from "../run";
 import {
 	allowLeaseBreak,
 	holder,
@@ -27,6 +29,52 @@ export function protectedRef(config: Config, snapshot: LeaseSnapshot) {
 
 export const branchRef = (branch: string) => `refs/heads/${branch}`;
 
+export const touchesLease = (lease: Lease, paths: string[]) =>
+	paths.some((path) => lease.paths.some((glob) => matchesGlob(glob, path)));
+
+export async function changedPaths(git: LeaseRefs, base: string, head: string) {
+	return (
+		await git.checked([
+			"diff",
+			"--name-only",
+			"--no-renames",
+			"--relative",
+			"--ignore-submodules=none",
+			"-z",
+			base,
+			head,
+			"--",
+		])
+	)
+		.split("\0")
+		.filter(Boolean);
+}
+
+export async function protectedChanges(
+	git: LeaseRefs,
+	config: Config,
+	snapshot: LeaseSnapshot,
+	head: string,
+) {
+	const base = snapshot.refs.get(protectedRef(config, snapshot) ?? "");
+	if (base && head === base) return [];
+	if (!base) {
+		if (
+			snapshot.defaultBranch ||
+			[...snapshot.refs.keys()].some((ref) => ref.startsWith("refs/heads/"))
+		)
+			throw new LeaseError(
+				"Set [git] protected_branch to an existing branch on origin and retry.",
+			);
+		return (await git.checked(["ls-tree", "-r", "--name-only", "-z", head]))
+			.split("\0")
+			.filter(Boolean);
+	}
+	await git.ensureObject(base);
+	const common = await git.checked(["merge-base", base, head]);
+	return changedPaths(git, common, head);
+}
+
 export async function heldLease(
 	git: LeaseRefs,
 	snapshot: LeaseSnapshot,
@@ -47,30 +95,100 @@ async function reclaimable(
 	if (expired(lease, record)) return true;
 	const remoteTip = snapshot.refs.get(branchRef(record.branch));
 	if (!remoteTip && record.published) return true;
-	const base = snapshot.refs.get(protectedRef(config, snapshot) ?? "");
+	const target = protectedRef(config, snapshot);
+	const base = target && snapshot.refs.get(target);
 	if (!base || !record.head) return false;
-	// An unpublished head may exist only on the holder's machine. Fetch the
-	// advertised tip before testing whether it contains that head.
 	const tip = remoteTip ?? base;
 	await git.ensureObject(tip);
-	if (!(await git.git(["cat-file", "-e", record.head])).ok) return false;
-	return (
-		(await git.ancestor(record.head, tip)) && (await git.ancestor(tip, base))
+	if (
+		(await git.git(["cat-file", "-e", record.head])).ok &&
+		(await git.ancestor(record.head, tip)) &&
+		(await git.ancestor(tip, base))
+	)
+		return true;
+	if (!Bun.which("gh")) return false;
+	const origin = (
+		await git.git(["config", "--get", "remote.origin.url"])
+	).stdout.trim();
+	const repo = origin
+		.replace(/\.git$/, "")
+		.match(
+			/^(?:https?:\/\/|ssh:\/\/)?(?:[^@/:]+@)?([\w.-]+)[/:]([\w.-]+\/[\w.-]+)$/,
+		);
+	if (!repo) return false;
+	const result = await run(
+		[
+			"gh",
+			"pr",
+			"list",
+			"--repo",
+			`${repo[1]}/${repo[2]}`,
+			"--head",
+			record.branch,
+			"--base",
+			target.slice("refs/heads/".length),
+			"--state",
+			"merged",
+			"--json",
+			"headRefOid,isCrossRepository,mergedAt",
+		],
+		git.cwd,
+		{ timeoutMs: 5000, env: { GH_PROMPT_DISABLED: "1" } },
 	);
+	if (!result.ok) return false;
+	const prs: {
+		headRefOid: string;
+		isCrossRepository: boolean;
+		mergedAt: string;
+	}[] = JSON.parse(result.stdout);
+	return prs.some(
+		(pr) =>
+			pr.headRefOid === (remoteTip ?? record.head) &&
+			!pr.isCrossRepository &&
+			Date.parse(pr.mergedAt) >= Math.floor(record.acquired / 1000) * 1000,
+	);
+}
+
+export async function pruneMalformed(
+	git: LeaseRefs,
+	ref: string,
+	sha: string,
+	print: (line: string) => void,
+) {
+	if ((await git.change(ref, sha, null)) === null) return false;
+	print(`Pruned malformed serial record at ${ref}.`);
+	return true;
+}
+
+export async function pruneBadTickets(
+	git: LeaseRefs,
+	snapshot: LeaseSnapshot,
+	lease: Lease,
+	print: (line: string) => void,
+) {
+	for (const [ref, sha] of snapshot.refs)
+		if (ref.startsWith(waitPrefix(lease.name)) && !(await git.ticket(ref, sha)))
+			await pruneMalformed(git, ref, sha, print);
 }
 
 async function waiting(
 	git: LeaseRefs,
 	snapshot: LeaseSnapshot,
 	lease: Lease,
-	prune = false,
+	prune?: (line: string) => void,
+	report?: (line: string) => void,
 ) {
 	const prefix = waitPrefix(lease.name);
 	const tickets = [];
 	for (const [ref, sha] of snapshot.refs) {
 		if (!ref.startsWith(prefix)) continue;
 		const ticket = await git.ticket(ref, sha);
-		if (!expired(lease, ticket.record)) tickets.push(ticket);
+		if (!ticket) {
+			if (prune && !(await pruneMalformed(git, ref, sha, prune))) return null;
+			report?.(
+				`Ignored malformed ticket at ${ref}. Run cagr lease release --break ${lease.name} --prune-tickets to remove it.`,
+			);
+		} else if (!expired(lease, ticket.record)) tickets.push(ticket);
 		else if (prune && (await git.change(ref, sha, null)) === null) return null;
 	}
 	return tickets.sort(
@@ -101,7 +219,13 @@ export async function take(
 	for (;;) {
 		const snapshot = await git.snapshot();
 		const held = await heldLease(git, snapshot, lease);
-		const line = await waiting(git, snapshot, lease, true);
+		const ref = leaseRef(lease.name);
+		const sha = snapshot.refs.get(ref);
+		if (!held && sha) {
+			await pruneMalformed(git, ref, sha, print);
+			continue;
+		}
+		const line = await waiting(git, snapshot, lease, print);
 		if (!line) continue;
 		const ticket = line.find((entry) => entry.record.branch === branch);
 		if (held?.record.branch === branch && !expired(lease, held.record)) {
@@ -135,14 +259,20 @@ export async function take(
 			const base = snapshot.refs.get(protectedRef(config, snapshot) ?? "");
 			const head =
 				base && (await git.ancestor(localHead, base)) ? null : localHead;
+			const latest = await git.snapshot();
+			if (latest.refs.has(ref)) continue;
+			const refreshed = await waiting(git, latest, lease);
+			if (
+				refreshed?.[0]?.ref !== ticket.ref ||
+				expired(lease, refreshed[0].record)
+			)
+				continue;
 			const record: LeaseRecord = {
 				...holder(branch),
 				head,
-				published: snapshot.refs.has(branchRef(branch)),
+				published: latest.refs.has(branchRef(branch)),
 			};
-			if (expired(lease, ticket.record)) continue;
-			if ((await git.change(leaseRef(lease.name), "", record)) === null)
-				continue;
+			if ((await git.change(ref, "", record)) === null) continue;
 			print(`Acquired ${lease.name} for ${branch}.`);
 			if (lease.after_acquire) print(lease.after_acquire);
 			for (const own of line.filter(({ record }) => record.branch === branch))
@@ -169,18 +299,27 @@ export async function take(
 
 export async function renew(
 	git: LeaseRefs,
+	lease: Lease,
 	held: Recorded<LeaseRecord>,
 	published: boolean,
 	head = held.record.head,
 ) {
-	const record = {
-		...held.record,
-		published: held.record.published || published,
-		head,
-		renewed: Math.max(Date.now(), held.record.renewed + 1),
-	};
-	const sha = await git.change(held.ref, held.sha, record);
-	return sha === null ? null : { ref: held.ref, sha, record };
+	for (let attempt = 0; attempt < 2; attempt++) {
+		if (expired(lease, held.record)) return null;
+		const record = {
+			...held.record,
+			published: held.record.published || published,
+			head,
+			renewed: Math.max(Date.now(), held.record.renewed + 1),
+		};
+		if ((await git.change(held.ref, held.sha, record)) === null) return null;
+		const current = await heldLease(git, await git.snapshot(), lease);
+		if (!current || current.record.id !== record.id) return null;
+		if (Date.now() - current.record.renewed < lease.ttl_seconds * 500)
+			return current;
+		held = current;
+	}
+	return null;
 }
 
 export async function list(git: LeaseRefs, config: Config) {
@@ -192,11 +331,21 @@ export async function list(git: LeaseRefs, config: Config) {
 		if (held) {
 			const r = held.record;
 			const age = Math.max(0, Math.floor((Date.now() - r.acquired) / 1000));
-			lines.push(
-				`${lease.name}: ${r.branch} held by ${r.user}@${r.host} (pid ${r.pid}), age ${age}s, last renewed ${new Date(r.renewed).toISOString()}${expired(lease, r) ? " (expired)" : ""}`,
+			const remaining = Math.max(
+				0,
+				Math.ceil((r.renewed + lease.ttl_seconds * 1000 - Date.now()) / 1000),
 			);
-		} else lines.push(`${lease.name}: free`);
-		const line = await waiting(git, snapshot, lease);
+			lines.push(
+				`${lease.name}: ${r.branch} held by ${r.user}@${r.host} (pid ${r.pid}), age ${age}s, last renewed ${new Date(r.renewed).toISOString()}, ${remaining}s remaining${remaining === 0 ? " (expired)" : ""}`,
+			);
+		} else if (snapshot.refs.has(leaseRef(lease.name)))
+			lines.push(
+				`${lease.name}: malformed lease. Run cagr lease release --break ${lease.name} to remove it.`,
+			);
+		else lines.push(`${lease.name}: free`);
+		const line = await waiting(git, snapshot, lease, undefined, (line) =>
+			lines.push(line),
+		);
 		lines.push(
 			...(line ?? []).map(
 				({ record }, index) =>

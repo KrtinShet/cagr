@@ -3,7 +3,9 @@ import { join } from "node:path";
 import { ci, ciReport } from "../ci";
 import { defaultCiInstall, loadConfig } from "../config/load";
 import type { Config } from "../config/schema";
+import { gitContext } from "../git";
 import { stackDir, stackInstall } from "../github-files";
+import { LeaseRefs } from "../leases/refs";
 import { claudeAgent } from "../review/agent";
 import { ciReview, type Gh, ghAt, type PullRequest } from "../review/github";
 import { checksContext, postStatus, reviewContext } from "../review/status";
@@ -30,6 +32,13 @@ const localRun: typeof run = (argv, cwd, options) =>
 		processGroup: process.platform !== "win32",
 		env: { ...options?.env, ...loginEnv },
 	});
+
+const gitAuth = [
+	"-c",
+	"credential.helper=",
+	"-c",
+	"credential.https://github.com.helper=!gh auth git-credential",
+];
 
 type Runtime = {
 	gh: Gh;
@@ -128,6 +137,7 @@ async function checkPullRequest(
 	cache: string,
 	runtime: Runtime,
 	tasks: { checks: boolean; review: boolean },
+	renewLeaseFor?: string,
 ) {
 	const { gh, run: execute, log } = runtime;
 	makeCache(cache);
@@ -172,10 +182,7 @@ async function checkPullRequest(
 		await git("config", "core.hooksPath", "/dev/null");
 		await git("remote", "add", "origin", `https://github.com/${pr.repo}.git`);
 		await git(
-			"-c",
-			"credential.helper=",
-			"-c",
-			"credential.https://github.com.helper=!gh auth git-credential",
+			...gitAuth,
 			"fetch",
 			"--no-tags",
 			"origin",
@@ -206,6 +213,10 @@ async function checkPullRequest(
 						title: details.title,
 					},
 					env: {},
+					leaseGit: new LeaseRefs(worktree, ([, ...args], cwd, options) =>
+						execute(["git", ...gitAuth, ...args], cwd, options),
+					),
+					renewLeaseFor,
 					runCheck: (command, cwd, options) =>
 						execute(shellArgv(command), cwd, options),
 				});
@@ -281,6 +292,10 @@ export async function localCi(
 			log(`${now} Local CI watch pass.`);
 		}
 		const repo = await repository(gh);
+		const renewLeaseFor =
+			mode === "watch"
+				? undefined
+				: ((await gitContext(config.root)).branch ?? undefined);
 		const prs =
 			mode === "watch"
 				? (JSON.parse(
@@ -357,6 +372,7 @@ export async function localCi(
 					paths.cache,
 					runtime,
 					tasks,
+					renewLeaseFor,
 				);
 				if (!passed) ok = false;
 				// A second PR can point at the same SHA before GitHub returns a posted status.

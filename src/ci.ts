@@ -8,6 +8,14 @@ import { missingSections } from "./guards/github";
 import { checkSuppressions } from "./guards/lint-suppression";
 import { branchFinding, commitMessageFinding } from "./guards/names";
 import { stackFiles, tidy, withFiles } from "./hook/stack-files";
+import {
+	branchRef,
+	expired,
+	heldLease,
+	renew,
+	touchesLease,
+} from "./leases/lease";
+import { LeaseRefs } from "./leases/refs";
 import { classify, riskReport } from "./risk";
 import { type LayoutRule, layoutFindings } from "./rules/layout";
 import { findInFiles, loadRuleSet, RuleError } from "./rules/rules";
@@ -24,7 +32,7 @@ export type CiCheck = {
 export type CiResult = { ok: boolean; checks: CiCheck[]; tier: string };
 
 type PullRequest = {
-	head?: { sha: string };
+	head?: { sha: string; ref?: string; repo?: { full_name: string } | null };
 	title?: unknown;
 	body?: string | null;
 };
@@ -57,6 +65,8 @@ export async function ci(
 		cwd: string;
 		base?: string;
 		pr?: PullRequest & { branch: string };
+		leaseGit?: LeaseRefs;
+		renewLeaseFor?: string;
 		runCheck?: typeof runShell;
 		env?: Record<string, string | undefined>;
 	},
@@ -161,7 +171,11 @@ export async function ci(
 	}
 	checks.push(check("Generated files", drift));
 
-	const branch = options.pr?.branch || env.GITHUB_HEAD_REF || git.branch;
+	const branch =
+		options.pr?.branch ||
+		env.GITHUB_HEAD_REF ||
+		pullRequest?.head?.ref ||
+		git.branch;
 	const branchProblem = branch ? branchFinding(branch, config) : null;
 	checks.push(
 		check("Branch name", branchProblem ? [branchProblem.reason] : []),
@@ -335,6 +349,48 @@ export async function ci(
 			if (!result.ok) problems.push(`${command}\n${tidy(result.output, 4000)}`);
 		}
 		checks.push(check("Verify", problems));
+	}
+	if (config.lease.length > 0) {
+		const paths = changeResult.snapshot.changes.map(({ path }) => path);
+		const needed = config.lease.filter((lease) => touchesLease(lease, paths));
+		const problems: string[] = [];
+		if (needed.length) {
+			try {
+				const reader = options.leaseGit ?? new LeaseRefs(cwd);
+				const snapshot = await reader.snapshot();
+				const headRepo = pullRequest?.head?.repo?.full_name;
+				const sameRepo =
+					!headRepo ||
+					!env.GITHUB_REPOSITORY ||
+					headRepo === env.GITHUB_REPOSITORY;
+				for (const lease of needed) {
+					let held = await heldLease(reader, snapshot, lease);
+					if (
+						sameRepo &&
+						branch &&
+						held?.record.branch === branch &&
+						!expired(lease, held.record)
+					) {
+						if (options.renewLeaseFor === branch)
+							held = await renew(
+								reader,
+								lease,
+								held,
+								snapshot.refs.has(branchRef(branch)),
+							);
+						if (held) continue;
+					}
+					problems.push(
+						`Changes to ${lease.name} need a live lease on the PR branch. Run \`cagr lease take ${lease.name}\`, merge the protected branch, regenerate, and push.`,
+					);
+				}
+			} catch (error) {
+				problems.push(
+					`Could not verify leases: ${(error as Error).message}. Restore access to origin, run cagr lease list, and rerun cagr ci.`,
+				);
+			}
+		}
+		checks.push(check("Leases", problems));
 	}
 	if (await out(["git", "status", "--porcelain", "-z"], cwd))
 		checks.push(

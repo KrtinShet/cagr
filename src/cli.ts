@@ -65,7 +65,7 @@ Usage: cagr <command>
   lease list                   Show serial leases and waiting branches on origin.
   lease take <name> [--wait]    Take a serial lease or join the line.
   lease renew <name>            Renew your branch's serial lease.
-  lease release <name> [--break]  Release a serial lease.
+  lease release <name> [--break [--prune-tickets]]  Release a lease or prune malformed tickets.
   doctor [--github]            Check the wiring, the tools each check needs, and hook timings.
                                --github also checks branch protection through gh.
   review [...]                 Review this branch with a reviewer agent. \`cagr review help\` for more.
@@ -124,7 +124,7 @@ const options: Record<string, string[]> = {
 	sync: ["--check"],
 	update: ["--check", "--version"],
 	"install-git-hooks": [],
-	lease: ["--wait", "--break"],
+	lease: ["--wait", "--break", "--prune-tickets"],
 	doctor: ["--github"],
 	stats: ["--days", "--json"],
 	risk: ["--base"],

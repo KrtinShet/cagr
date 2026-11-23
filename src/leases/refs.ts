@@ -6,6 +6,9 @@ export const serialRef = "refs/cagr/";
 export const leaseRef = (name: string) => `${serialRef}lease/${name}`;
 export const waitPrefix = (name: string) => `${serialRef}wait/${name}/`;
 export const allowLeaseBreak = "CAGR_ALLOW_LEASE_BREAK";
+export const leasePush = "CAGR_INTERNAL_LEASE_PUSH";
+export const useLeaseCommand =
+	"Use cagr lease to take, renew or release the lease and keep your place in line.";
 
 export class LeaseError extends Error {}
 
@@ -40,10 +43,13 @@ export class LeaseRefs {
 	readonly #records = new Map<string, Holder>();
 	#url?: string;
 
-	constructor(readonly cwd: string) {}
+	constructor(
+		readonly cwd: string,
+		readonly execute = run,
+	) {}
 
 	async git(args: string[], options: RunOptions = {}) {
-		return run(["git", ...args], this.cwd, {
+		return this.execute(["git", ...args], this.cwd, {
 			timeoutMs: 15_000,
 			...options,
 			env: { ...gitHookEnv, ...options.env },
@@ -106,16 +112,14 @@ export class LeaseRefs {
 			]);
 	}
 
-	async read(ref: string, sha: string): Promise<Recorded<LeaseRecord>> {
-		const { record } = await this.ticket(ref, sha);
-		if (!isLease(record))
-			throw new LeaseError(
-				`Invalid lease record at ${ref}. Ask a human to repair the ref.`,
-			);
-		return { ref, sha, record };
+	async read(ref: string, sha: string): Promise<Recorded<LeaseRecord> | null> {
+		const entry = await this.ticket(ref, sha);
+		return entry && isLease(entry.record)
+			? { ref, sha, record: entry.record }
+			: null;
 	}
 
-	async ticket(ref: string, sha: string): Promise<Recorded<Holder>> {
+	async ticket(ref: string, sha: string): Promise<Recorded<Holder> | null> {
 		let record = this.#records.get(sha);
 		if (!record) {
 			let result = await this.git(["cat-file", "blob", sha]);
@@ -127,14 +131,9 @@ export class LeaseRefs {
 			try {
 				value = JSON.parse(result.stdout);
 			} catch {
-				throw new LeaseError(
-					`Invalid serial record at ${ref}. Ask a human to repair the ref.`,
-				);
+				return null;
 			}
-			if (!isHolder(value))
-				throw new LeaseError(
-					`Invalid serial record at ${ref}. Ask a human to repair the ref.`,
-				);
+			if (!isHolder(value)) return null;
 			record = value;
 			this.#records.set(sha, record);
 		}
@@ -151,13 +150,16 @@ export class LeaseRefs {
 					stdin: JSON.stringify(record),
 				})
 			: "";
-		const result = await this.git([
-			"push",
-			"--porcelain",
-			`--force-with-lease=${ref}:${expected}`,
-			"origin",
-			`${sha}:${ref}`,
-		]);
+		const result = await this.git(
+			[
+				"push",
+				"--porcelain",
+				`--force-with-lease=${ref}:${expected}`,
+				"origin",
+				`${sha}:${ref}`,
+			],
+			{ env: { [leasePush]: "1" } },
+		);
 		if (!result.ok) {
 			const actual = (await this.snapshot()).refs.get(ref) ?? "";
 			if (record && actual === sha) return sha;
@@ -194,6 +196,7 @@ function isHolder(value: unknown): value is Holder {
 		value !== null &&
 		"branch" in value &&
 		typeof value.branch === "string" &&
+		value.branch.length > 0 &&
 		"host" in value &&
 		typeof value.host === "string" &&
 		"user" in value &&
@@ -206,9 +209,13 @@ function isHolder(value: unknown): value is Holder {
 		"acquired" in value &&
 		typeof value.acquired === "number" &&
 		Number.isSafeInteger(value.acquired) &&
+		value.acquired >= 0 &&
+		value.acquired <= 8.64e15 &&
 		"renewed" in value &&
 		typeof value.renewed === "number" &&
-		Number.isSafeInteger(value.renewed)
+		Number.isSafeInteger(value.renewed) &&
+		value.renewed >= 0 &&
+		value.renewed <= 8.64e15
 	);
 }
 

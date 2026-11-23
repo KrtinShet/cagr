@@ -3,6 +3,7 @@ import { mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadConfig } from "../config/load";
+import { holder, LeaseRefs, leaseRef } from "../leases/refs";
 import type { Gh } from "../review/github";
 import { run } from "../run";
 import { sync } from "../sync";
@@ -14,9 +15,11 @@ import { localCi } from "./run";
 async function fixture({
 	install,
 	prePush,
+	lease,
 }: {
 	install?: string;
 	prePush?: string;
+	lease?: boolean;
 } = {}) {
 	const repo = await tempRepo();
 	await repo.write(
@@ -37,6 +40,11 @@ package_manager = "bun"
 paths = ["**"]
 `,
 	);
+	if (lease)
+		await repo.write(
+			".cagr/serial.toml",
+			'[[lease]]\nname = "readme"\npaths = ["README.md"]\n',
+		);
 	const config = loadConfig(repo.root);
 	if (!config) throw new Error("Test config is missing");
 	sync(config);
@@ -84,6 +92,7 @@ function runtime(
 		heads?: { number: number; headRefOid: string; isDraft?: boolean }[];
 		statuses?: Record<string, [context: string, state: string][]>;
 		installFails?: boolean;
+		origin?: string;
 	} = {},
 ) {
 	const log: string[] = [];
@@ -147,9 +156,20 @@ function runtime(
 	const execute: typeof run = async (argv, cwd, options) => {
 		commands.push(argv);
 		if (argv[0] === "git") {
+			const origin = settings.origin;
+			if (origin && argv.includes("remote") && argv.includes("add"))
+				return run(
+					argv.map((arg) =>
+						arg === "https://github.com/o/r.git" ? origin : arg,
+					),
+					cwd,
+					options,
+				);
 			if (argv.includes("fetch"))
 				return run(
-					argv.map((arg) => (arg === "origin" ? f.source.root : arg)),
+					argv.map((arg) =>
+						arg === "origin" ? (settings.origin ?? f.source.root) : arg,
+					),
 					cwd,
 					options,
 				);
@@ -488,6 +508,41 @@ test(
 			expect(
 				r.calls.find((args) => args.includes("context=cagr/checks")),
 			).toContain("state=failure");
+		} finally {
+			f.clean();
+		}
+	},
+	repoTestTimeout,
+);
+
+test(
+	"local PR CI renews a live lease only from the holder checkout",
+	async () => {
+		const f = await fixture({ lease: true });
+		try {
+			const origin = join(f.repo.root, ".git", "origin.git");
+			await f.repo.git("clone", "--mirror", f.source.root, origin);
+			await f.repo.git("remote", "add", "origin", origin);
+			await f.source.git("push", origin, `${f.head}:refs/heads/feat/example`);
+			await f.repo.git("switch", "-c", "feat/example");
+			const git = new LeaseRefs(f.repo.root);
+			const ref = leaseRef("readme");
+			const record = {
+				...holder("feat/example"),
+				head: f.head,
+				published: true,
+			};
+			const initial = await git.change(ref, "", record);
+			expect(initial).toMatch(/^[a-f0-9]+$/);
+			const own = runtime(f, { origin });
+			expect(await localCi(f.config, f.paths, 3, own)).toBe(true);
+			expect(own.lines.join("\n")).toContain("PASS Leases");
+			const renewed = (await git.snapshot()).refs.get(ref);
+			expect(renewed).not.toBe(initial);
+			await f.repo.git("switch", "main");
+			const other = runtime(f, { origin });
+			expect(await localCi(f.config, f.paths, 3, other)).toBe(true);
+			expect((await git.snapshot()).refs.get(ref)).toBe(renewed);
 		} finally {
 			f.clean();
 		}

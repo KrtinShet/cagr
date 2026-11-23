@@ -306,6 +306,9 @@ test.each([
 	"git -C work push --force-with-lease=refs/cagr/lease/db-migrations: origin HEAD:refs/cagr/lease/db-migrations",
 	"git push origin --delete refs/cagr/wait/db-migrations/123-builder",
 	"git update-ref -d refs/cagr/lease/db-migrations",
+	"git -c remote.origin.push=HEAD:refs/cagr/lease/db-migrations push origin",
+	"git update-ref --stdin < updates",
+	"env CAGR_INTERNAL_LEASE_PUSH=1 git push origin",
 ])("blocks manual lease ref writes: %s", (line) => {
 	expect(onFeature(line)).toContain("Use cagr lease");
 });

@@ -257,13 +257,18 @@ describe("pre-push", () => {
 	});
 });
 
-test("a lease and ticket ref-only push skips verification", async () => {
+test("only a cagr lease ref-only push skips verification", async () => {
 	const cfg = config({ git: { pre_push: "exit 1", block_force_push: true } });
 	const refs = [
 		"HEAD 111 refs/cagr/lease/db-migrations 222",
 		"HEAD 111 refs/cagr/wait/db-migrations/123-builder 222",
 	];
-	expect(await prePush(refs.join("\n"), cfg, cfg.root, {})).toEqual({
+	expect((await prePush(refs.join("\n"), cfg, cfg.root, {})).ok).toBe(false);
+	expect(
+		await prePush(refs.join("\n"), cfg, cfg.root, {
+			CAGR_INTERNAL_LEASE_PUSH: "1",
+		}),
+	).toEqual({
 		ok: true,
 		messages: [],
 	});
